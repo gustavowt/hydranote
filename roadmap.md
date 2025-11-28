@@ -109,18 +109,18 @@ Allow the user to create **new documents** (PDF or DOCX) using LLM-generated con
 
 ### Technique  
 - LLM writes structured text based on user request + project context.
-- Backend converts:
-  - To PDF (reportlab)
-  - To DOCX (python-docx)
+- Frontend converts using JavaScript libraries:
+  - To PDF (jsPDF)
+  - To DOCX (docx library)
 
 ### Tasks
-- [ ] Router triggers: “crie um documento”, “escreva”, “gerar pdf”, “write a report”, etc.
-- [ ] Inputs:
+- [x] Router triggers: "crie um documento", "escreva", "gerar pdf", "write a report", etc.
+- [x] Inputs:
   - `format`: pdf | docx
   - `title`
   - `content`
-- [ ] Generate file and store it in the project.
-- [ ] Return downloadable link to user.
+- [x] Generate file and store it in the project.
+- [x] Return downloadable link to user.
 
 ---
 

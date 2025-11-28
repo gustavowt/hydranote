@@ -73,10 +73,20 @@ export {
   executeReadTool,
   executeSearchTool,
   executeSummarizeTool,
+  executeWriteTool,
   formatToolResults,
   orchestrateToolExecution,
 } from './toolService';
 export type { ExecutionStep, ExecutionLogCallback, OrchestratedResult } from './toolService';
+
+// Document Generator Service (Phase 6)
+export {
+  generatePDF,
+  generateDOCX,
+  generateDocument,
+  downloadDocument,
+  downloadBlob,
+} from './documentGeneratorService';
 
 // LLM Service
 export {

@@ -333,13 +333,26 @@ async function sendMessage(text?: string) {
       }
     );
 
-    // Add assistant response
-    const assistantMessage = addMessage(
-      sessionId.value,
-      'assistant',
-      result.response
-    );
-    messages.value = [...messages.value, assistantMessage];
+    // Add assistant responses (may be multiple for multi-step requests)
+    if (result.responses && result.responses.length > 1) {
+      // Multiple responses - add each as separate message
+      for (const response of result.responses) {
+        const assistantMessage = addMessage(
+          sessionId.value,
+          'assistant',
+          response
+        );
+        messages.value = [...messages.value, assistantMessage];
+      }
+    } else {
+      // Single response
+      const assistantMessage = addMessage(
+        sessionId.value,
+        'assistant',
+        result.response
+      );
+      messages.value = [...messages.value, assistantMessage];
+    }
   } catch (error) {
     console.error('LLM error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to get response';

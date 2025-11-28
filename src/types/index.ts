@@ -309,6 +309,7 @@ export interface ToolResult {
     fileSize?: number;
     chunkCount?: number;
     truncated?: boolean;
+    downloadUrl?: string;
   };
 }
 
@@ -352,3 +353,43 @@ export const DEFAULT_PROGRESSIVE_READ_CONFIG: ProgressiveReadConfig = {
   summarizeIfLarge: true,
 };
 
+// ============================================
+// Write Tool Types (Phase 6)
+// ============================================
+
+/**
+ * Supported output formats for document generation
+ */
+export type DocumentFormat = 'pdf' | 'docx';
+
+/**
+ * Write tool specific parameters
+ */
+export interface WriteToolParams {
+  /** Output format: pdf or docx */
+  format: DocumentFormat;
+  /** Document title */
+  title: string;
+  /** Document content (markdown or plain text) */
+  content: string;
+  /** Optional: Use project context to enrich content */
+  useContext?: boolean;
+}
+
+/**
+ * Generated document result
+ */
+export interface GeneratedDocument {
+  /** Generated file ID */
+  fileId: string;
+  /** File name */
+  fileName: string;
+  /** Document format */
+  format: DocumentFormat;
+  /** File size in bytes */
+  size: number;
+  /** Blob URL for download */
+  downloadUrl: string;
+  /** Creation timestamp */
+  createdAt: Date;
+}

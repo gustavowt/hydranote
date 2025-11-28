@@ -11,13 +11,17 @@ import type {
   ReadToolParams,
   SearchToolParams,
   SummarizeToolParams,
+  WriteToolParams,
   ProgressiveReadConfig,
   ProjectFile,
   Chunk,
+  DocumentFormat,
+  GeneratedDocument,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
 import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
 import { chatCompletion } from './llmService';
+import { generateDocument } from './documentGeneratorService';
 
 // ============================================
 // Execution Log Types
@@ -45,7 +49,7 @@ Available tools:
 - read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
 - search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
-- write: Generate a new document. Use when user wants to create, write, or generate a document.
+- write: Generate a new document (PDF or DOCX). Use when user wants to create, write, generate, or produce a document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, write a report, create a document, make a summary document.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -63,12 +67,22 @@ Single tool:
 - "Buscar informações sobre contrato" → {"tools": [{"name": "search", "params": {"query": "contrato"}}]}
 - "O que diz sobre garantias?" → {"tools": [{"name": "search", "params": {"query": "garantias"}}]}
 - "What does it say about deadlines?" → {"tools": [{"name": "search", "params": {"query": "deadlines"}}]}
+- "Write a report about the project" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Project Report"}}]}
+- "Crie um documento PDF com o resumo" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
+- "Generate a DOCX summary" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Summary Document"}}]}
+- "Gerar PDF do relatório" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Relatório"}}]}
 
 Multiple tools (complex queries):
 - "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
 - "Compare the two reports" → {"tools": [{"name": "read", "params": {"file": "report1"}}, {"name": "read", "params": {"file": "report2"}}]}
 - "Summarize all my documents" → {"tools": [{"name": "summarize", "params": {"file": "doc1"}}, {"name": "summarize", "params": {"file": "doc2"}}]}
 - "Read the contract and tell me about payment terms" → {"tools": [{"name": "read", "params": {"file": "contract"}}]}
+
+Chained read + write operations (IMPORTANT - always include write tool when user asks to create/generate a document):
+- "Read the last 2 files and create a summary PDF" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Summary"}}]}
+- "Summarize document and save as DOCX" → {"tools": [{"name": "summarize", "params": {"file": "document"}}, {"name": "write", "params": {"format": "docx", "title": "Document Summary"}}]}
+- "Read all files and generate a report" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Report"}}]}
+- "Leia os arquivos e crie um PDF com resumo" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
 
 No tools (use existing context):
 - "Explain the previous answer" → {"tools": []}`;
@@ -600,6 +614,127 @@ export async function executeSummarizeTool(
 }
 
 // ============================================
+// Write Tool Implementation
+// ============================================
+
+/**
+ * Default write configuration
+ */
+const DEFAULT_WRITE_CONFIG = {
+  maxContentTokens: 4000,
+  defaultFormat: 'pdf' as DocumentFormat,
+};
+
+/**
+ * Generate document content using LLM based on project context
+ */
+async function generateDocumentContent(
+  projectId: string,
+  title: string,
+  userRequest: string
+): Promise<string> {
+  // Get relevant context from project
+  const searchResults = await searchProject(projectId, userRequest, 10);
+  
+  let contextText = '';
+  if (searchResults.length > 0) {
+    contextText = searchResults.map((r, i) => 
+      `[Source ${i + 1}: ${r.fileName}]\n${r.text}`
+    ).join('\n\n---\n\n');
+  }
+
+  const systemPrompt = `You are a professional document writer. Create well-structured content for a document.
+
+Guidelines:
+- Write in clear, professional language
+- Use markdown formatting (headings, bullet points, etc.)
+- Structure the content logically with sections
+- Be comprehensive but concise
+- Include relevant information from the provided context
+- Do NOT include the title in your response (it will be added separately)`;
+
+  const userPrompt = contextText
+    ? `Based on the following context from the project documents:\n\n${contextText}\n\n---\n\nCreate content for a document titled "${title}". User request: ${userRequest}`
+    : `Create content for a document titled "${title}". User request: ${userRequest}`;
+
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.7,
+    maxTokens: DEFAULT_WRITE_CONFIG.maxContentTokens,
+  });
+
+  return response.content;
+}
+
+/**
+ * Execute the write tool
+ * Generates a new document (PDF or DOCX) based on user request
+ */
+export async function executeWriteTool(
+  projectId: string,
+  params: WriteToolParams,
+  userMessage?: string
+): Promise<ToolResult> {
+  try {
+    const format = params.format || DEFAULT_WRITE_CONFIG.defaultFormat;
+    const title = params.title || 'Generated Document';
+
+    // Validate format
+    if (!['pdf', 'docx'].includes(format)) {
+      return {
+        success: false,
+        tool: 'write',
+        error: `Invalid format: ${format}. Supported formats: pdf, docx`,
+      };
+    }
+
+    // Generate content if not provided
+    let content = params.content;
+    if (!content) {
+      content = await generateDocumentContent(
+        projectId, 
+        title, 
+        userMessage || `Generate a document about ${title}`
+      );
+    }
+
+    // Generate the document
+    const result = await generateDocument(projectId, title, content, format);
+
+    return {
+      success: true,
+      tool: 'write',
+      data: `Document "${result.fileName}" has been generated successfully.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}\n\n📄 [Download ${result.fileName}](${result.downloadUrl})`,
+      metadata: {
+        fileName: result.fileName,
+        fileId: result.fileId,
+        fileSize: result.size,
+        downloadUrl: result.downloadUrl,
+        truncated: false,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'write',
+      error: error instanceof Error ? error.message : 'Failed to generate document',
+    };
+  }
+}
+
+/**
+ * Format file size for display
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -608,7 +743,8 @@ export async function executeSummarizeTool(
  */
 export async function executeTool(
   projectId: string,
-  call: ToolCall
+  call: ToolCall,
+  userMessage?: string
 ): Promise<ToolResult> {
   switch (call.tool) {
     case 'read':
@@ -631,12 +767,11 @@ export async function executeTool(
       });
 
     case 'write':
-      // Placeholder for Phase 6
-      return {
-        success: false,
-        tool: 'write',
-        error: 'Write tool not yet implemented',
-      };
+      return executeWriteTool(projectId, {
+        format: (call.params.format as DocumentFormat) || 'pdf',
+        title: call.params.title || 'Generated Document',
+        content: call.params.content || '',
+      }, userMessage);
 
     default:
       return {
@@ -652,12 +787,13 @@ export async function executeTool(
  */
 export async function executeToolCalls(
   projectId: string,
-  calls: ToolCall[]
+  calls: ToolCall[],
+  userMessage?: string
 ): Promise<ToolResult[]> {
   const results: ToolResult[] = [];
   
   for (const call of calls) {
-    const result = await executeTool(projectId, call);
+    const result = await executeTool(projectId, call, userMessage);
     results.push(result);
   }
 
@@ -685,16 +821,50 @@ export function formatToolResults(results: ToolResult[]): string {
 // ============================================
 
 export interface OrchestratedResult {
+  /** All responses from the assistant (may be multiple for multi-step requests) */
+  responses: string[];
+  /** Final concatenated response */
   response: string;
   toolsUsed: ToolCall[];
   toolResults: ToolResult[];
 }
 
 /**
+ * Completion check prompt - asks the LLM if the user's request is fully satisfied
+ */
+const COMPLETION_CHECK_PROMPT = `Based on the conversation, is the user's original request FULLY completed?
+Consider: Did all requested actions finish? Were all requested outputs delivered?
+
+Respond with ONLY one word:
+- "COMPLETE" if everything the user asked for has been done
+- "INCOMPLETE" if there are still pending actions or outputs to deliver`;
+
+/**
+ * Check if the user's request is complete
+ */
+async function isRequestComplete(
+  originalRequest: string,
+  conversationSoFar: Array<{ role: string; content: string }>,
+  toolResults: ToolResult[]
+): Promise<boolean> {
+  const context = conversationSoFar.map(m => `${m.role}: ${m.content}`).join('\n\n');
+  const toolSummary = toolResults.map(r => `${r.tool}: ${r.success ? 'success' : 'failed'}`).join(', ');
+
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: COMPLETION_CHECK_PROMPT },
+      { role: 'user', content: `Original request: "${originalRequest}"\n\nTools executed: ${toolSummary || 'none'}\n\nConversation:\n${context}` },
+    ],
+    temperature: 0,
+    maxTokens: 10,
+  });
+
+  return response.content.trim().toUpperCase().includes('COMPLETE');
+}
+
+/**
  * Execute the full tool-assisted chat flow with logging
- * 1. Router determines which tools to use
- * 2. Tools are executed
- * 3. Main LLM generates response with tool context
+ * Uses iterative routing - keeps calling the router until the request is complete
  */
 export async function orchestrateToolExecution(
   projectId: string,
@@ -705,6 +875,9 @@ export async function orchestrateToolExecution(
   onStepUpdate?: ExecutionLogCallback
 ): Promise<OrchestratedResult> {
   const steps: ExecutionStep[] = [];
+  const allResponses: string[] = [];
+  const allToolCalls: ToolCall[] = [];
+  const allToolResults: ToolResult[] = [];
   
   const updateStep = (step: ExecutionStep) => {
     const idx = steps.findIndex(s => s.id === step.id);
@@ -716,106 +889,159 @@ export async function orchestrateToolExecution(
     onStepUpdate?.(steps);
   };
 
-  // Step 1: Router
-  const routingStep: ExecutionStep = {
-    id: 'routing',
-    type: 'routing',
-    status: 'running',
-    label: 'Analyzing request...',
-    startTime: new Date(),
-  };
-  updateStep(routingStep);
-
-  let toolCalls: ToolCall[] = [];
-  try {
-    toolCalls = await routeMessage(userMessage, projectFiles);
-    routingStep.status = 'completed';
-    routingStep.endTime = new Date();
-    routingStep.detail = toolCalls.length > 0 
-      ? `Tools needed: ${toolCalls.map(t => t.tool).join(', ')}`
-      : 'No tools needed';
-    updateStep(routingStep);
-  } catch {
-    routingStep.status = 'completed';
-    routingStep.detail = 'Using context search';
-    routingStep.endTime = new Date();
-    updateStep(routingStep);
-  }
-
-  // Step 2: Execute tools
-  const toolResults: ToolResult[] = [];
-  
-  for (const call of toolCalls) {
-    const toolStep: ExecutionStep = {
-      id: `tool-${call.tool}-${Date.now()}`,
-      type: 'tool',
-      status: 'running',
-      label: `Running ${call.tool}`,
-      detail: call.params.file || call.params.fileName || call.params.query,
-      startTime: new Date(),
-    };
-    updateStep(toolStep);
-
-    const result = await executeTool(projectId, call);
-    toolResults.push(result);
-
-    toolStep.status = result.success ? 'completed' : 'error';
-    toolStep.endTime = new Date();
-    toolStep.detail = result.success 
-      ? (result.metadata?.fileName || 'Done')
-      : result.error;
-    updateStep(toolStep);
-  }
-
-  // Step 3: Generate response
-  const responseStep: ExecutionStep = {
-    id: 'response',
-    type: 'response',
-    status: 'running',
-    label: 'Generating response...',
-    startTime: new Date(),
-  };
-  updateStep(responseStep);
-
-  // Build messages array
+  // Build initial messages array
   const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
     { role: 'system', content: systemPrompt },
     ...conversationHistory.map(m => ({ 
       role: m.role as 'user' | 'assistant', 
       content: m.content 
     })),
+    { role: 'user', content: userMessage },
   ];
 
-  // Include tool results as context before the user message
-  if (toolResults.length > 0) {
-    const successResults = toolResults.filter(r => r.success);
-    if (successResults.length > 0) {
-      const toolContext = formatToolResults(successResults);
+  const MAX_ITERATIONS = 5;
+  let iteration = 0;
+
+  while (iteration < MAX_ITERATIONS) {
+    iteration++;
+    const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : '';
+
+    // Step 1: Router
+    const routingStep: ExecutionStep = {
+      id: `routing-${iteration}`,
+      type: 'routing',
+      status: 'running',
+      label: `Analyzing request${iterationSuffix}...`,
+      startTime: new Date(),
+    };
+    updateStep(routingStep);
+
+    let toolCalls: ToolCall[] = [];
+    try {
+      // For subsequent iterations, include context about what's been done
+      const routerInput = iteration === 1 
+        ? userMessage 
+        : `Original request: "${userMessage}"\n\nAlready completed: ${allToolCalls.map(t => t.tool).join(', ')}\n\nWhat tools are needed next to complete the request?`;
+      
+      toolCalls = await routeMessage(routerInput, projectFiles);
+      
+      // Filter out already executed tools (by tool+params combination)
+      const executedKeys = new Set(allToolCalls.map(t => `${t.tool}-${JSON.stringify(t.params)}`));
+      toolCalls = toolCalls.filter(c => !executedKeys.has(`${c.tool}-${JSON.stringify(c.params)}`));
+
+      routingStep.status = 'completed';
+      routingStep.endTime = new Date();
+      routingStep.detail = toolCalls.length > 0 
+        ? `Tools: ${toolCalls.map(t => t.tool).join(', ')}`
+        : 'No tools needed';
+      updateStep(routingStep);
+    } catch {
+      routingStep.status = 'completed';
+      routingStep.detail = 'Using context';
+      routingStep.endTime = new Date();
+      updateStep(routingStep);
+    }
+
+    // Step 2: Execute tools
+    for (const call of toolCalls) {
+      const toolStep: ExecutionStep = {
+        id: `tool-${call.tool}-${Date.now()}`,
+        type: 'tool',
+        status: 'running',
+        label: `Running ${call.tool}`,
+        detail: call.params.file || call.params.fileName || call.params.query || call.params.title,
+        startTime: new Date(),
+      };
+      updateStep(toolStep);
+
+      const result = await executeTool(projectId, call, userMessage);
+      allToolResults.push(result);
+      allToolCalls.push(call);
+
+      toolStep.status = result.success ? 'completed' : 'error';
+      toolStep.endTime = new Date();
+      toolStep.detail = result.success 
+        ? (result.metadata?.fileName || 'Done')
+        : result.error;
+      updateStep(toolStep);
+    }
+
+    // Step 3: Add tool results to messages if any
+    const successResults = allToolResults.filter(r => r.success);
+    if (toolCalls.length > 0 && successResults.length > 0) {
+      const toolContext = formatToolResults(successResults.slice(-toolCalls.length)); // Only latest results
       messages.push({ 
         role: 'user', 
-        content: `[System: The following tool results are available for answering the user's request]\n\n${toolContext}` 
+        content: `[System: Tool results]\n\n${toolContext}` 
       });
-      messages.push({ 
-        role: 'assistant', 
-        content: 'I have received the tool results and will use them to answer your question.' 
-      });
+    }
+
+    // Step 4: Generate response
+    const responseStep: ExecutionStep = {
+      id: `response-${iteration}`,
+      type: 'response',
+      status: 'running',
+      label: `Generating response${iterationSuffix}...`,
+      startTime: new Date(),
+    };
+    updateStep(responseStep);
+
+    const llmResponse = await chatCompletion({ messages });
+    allResponses.push(llmResponse.content);
+    
+    // Add assistant response to conversation
+    messages.push({ role: 'assistant', content: llmResponse.content });
+
+    responseStep.status = 'completed';
+    responseStep.endTime = new Date();
+    responseStep.label = iteration === 1 ? 'Response ready' : `Step ${iteration} complete`;
+    updateStep(responseStep);
+
+    // Step 5: Check if request is complete
+    if (iteration < MAX_ITERATIONS) {
+      const checkStep: ExecutionStep = {
+        id: `check-${iteration}`,
+        type: 'routing',
+        status: 'running',
+        label: 'Checking completion...',
+        startTime: new Date(),
+      };
+      updateStep(checkStep);
+
+      const complete = await isRequestComplete(
+        userMessage,
+        messages.slice(1), // Exclude system prompt
+        allToolResults
+      );
+
+      checkStep.status = 'completed';
+      checkStep.endTime = new Date();
+      checkStep.detail = complete ? 'Request complete' : 'More steps needed';
+      updateStep(checkStep);
+
+      if (complete) break;
     }
   }
 
-  // Add the actual user message
-  messages.push({ role: 'user', content: userMessage });
+  // Combine all responses
+  let finalResponse = allResponses.length === 1 
+    ? allResponses[0]
+    : allResponses.join('\n\n---\n\n');
 
-  const llmResponse = await chatCompletion({ messages });
-
-  responseStep.status = 'completed';
-  responseStep.endTime = new Date();
-  responseStep.label = 'Response ready';
-  updateStep(responseStep);
+  // Append download links for any generated documents
+  const writeResults = allToolResults.filter(r => r.tool === 'write' && r.success && r.metadata?.downloadUrl);
+  if (writeResults.length > 0) {
+    const downloadLinks = writeResults.map(r => 
+      `📄 [Download ${r.metadata!.fileName}](${r.metadata!.downloadUrl})`
+    ).join('\n');
+    finalResponse += `\n\n${downloadLinks}`;
+  }
 
   return {
-    response: llmResponse.content,
-    toolsUsed: toolCalls,
-    toolResults,
+    responses: allResponses,
+    response: finalResponse,
+    toolsUsed: allToolCalls,
+    toolResults: allToolResults,
   };
 }
 
