@@ -78,10 +78,10 @@ Perform **semantic search** across *all project files* based on similarity.
 - LLM then uses chunks to answer.
 
 ### Tasks
-- [ ] Router keywords:
-  - “Buscar”, “search”, “encontrar”, “procure”, “o que diz sobre…”
-- [ ] Implement vector search API
-- [ ] Return ranked results with source file references
+- [x] Router keywords:
+  - "Buscar", "search", "encontrar", "procure", "o que diz sobre…"
+- [x] Implement vector search API
+- [x] Return ranked results with source file references
 
 ---
 

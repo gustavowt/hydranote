@@ -9,12 +9,13 @@ import type {
   ToolCall,
   ToolResult,
   ReadToolParams,
+  SearchToolParams,
   ProgressiveReadConfig,
   ProjectFile,
   Chunk,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
-import { get_project_files, get_file_chunks, getFile } from './projectService';
+import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
 import { chatCompletion } from './llmService';
 
 // ============================================
@@ -41,7 +42,7 @@ const ROUTER_PROMPT = `You are a planning assistant. Analyze the user's request 
 
 Available tools:
 - read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
-- search: Semantic search across all documents. Use when user asks questions about content or wants to find specific information.
+- search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
 - write: Generate a new document. Use when user wants to create, write, or generate a document.
 
@@ -57,6 +58,10 @@ Examples:
 Single tool:
 - "Read the contract.pdf" → {"tools": [{"name": "read", "params": {"file": "contract.pdf"}}]}
 - "Summarize the agreement" → {"tools": [{"name": "summarize", "params": {"file": "agreement"}}]}
+- "Search for payment terms" → {"tools": [{"name": "search", "params": {"query": "payment terms"}}]}
+- "Buscar informações sobre contrato" → {"tools": [{"name": "search", "params": {"query": "contrato"}}]}
+- "O que diz sobre garantias?" → {"tools": [{"name": "search", "params": {"query": "garantias"}}]}
+- "What does it say about deadlines?" → {"tools": [{"name": "search", "params": {"query": "deadlines"}}]}
 
 Multiple tools (complex queries):
 - "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
@@ -65,7 +70,6 @@ Multiple tools (complex queries):
 - "Read the contract and tell me about payment terms" → {"tools": [{"name": "read", "params": {"file": "contract"}}]}
 
 No tools (use existing context):
-- "What does it say about payment terms?" → {"tools": []}
 - "Explain the previous answer" → {"tools": []}`;
 
 /**
@@ -267,6 +271,75 @@ export async function executeReadTool(
 }
 
 // ============================================
+// Search Tool Implementation
+// ============================================
+
+/**
+ * Default search configuration
+ */
+const DEFAULT_SEARCH_CONFIG = {
+  maxResults: 5,
+};
+
+/**
+ * Execute the search tool
+ * Performs semantic search across all project documents
+ */
+export async function executeSearchTool(
+  projectId: string,
+  params: SearchToolParams
+): Promise<ToolResult> {
+  try {
+    const query = params.query;
+    
+    if (!query || query.trim().length === 0) {
+      return {
+        success: false,
+        tool: 'search',
+        error: 'Search query is required',
+      };
+    }
+
+    const maxResults = params.maxResults || DEFAULT_SEARCH_CONFIG.maxResults;
+    
+    // Perform semantic search
+    const results = await searchProject(projectId, query, maxResults);
+    
+    if (results.length === 0) {
+      return {
+        success: true,
+        tool: 'search',
+        data: 'No relevant results found for your query.',
+        metadata: {
+          truncated: false,
+        },
+      };
+    }
+
+    // Format results with source references
+    const formattedResults = results.map((result, index) => {
+      const scorePercent = (result.score * 100).toFixed(1);
+      return `[Result ${index + 1}] (Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
+    }).join('\n\n---\n\n');
+
+    return {
+      success: true,
+      tool: 'search',
+      data: formattedResults,
+      metadata: {
+        truncated: false,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'search',
+      error: error instanceof Error ? error.message : 'Failed to execute search',
+    };
+  }
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -286,12 +359,10 @@ export async function executeTool(
       });
 
     case 'search':
-      // Placeholder for Phase 4
-      return {
-        success: false,
-        tool: 'search',
-        error: 'Search tool not yet implemented',
-      };
+      return executeSearchTool(projectId, {
+        query: call.params.query || call.params.q || call.params.search,
+        maxResults: call.params.maxResults ? parseInt(call.params.maxResults) : undefined,
+      });
 
     case 'summarize':
       // Placeholder for Phase 5

@@ -322,6 +322,14 @@ export interface ReadToolParams {
 }
 
 /**
+ * Search tool specific parameters
+ */
+export interface SearchToolParams {
+  query: string;
+  maxResults?: number;
+}
+
+/**
  * Configuration for progressive file reading
  */
 export interface ProgressiveReadConfig {
