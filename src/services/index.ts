@@ -48,3 +48,32 @@ export {
   getProjectStats,
 } from './projectService';
 
+// Chat Service (Phase 2)
+export {
+  buildSystemPrompt,
+  estimateTokens,
+  manageContext,
+  formatContextForPrompt,
+  createChatSession,
+  getChatSession,
+  getOrCreateSession,
+  addMessage,
+  getMessages,
+  clearSession,
+  deleteSession,
+  prepareChatRequest,
+  recordAssistantResponse,
+} from './chatService';
+
+// LLM Service
+export {
+  loadSettings,
+  saveSettings,
+  isConfigured,
+  chatCompletion,
+  prompt,
+  chat,
+  testConnection,
+  getOllamaModels,
+} from './llmService';
+

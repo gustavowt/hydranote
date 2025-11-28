@@ -9,8 +9,9 @@ import mammoth from 'mammoth';
 import Tesseract from 'tesseract.js';
 import type { SupportedFileType, Chunk, ChunkingConfig } from '../types';
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Configure PDF.js worker using local file
+import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+pdfjsLib.GlobalWorkerOptions.workerSrc = PdfWorker;
 
 /**
  * Type guard for TextItem (has str property)

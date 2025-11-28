@@ -38,12 +38,12 @@ Each phase contains clear tasks for the LLM to mark as done.
 ### Goal: After a project is indexed, open a chat with access to embeddings.
 
 ### Tasks
-- [ ] Create system prompt for the project chat:
+- [x] Create system prompt for the project chat:
   - Include project metadata
   - Explain available tools
   - Provide constraints (simple language, avoid restricted vocabulary, etc.)
-- [ ] Chat should automatically load embeddings belonging to the project.
-- [ ] Provide context window manager to avoid exceeding context length.
+- [x] Chat should automatically load embeddings belonging to the project.
+- [x] Provide context window manager to avoid exceeding context length.
 
 ---
 

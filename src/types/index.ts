@@ -120,3 +120,166 @@ export interface EmbeddingConfig {
   apiEndpoint?: string;
 }
 
+// ============================================
+// Chat Types (Phase 2)
+// ============================================
+
+/**
+ * Chat message role
+ */
+export type ChatRole = 'system' | 'user' | 'assistant';
+
+/**
+ * Chat message entity
+ */
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  content: string;
+  timestamp: Date;
+  /** Optional context chunks used for this message */
+  contextChunks?: SearchResult[];
+}
+
+/**
+ * Chat session for a project
+ */
+export interface ChatSession {
+  id: string;
+  projectId: string;
+  messages: ChatMessage[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Available tools for the LLM
+ */
+export type ToolName = 'read' | 'search' | 'summarize' | 'write';
+
+/**
+ * Tool definition for system prompt
+ */
+export interface ToolDefinition {
+  name: ToolName;
+  description: string;
+  triggers: string[];
+}
+
+/**
+ * Context window configuration
+ */
+export interface ContextWindowConfig {
+  maxTokens: number;
+  reservedForResponse: number;
+  reservedForSystemPrompt: number;
+}
+
+/**
+ * Default context window configuration (GPT-4 turbo style limits)
+ */
+export const DEFAULT_CONTEXT_CONFIG: ContextWindowConfig = {
+  maxTokens: 128000,
+  reservedForResponse: 4096,
+  reservedForSystemPrompt: 2000,
+};
+
+/**
+ * Context chunk with token count
+ */
+export interface ContextChunk {
+  chunk: SearchResult;
+  estimatedTokens: number;
+}
+
+/**
+ * Managed context for a chat turn
+ */
+export interface ManagedContext {
+  systemPrompt: string;
+  messages: ChatMessage[];
+  relevantChunks: SearchResult[];
+  totalTokens: number;
+  truncated: boolean;
+}
+
+// ============================================
+// LLM Settings Types
+// ============================================
+
+/**
+ * LLM Provider type
+ */
+export type LLMProvider = 'openai' | 'ollama';
+
+/**
+ * OpenAI configuration
+ */
+export interface OpenAIConfig {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+}
+
+/**
+ * Ollama configuration
+ */
+export interface OllamaConfig {
+  baseUrl: string;
+  model: string;
+}
+
+/**
+ * Complete LLM settings
+ */
+export interface LLMSettings {
+  provider: LLMProvider;
+  openai: OpenAIConfig;
+  ollama: OllamaConfig;
+}
+
+/**
+ * Default LLM settings
+ */
+export const DEFAULT_LLM_SETTINGS: LLMSettings = {
+  provider: 'openai',
+  openai: {
+    apiKey: '',
+    model: 'gpt-4o-mini',
+  },
+  ollama: {
+    baseUrl: 'http://localhost:11434',
+    model: 'llama3.2',
+  },
+};
+
+/**
+ * LLM API message format
+ */
+export interface LLMMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * LLM completion request
+ */
+export interface LLMCompletionRequest {
+  messages: LLMMessage[];
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/**
+ * LLM completion response
+ */
+export interface LLMCompletionResponse {
+  content: string;
+  finishReason?: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
