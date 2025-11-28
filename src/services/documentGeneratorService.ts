@@ -342,6 +342,28 @@ export async function generateDOCX(
 // Document Storage
 // ============================================
 
+// Store for generated documents (for download buttons)
+const generatedDocuments = new Map<string, { blob: Blob; fileName: string }>();
+
+/**
+ * Get a generated document by ID
+ */
+export function getGeneratedDocument(fileId: string): { blob: Blob; fileName: string } | undefined {
+  return generatedDocuments.get(fileId);
+}
+
+/**
+ * Download a generated document by ID
+ */
+export function downloadGeneratedDocument(fileId: string): boolean {
+  const doc = generatedDocuments.get(fileId);
+  if (doc) {
+    saveAs(doc.blob, doc.fileName);
+    return true;
+  }
+  return false;
+}
+
 /**
  * Store generated document as a project file
  */
@@ -349,11 +371,15 @@ export async function storeGeneratedDocument(
   projectId: string,
   title: string,
   format: DocumentFormat,
-  blob: Blob
+  blob: Blob,
+  autoDownload = true
 ): Promise<GeneratedDocument> {
   const fileId = crypto.randomUUID();
   const fileName = `${sanitizeFileName(title)}.${format}`;
-  const downloadUrl = URL.createObjectURL(blob);
+  const downloadUrl = `docusage://download/${fileId}`;
+
+  // Store blob for later download
+  generatedDocuments.set(fileId, { blob, fileName });
 
   // Store in database
   const conn = getConnection();
@@ -363,6 +389,11 @@ export async function storeGeneratedDocument(
     INSERT INTO files (id, project_id, name, type, size, status, created_at, updated_at)
     VALUES ('${fileId}', '${projectId}', '${fileName}', '${format}', ${blob.size}, 'indexed', '${now}', '${now}')
   `);
+
+  // Auto-download the file
+  if (autoDownload) {
+    saveAs(blob, fileName);
+  }
 
   return {
     fileId,

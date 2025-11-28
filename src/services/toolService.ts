@@ -53,10 +53,16 @@ Available tools:
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
-Respond ONLY with a JSON object:
-{"tools": [{"name": "toolName", "params": {"paramName": "value"}}]}
+Respond ONLY with a JSON object in one of these formats:
+1. Tools needed: {"tools": [{"name": "toolName", "params": {"paramName": "value"}}]}
+2. No tools needed: {"tools": []}
+3. Clarification needed: {"tools": [], "clarification": "your question to the user"}
 
-If no tools are needed (simple questions answerable from context), respond: {"tools": []}
+FALLBACK RULES - Use clarification when:
+- The user's intent is ambiguous or unclear
+- User references a file that doesn't exist in the project
+- User's request could be interpreted multiple ways
+- Not enough information to execute the request
 
 Examples:
 
@@ -78,33 +84,61 @@ Multiple tools (complex queries):
 - "Summarize all my documents" → {"tools": [{"name": "summarize", "params": {"file": "doc1"}}, {"name": "summarize", "params": {"file": "doc2"}}]}
 - "Read the contract and tell me about payment terms" → {"tools": [{"name": "read", "params": {"file": "contract"}}]}
 
-Chained read + write operations (IMPORTANT - always include write tool when user asks to create/generate a document):
+Chained read + write operations:
 - "Read the last 2 files and create a summary PDF" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Summary"}}]}
 - "Summarize document and save as DOCX" → {"tools": [{"name": "summarize", "params": {"file": "document"}}, {"name": "write", "params": {"format": "docx", "title": "Document Summary"}}]}
-- "Read all files and generate a report" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Report"}}]}
-- "Leia os arquivos e crie um PDF com resumo" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
 
-No tools (use existing context):
-- "Explain the previous answer" → {"tools": []}`;
+No tools (use existing context or conversation flow):
+- "Explain the previous answer" → {"tools": []}
+- "Thanks" → {"tools": []}
+- "Hello" → {"tools": []}
+- "Done" → {"tools": []}
+- "Ok" → {"tools": []}
+- "Yes" → {"tools": []}
+- "I uploaded the files" → {"tools": []}
+- "What documents/files do I have?" → {"tools": []} (files are listed in system prompt)
+- "List my files" → {"tools": []} (files are listed in system prompt)
+- "Quais arquivos eu tenho?" → {"tools": []} (files are listed in system prompt)
+
+IMPORTANT: Short acknowledgments ("done", "ok", "yes", "pronto", "feito") after assistant asked for upload or action should NOT trigger clarification - proceed without tools.
+
+Clarification needed (FALLBACK - only when truly ambiguous):
+- "Read it" (no file specified AND no context) → {"tools": [], "clarification": "Which file would you like me to read?"}
+- "Find something" (completely vague) → {"tools": [], "clarification": "What would you like me to search for in the documents?"}
+- "Do something with the files" → {"tools": [], "clarification": "I can read, search, summarize, or generate documents. What would you like me to do?"}
+- "Faça algo" (unclear) → {"tools": [], "clarification": "O que você gostaria que eu fizesse? Posso ler, buscar, resumir ou criar documentos."}`;
+
+/**
+ * Result from routing a message
+ */
+export interface RoutingResult {
+  tools: ToolCall[];
+  clarification?: string;
+}
 
 /**
  * Route user message through router LLM to determine tool usage
  */
 export async function routeMessage(
   userMessage: string,
-  projectFiles: string[]
-): Promise<ToolCall[]> {
+  projectFiles: string[],
+  conversationContext?: string
+): Promise<RoutingResult> {
   const filesContext = projectFiles.length > 0 
     ? `\n\nAvailable files in project: ${projectFiles.join(', ')}`
+    : '\n\nNo files uploaded yet.';
+
+  const contextInfo = conversationContext 
+    ? `\n\nRecent conversation context:\n${conversationContext}`
     : '';
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: ROUTER_PROMPT + filesContext },
+      { role: 'system', content: ROUTER_PROMPT + filesContext + contextInfo },
       { role: 'user', content: userMessage },
     ],
     temperature: 0,
-    maxTokens: 200,
+    maxTokens: 300,
   });
 
   try {
@@ -117,17 +151,27 @@ export async function routeMessage(
     
     const parsed = JSON.parse(jsonStr);
     
+    // Check for clarification request
+    if (parsed.clarification && typeof parsed.clarification === 'string') {
+      return {
+        tools: [],
+        clarification: parsed.clarification,
+      };
+    }
+    
     if (!parsed.tools || !Array.isArray(parsed.tools)) {
-      return [];
+      return { tools: [] };
     }
 
-    return parsed.tools.map((t: { name: string; params?: Record<string, string> }) => ({
+    const tools = parsed.tools.map((t: { name: string; params?: Record<string, string> }) => ({
       tool: t.name as ToolName,
       params: t.params || {},
     }));
+
+    return { tools };
   } catch {
     // If parsing fails, no tools needed
-    return [];
+    return { tools: [] };
   }
 }
 
@@ -707,7 +751,7 @@ export async function executeWriteTool(
     return {
       success: true,
       tool: 'write',
-      data: `Document "${result.fileName}" has been generated successfully.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}\n\n📄 [Download ${result.fileName}](${result.downloadUrl})`,
+      data: `Document "${result.fileName}" has been generated and downloaded.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}`,
       metadata: {
         fileName: result.fileName,
         fileId: result.fileId,
@@ -827,6 +871,8 @@ export interface OrchestratedResult {
   response: string;
   toolsUsed: ToolCall[];
   toolResults: ToolResult[];
+  /** Whether a clarification was requested */
+  clarificationRequested?: boolean;
 }
 
 /**
@@ -917,13 +963,40 @@ export async function orchestrateToolExecution(
     updateStep(routingStep);
 
     let toolCalls: ToolCall[] = [];
+    let clarificationMessage: string | undefined;
+    
     try {
       // For subsequent iterations, include context about what's been done
       const routerInput = iteration === 1 
         ? userMessage 
         : `Original request: "${userMessage}"\n\nAlready completed: ${allToolCalls.map(t => t.tool).join(', ')}\n\nWhat tools are needed next to complete the request?`;
       
-      toolCalls = await routeMessage(routerInput, projectFiles);
+      // Build conversation context from recent messages (last 4 exchanges)
+      const recentHistory = conversationHistory.slice(-4).map(m => 
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`
+      ).join('\n');
+      
+      const routingResult = await routeMessage(routerInput, projectFiles, recentHistory);
+      
+      // Check if clarification is needed (only on first iteration)
+      if (iteration === 1 && routingResult.clarification) {
+        clarificationMessage = routingResult.clarification;
+        routingStep.status = 'completed';
+        routingStep.endTime = new Date();
+        routingStep.detail = 'Clarification needed';
+        updateStep(routingStep);
+        
+        // Return early with clarification response
+        return {
+          responses: [clarificationMessage],
+          response: clarificationMessage,
+          toolsUsed: [],
+          toolResults: [],
+          clarificationRequested: true,
+        };
+      }
+      
+      toolCalls = routingResult.tools;
       
       // Filter out already executed tools (by tool+params combination)
       const executedKeys = new Set(allToolCalls.map(t => `${t.tool}-${JSON.stringify(t.params)}`));
@@ -1024,18 +1097,9 @@ export async function orchestrateToolExecution(
   }
 
   // Combine all responses
-  let finalResponse = allResponses.length === 1 
+  const finalResponse = allResponses.length === 1 
     ? allResponses[0]
     : allResponses.join('\n\n---\n\n');
-
-  // Append download links for any generated documents
-  const writeResults = allToolResults.filter(r => r.tool === 'write' && r.success && r.metadata?.downloadUrl);
-  if (writeResults.length > 0) {
-    const downloadLinks = writeResults.map(r => 
-      `📄 [Download ${r.metadata!.fileName}](${r.metadata!.downloadUrl})`
-    ).join('\n');
-    finalResponse += `\n\n${downloadLinks}`;
-  }
 
   return {
     responses: allResponses,

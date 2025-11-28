@@ -77,7 +77,7 @@ export {
   formatToolResults,
   orchestrateToolExecution,
 } from './toolService';
-export type { ExecutionStep, ExecutionLogCallback, OrchestratedResult } from './toolService';
+export type { ExecutionStep, ExecutionLogCallback, OrchestratedResult, RoutingResult } from './toolService';
 
 // Document Generator Service (Phase 6)
 export {
@@ -86,6 +86,8 @@ export {
   generateDocument,
   downloadDocument,
   downloadBlob,
+  getGeneratedDocument,
+  downloadGeneratedDocument,
 } from './documentGeneratorService';
 
 // LLM Service

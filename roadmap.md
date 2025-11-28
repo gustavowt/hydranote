@@ -129,13 +129,13 @@ Allow the user to create **new documents** (PDF or DOCX) using LLM-generated con
 Ensure LLM calls the right tool depending on user intent.
 
 ### Tasks
-- [ ] Provide natural‑language instructions inside the system prompt:
+- [x] Provide natural‑language instructions inside the system prompt:
   - When user wants to read → use **read**
   - When user wants to search broadly → use **search**
   - When user wants a summary → use **summarize**
   - When user wants to generate content → use **write**
-- [ ] Add examples in the system prompt
-- [ ] Add fallback logic (if unsure → ask user)
+- [x] Add examples in the system prompt
+- [x] Add fallback logic (if unsure → ask user)
 
 ---
 
