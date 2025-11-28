@@ -1,0 +1,7 @@
+{
+  "name": "docuSage",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "vue-vite"
+}
