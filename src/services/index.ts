@@ -8,6 +8,7 @@ export {
   getConnection,
   getDatabase,
   closeDatabase,
+  flushDatabase,
 } from './database';
 
 // Document Processing

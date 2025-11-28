@@ -9,8 +9,10 @@ import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 let db: duckdb.AsyncDuckDB | null = null;
 let connection: duckdb.AsyncDuckDBConnection | null = null;
 
+const OPFS_DB_PATH = 'opfs://docusage.duckdb';
+
 /**
- * Initialize DuckDB WASM with the appropriate bundle
+ * Initialize DuckDB WASM with OPFS persistence
  */
 export async function initializeDatabase(): Promise<void> {
   if (db) return;
@@ -29,11 +31,29 @@ export async function initializeDatabase(): Promise<void> {
   db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   
+  // Open database with OPFS persistence
+  await db.open({
+    path: OPFS_DB_PATH,
+    accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
+  });
+  
   connection = await db.connect();
 
   await createSchema();
 
+  // Register beforeunload to flush database
+  window.addEventListener('beforeunload', handleBeforeUnload);
+
   URL.revokeObjectURL(worker_url);
+}
+
+/**
+ * Handle page unload - flush database to persist changes
+ */
+function handleBeforeUnload(): void {
+  if (db) {
+    db.flushFiles();
+  }
 }
 
 /**
@@ -313,9 +333,23 @@ export async function vectorSearch(
 }
 
 /**
+ * Flush database to persist changes to OPFS
+ */
+export async function flushDatabase(): Promise<void> {
+  if (db) {
+    await db.flushFiles();
+  }
+}
+
+/**
  * Close database connection
  */
 export async function closeDatabase(): Promise<void> {
+  window.removeEventListener('beforeunload', handleBeforeUnload);
+  
+  if (db) {
+    await db.flushFiles();
+  }
   if (connection) {
     await connection.close();
     connection = null;
