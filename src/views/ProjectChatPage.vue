@@ -43,7 +43,12 @@
         <!-- Message List -->
         <div v-for="message in messages" :key="message.id" :class="['message', message.role]">
           <div class="message-bubble">
-            <div class="message-content">{{ message.content }}</div>
+            <div 
+              v-if="message.role === 'assistant'" 
+              class="message-content markdown-content" 
+              v-html="renderMarkdown(message.content)"
+            ></div>
+            <div v-else class="message-content">{{ message.content }}</div>
             <div v-if="message.contextChunks && message.contextChunks.length > 0" class="context-sources">
               <span class="sources-label">Sources:</span>
               <ion-chip 
@@ -170,6 +175,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { marked } from 'marked';
 import {
   IonPage,
   IonHeader,
@@ -445,6 +451,10 @@ function formatSize(bytes: number): string {
 function uniqueSourceFiles(chunks: { fileName: string }[]): string[] {
   return [...new Set(chunks.map(c => c.fileName))].slice(0, 3);
 }
+
+function renderMarkdown(content: string): string {
+  return marked.parse(content, { async: false }) as string;
+}
 </script>
 
 <style scoped>
@@ -546,6 +556,118 @@ function uniqueSourceFiles(chunks: { fileName: string }[]): string[] {
   word-break: break-word;
   line-height: 1.5;
   font-size: 0.95rem;
+}
+
+/* Markdown Styles */
+.markdown-content {
+  white-space: normal;
+}
+
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3),
+.markdown-content :deep(h4) {
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.markdown-content :deep(h1) { font-size: 1.4em; }
+.markdown-content :deep(h2) { font-size: 1.25em; }
+.markdown-content :deep(h3) { font-size: 1.1em; }
+.markdown-content :deep(h4) { font-size: 1em; }
+
+.markdown-content :deep(p) {
+  margin: 0.6em 0;
+}
+
+.markdown-content :deep(p:first-child),
+.markdown-content :deep(h1:first-child),
+.markdown-content :deep(h2:first-child),
+.markdown-content :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.markdown-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  margin: 0.6em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-content :deep(li) {
+  margin: 0.3em 0;
+}
+
+.markdown-content :deep(code) {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.88em;
+}
+
+.markdown-content :deep(pre) {
+  background: rgba(0, 0, 0, 0.35);
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+
+.markdown-content :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.markdown-content :deep(blockquote) {
+  border-left: 3px solid #6366f1;
+  margin: 0.8em 0;
+  padding: 0.4em 0 0.4em 1em;
+  color: #a5a5c0;
+}
+
+.markdown-content :deep(a) {
+  color: #818cf8;
+  text-decoration: none;
+}
+
+.markdown-content :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.markdown-content :deep(strong) {
+  font-weight: 600;
+}
+
+.markdown-content :deep(hr) {
+  border: none;
+  border-top: 1px solid #3d3d5c;
+  margin: 1em 0;
+}
+
+.markdown-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.8em 0;
+  font-size: 0.9em;
+}
+
+.markdown-content :deep(th),
+.markdown-content :deep(td) {
+  border: 1px solid #3d3d5c;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.markdown-content :deep(th) {
+  background: rgba(0, 0, 0, 0.2);
+  font-weight: 600;
 }
 
 .context-sources {
