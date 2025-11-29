@@ -21,6 +21,12 @@
         </ion-toolbar>
       </ion-header>
 
+      <!-- Hero Section -->
+      <div class="hero-section">
+        <img src="/docusage-logo.png" alt="DocuSage" class="hero-logo" />
+        <p class="hero-tagline">Your intelligent document assistant</p>
+      </div>
+
       <!-- Empty State -->
       <div v-if="projects.length === 0 && !loading" class="empty-state">
         <ion-icon :icon="folderOpenOutline" class="empty-icon" />
@@ -240,6 +246,27 @@ ion-header ion-toolbar {
 
 ion-title {
   color: #e2e2e8;
+}
+
+.hero-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 24px 24px;
+  text-align: center;
+}
+
+.hero-logo {
+  width: 140px;
+  height: auto;
+  margin-bottom: 12px;
+}
+
+.hero-tagline {
+  margin: 0;
+  font-size: 1rem;
+  color: #8b8b9e;
+  font-weight: 400;
 }
 
 .empty-state {

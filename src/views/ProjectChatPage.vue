@@ -28,7 +28,7 @@
       <div v-else class="messages-container">
         <!-- Welcome message when no messages -->
         <div v-if="messages.length === 0" class="welcome-message">
-          <ion-icon :icon="chatbubblesOutline" class="welcome-icon" />
+          <img src="/docusage-logo.png" alt="DocuSage" class="welcome-logo" />
           <h2>Start a Conversation</h2>
           <p>Ask questions about your documents. I can search, read, summarize, and help you create new documents.</p>
           
@@ -201,7 +201,6 @@ import {
   sendOutline,
   documentTextOutline,
   informationCircleOutline,
-  chatbubblesOutline,
   addOutline,
   cloudUploadOutline,
   searchOutline,
@@ -501,11 +500,10 @@ function renderMarkdown(content: string): string {
   color: #8b8b9e;
 }
 
-.welcome-icon {
-  font-size: 64px;
+.welcome-logo {
+  width: 120px;
+  height: auto;
   margin-bottom: 16px;
-  opacity: 0.6;
-  color: #6366f1;
 }
 
 .welcome-message h2 {
