@@ -57,13 +57,13 @@ Let the LLM read a **specific file** when the user explicitly asks for it.
 - Return structured text back to the LLM.
 
 ### Tasks
-- [ ] Implement router logic:
-  - “Read”, “open”, “show”, “explain file”, “mostre o arquivo”, etc.  
-- [ ] Tool behavior:
+- [x] Implement router logic:
+  - "Read", "open", "show", "explain file", "mostre o arquivo", etc.  
+- [x] Tool behavior:
   - Input: `file_id`
   - Output: file text (or chunked + stitched)
-  - [ ] Automatically perform OCR if needed.
-  - [ ] Handle extremely large files via progressive reading.
+  - [x] Automatically perform OCR if needed.
+  - [x] Handle extremely large files via progressive reading.
 
 ---
 

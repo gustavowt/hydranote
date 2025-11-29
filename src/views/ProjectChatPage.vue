@@ -58,12 +58,30 @@
           </div>
         </div>
 
-        <!-- Typing indicator -->
+        <!-- Execution Log / Typing indicator -->
         <div v-if="isTyping" class="message assistant">
-          <div class="message-bubble typing">
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span class="dot"></span>
+          <div class="message-bubble execution-log">
+            <div v-if="executionSteps.length > 0" class="steps-container">
+              <div 
+                v-for="step in executionSteps" 
+                :key="step.id" 
+                :class="['step', step.status]"
+              >
+                <span class="step-icon">
+                  <ion-spinner v-if="step.status === 'running'" name="dots" />
+                  <ion-icon v-else-if="step.status === 'completed'" :icon="checkmarkCircle" />
+                  <ion-icon v-else-if="step.status === 'error'" :icon="closeCircle" />
+                  <ion-icon v-else :icon="ellipseOutline" />
+                </span>
+                <span class="step-label">{{ step.label }}</span>
+                <span v-if="step.detail" class="step-detail">{{ step.detail }}</span>
+              </div>
+            </div>
+            <div v-else class="typing">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+            </div>
           </div>
         </div>
       </div>
@@ -185,8 +203,12 @@ import {
   createOutline,
   documentOutline,
   imageOutline,
+  checkmarkCircle,
+  closeCircle,
+  ellipseOutline,
 } from 'ionicons/icons';
-import type { Project, ProjectFile, ChatMessage, LLMMessage } from '@/types';
+import type { Project, ProjectFile, ChatMessage } from '@/types';
+import type { ExecutionStep } from '@/services';
 import {
   initialize,
   getProject,
@@ -195,9 +217,9 @@ import {
   getOrCreateSession,
   addMessage,
   getMessages,
-  prepareChatRequest,
-  chatCompletion,
+  buildSystemPrompt,
   isConfigured,
+  orchestrateToolExecution,
 } from '@/services';
 
 const route = useRoute();
@@ -215,6 +237,7 @@ const showFilesModal = ref(false);
 const uploading = ref(false);
 const uploadFileName = ref('');
 const sessionId = ref('');
+const executionSteps = ref<ExecutionStep[]>([]);
 
 const projectId = computed(() => route.params.id as string);
 
@@ -281,29 +304,34 @@ async function sendMessage(text?: string) {
   
   await scrollToBottom();
   isTyping.value = true;
+  executionSteps.value = [];
 
   try {
-    // Prepare chat request with context
-    const { systemPrompt, messages: apiMessages, context } = await prepareChatRequest(
-      sessionId.value,
-      messageText
+    // Get system prompt and conversation history
+    const systemPrompt = await buildSystemPrompt(projectId.value);
+    const conversationHistory = messages.value.slice(0, -1).map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const projectFileNames = files.value.map(f => f.name);
+
+    // Orchestrate tool execution with live status updates
+    const result = await orchestrateToolExecution(
+      projectId.value,
+      messageText,
+      systemPrompt,
+      conversationHistory,
+      projectFileNames,
+      (steps) => {
+        executionSteps.value = [...steps];
+      }
     );
-
-    // Convert to LLM message format
-    const llmMessages: LLMMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...apiMessages.map(m => ({ role: m.role as LLMMessage['role'], content: m.content })),
-    ];
-
-    // Call LLM
-    const response = await chatCompletion({ messages: llmMessages });
 
     // Add assistant response
     const assistantMessage = addMessage(
       sessionId.value,
       'assistant',
-      response.content,
-      context.relevantChunks
+      result.response
     );
     messages.value = [...messages.value, assistantMessage];
   } catch (error) {
@@ -319,6 +347,7 @@ async function sendMessage(text?: string) {
     messages.value = [...messages.value, assistantMessage];
   } finally {
     isTyping.value = false;
+    executionSteps.value = [];
     await scrollToBottom();
   }
 }
@@ -635,6 +664,67 @@ function uniqueSourceFiles(chunks: { fileName: string }[]): string[] {
   gap: 12px;
   padding: 24px;
   color: #8b8b9e;
+}
+
+/* Execution Log Styles */
+.execution-log {
+  min-width: 200px;
+}
+
+.steps-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #a5a5c0;
+}
+
+.step.running {
+  color: #6366f1;
+}
+
+.step.completed {
+  color: #22c55e;
+}
+
+.step.error {
+  color: #ef4444;
+}
+
+.step-icon {
+  display: flex;
+  align-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.step-icon ion-spinner {
+  width: 16px;
+  height: 16px;
+  --color: #6366f1;
+}
+
+.step-icon ion-icon {
+  font-size: 16px;
+}
+
+.step-label {
+  font-weight: 500;
+}
+
+.step-detail {
+  color: #6b6b80;
+  font-size: 0.8rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
 

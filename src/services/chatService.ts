@@ -4,43 +4,14 @@
  */
 
 import type {
-  Project,
   ChatMessage,
   ChatSession,
-  ToolDefinition,
   ContextWindowConfig,
   ManagedContext,
   SearchResult,
 } from '../types';
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
 import { getProject, get_project_files, getProjectStats, searchProject } from './projectService';
-
-// ============================================
-// Tool Definitions
-// ============================================
-
-const TOOLS: ToolDefinition[] = [
-  {
-    name: 'read',
-    description: 'Read a specific file from the project. Returns the full content or chunked text for large files.',
-    triggers: ['read', 'open', 'show', 'explain file', 'mostre o arquivo', 'abrir', 'mostrar'],
-  },
-  {
-    name: 'search',
-    description: 'Perform semantic search across all project files to find relevant information.',
-    triggers: ['search', 'find', 'look for', 'buscar', 'encontrar', 'procure', 'o que diz sobre'],
-  },
-  {
-    name: 'summarize',
-    description: 'Create concise summaries of documents or specific sections.',
-    triggers: ['summarize', 'summary', 'tl;dr', 'resuma', 'resumo', 'resumir'],
-  },
-  {
-    name: 'write',
-    description: 'Generate new documents (PDF or DOCX) based on project context and user requirements.',
-    triggers: ['write', 'create document', 'generate', 'crie um documento', 'escreva', 'gerar pdf', 'gerar documento'],
-  },
-];
 
 // ============================================
 // System Prompt Builder
@@ -58,11 +29,7 @@ export async function buildSystemPrompt(projectId: string): Promise<string> {
   const files = await get_project_files(projectId);
   const stats = await getProjectStats(projectId);
 
-  const fileList = files.map(f => `  - ${f.name} (${f.type}, ${formatSize(f.size)})`).join('\n');
-
-  const toolsDescription = TOOLS.map(tool => {
-    return `**${tool.name}**: ${tool.description}\n  Triggers: ${tool.triggers.join(', ')}`;
-  }).join('\n\n');
+  const fileList = files.map(f => `  - ${f.name} (${f.type}, ${formatSize(f.size)}, id: ${f.id})`).join('\n');
 
   return `You are DocuSage, an AI assistant specialized in document analysis and interaction.
 
@@ -75,29 +42,21 @@ ${project.description ? `**Description:** ${project.description}` : ''}
 ### Project Files
 ${fileList || 'No files uploaded yet.'}
 
-## Available Tools
-You have access to the following tools to help answer user questions:
-
-${toolsDescription}
-
 ## Instructions
-1. When the user asks about specific content, use the **search** tool to find relevant information.
-2. When the user wants to see a specific file, use the **read** tool.
-3. When the user needs a summary, use the **summarize** tool.
-4. When the user wants to create a new document, use the **write** tool.
-5. If you're unsure which tool to use, ask the user for clarification.
+- When answering questions, use the context provided below from the project documents.
+- If tool results are provided, use them to give accurate responses about file contents.
+- Always cite the source file when quoting or referencing content.
+- If you cannot find relevant information, say so honestly.
+- Respond in the same language the user is using.
 
 ## Response Guidelines
 - Use clear, simple language
 - Be concise and direct
-- Always cite the source file when quoting content
-- If you cannot find relevant information, say so honestly
-- Respond in the same language the user is using
+- If a file was read, summarize key points rather than dumping all content
 
 ## Constraints
 - Only reference information from the indexed project documents
-- Do not make up information that is not in the documents
-- If a file is too large, summarize key points instead of quoting everything`;
+- Do not make up information that is not in the documents`;
 }
 
 /**

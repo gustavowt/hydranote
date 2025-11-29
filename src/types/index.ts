@@ -283,3 +283,54 @@ export interface LLMCompletionResponse {
   };
 }
 
+// ============================================
+// Tool Types (Phase 3+)
+// ============================================
+
+/**
+ * Tool call parsed from LLM response
+ */
+export interface ToolCall {
+  tool: ToolName;
+  params: Record<string, string>;
+}
+
+/**
+ * Result from executing a tool
+ */
+export interface ToolResult {
+  success: boolean;
+  tool: ToolName;
+  data?: string;
+  error?: string;
+  metadata?: {
+    fileName?: string;
+    fileId?: string;
+    fileSize?: number;
+    chunkCount?: number;
+    truncated?: boolean;
+  };
+}
+
+/**
+ * Read tool specific parameters
+ */
+export interface ReadToolParams {
+  fileId?: string;
+  fileName?: string;
+  maxChunks?: number;
+}
+
+/**
+ * Configuration for progressive file reading
+ */
+export interface ProgressiveReadConfig {
+  maxCharacters: number;
+  summarizeIfLarge: boolean;
+}
+
+export const DEFAULT_PROGRESSIVE_READ_CONFIG: ProgressiveReadConfig = {
+  maxCharacters: 50000,
+  summarizeIfLarge: true,
+};
+

@@ -65,6 +65,17 @@ export {
   recordAssistantResponse,
 } from './chatService';
 
+// Tool Service (Phase 3+)
+export {
+  routeMessage,
+  executeTool,
+  executeToolCalls,
+  executeReadTool,
+  formatToolResults,
+  orchestrateToolExecution,
+} from './toolService';
+export type { ExecutionStep, ExecutionLogCallback, OrchestratedResult } from './toolService';
+
 // LLM Service
 export {
   loadSettings,
