@@ -330,6 +330,16 @@ export interface SearchToolParams {
 }
 
 /**
+ * Summarize tool specific parameters
+ */
+export interface SummarizeToolParams {
+  fileId?: string;
+  fileName?: string;
+  /** Maximum tokens for direct summarization before switching to hierarchical */
+  maxDirectTokens?: number;
+}
+
+/**
  * Configuration for progressive file reading
  */
 export interface ProgressiveReadConfig {

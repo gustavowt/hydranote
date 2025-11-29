@@ -10,6 +10,7 @@ import type {
   ToolResult,
   ReadToolParams,
   SearchToolParams,
+  SummarizeToolParams,
   ProgressiveReadConfig,
   ProjectFile,
   Chunk,
@@ -340,6 +341,265 @@ export async function executeSearchTool(
 }
 
 // ============================================
+// Summarize Tool Implementation
+// ============================================
+
+/**
+ * Default summarization configuration
+ */
+const DEFAULT_SUMMARIZE_CONFIG = {
+  maxDirectTokens: 8000, // ~32k characters - summarize directly if under this
+  chunkSummaryMaxTokens: 500, // Target length for individual chunk summaries
+  maxChunksForHierarchical: 30, // Max chunks to process (sampled evenly if exceeded)
+  maxFileSizeBytes: 10 * 1024 * 1024, // 10MB max file size for summarization
+};
+
+/**
+ * Estimate token count (rough: ~4 chars per token)
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Check if file type is text-based (not image)
+ */
+function isTextBasedFile(file: ProjectFile): boolean {
+  const imageTypes = ['png', 'jpg', 'jpeg', 'webp'];
+  return !imageTypes.includes(file.type);
+}
+
+/**
+ * Sample chunks evenly from a large array
+ * Takes chunks from beginning, middle, and end to get representative coverage
+ */
+function sampleChunksEvenly(chunks: Chunk[], maxCount: number): Chunk[] {
+  if (chunks.length <= maxCount) return chunks;
+  
+  const step = chunks.length / maxCount;
+  const sampled: Chunk[] = [];
+  
+  for (let i = 0; i < maxCount; i++) {
+    const index = Math.floor(i * step);
+    sampled.push(chunks[index]);
+  }
+  
+  return sampled;
+}
+
+/**
+ * Summarize text directly using LLM
+ */
+async function summarizeText(text: string, context?: string): Promise<string> {
+  const systemPrompt = `You are a document summarization assistant. Create clear, concise summaries that capture the key points.
+${context ? `\nContext: ${context}` : ''}
+
+Guidelines:
+- Extract and present the main ideas
+- Preserve important details, facts, and figures
+- Use clear, professional language
+- Structure the summary logically`;
+
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Please summarize the following text:\n\n${text}` },
+    ],
+    temperature: 0.3,
+    maxTokens: 1500,
+  });
+
+  return response.content;
+}
+
+/**
+ * Summarize a single chunk (for hierarchical summarization)
+ */
+async function summarizeChunk(chunk: Chunk, index: number, total: number): Promise<string> {
+  const response = await chatCompletion({
+    messages: [
+      { 
+        role: 'system', 
+        content: 'Summarize this document section concisely. Focus on key information only.' 
+      },
+      { 
+        role: 'user', 
+        content: `Section ${index + 1} of ${total}:\n\n${chunk.text}` 
+      },
+    ],
+    temperature: 0.3,
+    maxTokens: DEFAULT_SUMMARIZE_CONFIG.chunkSummaryMaxTokens,
+  });
+
+  return response.content;
+}
+
+/**
+ * Merge multiple chunk summaries into a final summary
+ */
+async function mergeSummaries(summaries: string[], fileName: string): Promise<string> {
+  const combined = summaries.map((s, i) => `[Section ${i + 1}]\n${s}`).join('\n\n');
+
+  const response = await chatCompletion({
+    messages: [
+      { 
+        role: 'system', 
+        content: `You are synthesizing section summaries into a cohesive document summary for "${fileName}". 
+Create a unified summary that:
+- Integrates all key points
+- Eliminates redundancy
+- Maintains logical flow
+- Highlights the most important information` 
+      },
+      { 
+        role: 'user', 
+        content: `Create a comprehensive summary from these section summaries:\n\n${combined}` 
+      },
+    ],
+    temperature: 0.3,
+    maxTokens: 2000,
+  });
+
+  return response.content;
+}
+
+/**
+ * Execute the summarize tool
+ * Supports direct and hierarchical summarization based on document size
+ */
+export async function executeSummarizeTool(
+  projectId: string,
+  params: SummarizeToolParams
+): Promise<ToolResult> {
+  try {
+    // Find the file
+    const file = await findFile(projectId, {
+      fileId: params.fileId,
+      fileName: params.fileName,
+    });
+
+    if (!file) {
+      return {
+        success: false,
+        tool: 'summarize',
+        error: `File not found: ${params.fileName || params.fileId || 'No file specified'}`,
+      };
+    }
+
+    // Check if file is text-based
+    if (!isTextBasedFile(file)) {
+      return {
+        success: false,
+        tool: 'summarize',
+        error: `Cannot summarize image file "${file.name}". Summarization only works with text-based documents.`,
+      };
+    }
+
+    // Check file size limit
+    if (file.size > DEFAULT_SUMMARIZE_CONFIG.maxFileSizeBytes) {
+      const maxMB = DEFAULT_SUMMARIZE_CONFIG.maxFileSizeBytes / (1024 * 1024);
+      const fileMB = (file.size / (1024 * 1024)).toFixed(1);
+      return {
+        success: false,
+        tool: 'summarize',
+        error: `File "${file.name}" (${fileMB}MB) exceeds the ${maxMB}MB limit for summarization. Consider splitting the document.`,
+      };
+    }
+
+    // Get file content or chunks
+    let textContent = file.content || '';
+    const chunks = await get_file_chunks(file.id);
+
+    if (!textContent && chunks.length === 0) {
+      return {
+        success: false,
+        tool: 'summarize',
+        error: `File "${file.name}" has no content indexed yet.`,
+      };
+    }
+
+    // If no direct content, stitch chunks
+    if (!textContent && chunks.length > 0) {
+      textContent = stitchChunks(chunks);
+    }
+
+    const tokenCount = estimateTokens(textContent);
+    const maxDirect = params.maxDirectTokens || DEFAULT_SUMMARIZE_CONFIG.maxDirectTokens;
+
+    let summary: string;
+    let method: 'direct' | 'hierarchical';
+
+    if (tokenCount <= maxDirect) {
+      // Direct summarization for smaller documents
+      method = 'direct';
+      summary = await summarizeText(textContent, `Document: ${file.name}`);
+    } else {
+      // Hierarchical summarization for larger documents
+      method = 'hierarchical';
+      
+      // Filter to text chunks only (in case of mixed content)
+      let textChunks = chunks.filter(c => c.text.trim().length > 50);
+      
+      if (textChunks.length === 0) {
+        return {
+          success: false,
+          tool: 'summarize',
+          error: `File "${file.name}" has no substantial text content to summarize.`,
+        };
+      }
+
+      // Sample chunks if too many (to avoid excessive API calls)
+      const maxChunks = DEFAULT_SUMMARIZE_CONFIG.maxChunksForHierarchical;
+      const wassampled = textChunks.length > maxChunks;
+      if (wassampled) {
+        textChunks = sampleChunksEvenly(textChunks, maxChunks);
+      }
+
+      // Summarize chunks in parallel batches of 5
+      const chunkSummaries: string[] = new Array(textChunks.length);
+      const batchSize = 5;
+      
+      for (let i = 0; i < textChunks.length; i += batchSize) {
+        const batch = textChunks.slice(i, i + batchSize);
+        const batchPromises = batch.map((chunk, batchIdx) => 
+          summarizeChunk(chunk, i + batchIdx, textChunks.length)
+        );
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach((summary, batchIdx) => {
+          chunkSummaries[i + batchIdx] = summary;
+        });
+      }
+
+      // Merge all summaries
+      summary = await mergeSummaries(chunkSummaries, file.name);
+      
+      if (wassampled) {
+        summary += `\n\n_Note: This summary was generated from a sample of ${maxChunks} sections due to document size._`;
+      }
+    }
+
+    return {
+      success: true,
+      tool: 'summarize',
+      data: summary,
+      metadata: {
+        fileName: file.name,
+        fileId: file.id,
+        fileSize: file.size,
+        chunkCount: chunks.length,
+        truncated: false,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'summarize',
+      error: error instanceof Error ? error.message : 'Failed to summarize file',
+    };
+  }
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -365,12 +625,10 @@ export async function executeTool(
       });
 
     case 'summarize':
-      // Placeholder for Phase 5
-      return {
-        success: false,
-        tool: 'summarize',
-        error: 'Summarize tool not yet implemented',
-      };
+      return executeSummarizeTool(projectId, {
+        fileId: call.params.fileId || call.params.file_id,
+        fileName: call.params.fileName || call.params.file || call.params.name,
+      });
 
     case 'write':
       // Placeholder for Phase 6
@@ -519,23 +777,33 @@ export async function orchestrateToolExecution(
   };
   updateStep(responseStep);
 
-  // Build context with tool results
-  let contextAddition = '';
-  if (toolResults.length > 0) {
-    const successResults = toolResults.filter(r => r.success);
-    if (successResults.length > 0) {
-      contextAddition = '\n\n## Tool Results\n' + formatToolResults(successResults);
-    }
-  }
-
-  const messages = [
-    { role: 'system' as const, content: systemPrompt + contextAddition },
+  // Build messages array
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: systemPrompt },
     ...conversationHistory.map(m => ({ 
       role: m.role as 'user' | 'assistant', 
       content: m.content 
     })),
-    { role: 'user' as const, content: userMessage },
   ];
+
+  // Include tool results as context before the user message
+  if (toolResults.length > 0) {
+    const successResults = toolResults.filter(r => r.success);
+    if (successResults.length > 0) {
+      const toolContext = formatToolResults(successResults);
+      messages.push({ 
+        role: 'user', 
+        content: `[System: The following tool results are available for answering the user's request]\n\n${toolContext}` 
+      });
+      messages.push({ 
+        role: 'assistant', 
+        content: 'I have received the tool results and will use them to answer your question.' 
+      });
+    }
+  }
+
+  // Add the actual user message
+  messages.push({ role: 'user', content: userMessage });
 
   const llmResponse = await chatCompletion({ messages });
 

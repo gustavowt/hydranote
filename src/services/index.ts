@@ -71,6 +71,8 @@ export {
   executeTool,
   executeToolCalls,
   executeReadTool,
+  executeSearchTool,
+  executeSummarizeTool,
   formatToolResults,
   orchestrateToolExecution,
 } from './toolService';

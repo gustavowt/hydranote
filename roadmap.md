@@ -97,9 +97,9 @@ Create concise summaries of large documents.
   - Produce final abstraction
 
 ### Tasks
-- [ ] Router triggers: “resuma”, “summary”, “tl;dr”
-- [ ] Support hierarchical summarization
-- [ ] Ignore images; focus on text
+- [x] Router triggers: "resuma", "summary", "tl;dr"
+- [x] Support hierarchical summarization
+- [x] Ignore images; focus on text
 
 ---
 
