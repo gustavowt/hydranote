@@ -404,7 +404,7 @@ export async function storeGeneratedDocument(
 ): Promise<GeneratedDocument> {
   const fileId = crypto.randomUUID();
   const fileName = `${sanitizeFileName(title)}.${format}`;
-  const downloadUrl = `docusage://download/${fileId}`;
+  const downloadUrl = `hydranote://download/${fileId}`;
 
   // Store blob for later download
   generatedDocuments.set(fileId, { blob, fileName });

@@ -1,8 +1,8 @@
-# DocuSage – Full Roadmap (AI Pipeline & Tools)
+# HydraNote – Full Roadmap (AI Pipeline & Tools)
 
 ## Overview
 
-DocuSage is an AI‑powered document indexing and interaction system.  
+HydraNote is an AI‑powered document indexing and interaction system.  
 The LLM will execute this roadmap step‑by‑step inside the Ionic app environment.
 
 The system provides:
@@ -164,7 +164,7 @@ Ensure LLM calls the right tool depending on user intent.
 
 ## Phase 8 – First‑class Markdown support
 
-Goal: allow DocuSage to **create, store, render, and edit Markdown files** consistently across tools and UI.
+Goal: allow HydraNote to **create, store, render, and edit Markdown files** consistently across tools and UI.
 
 ### 8.1 – Backend & tools
 

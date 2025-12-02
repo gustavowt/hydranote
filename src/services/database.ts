@@ -9,7 +9,7 @@ import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 let db: duckdb.AsyncDuckDB | null = null;
 let connection: duckdb.AsyncDuckDBConnection | null = null;
 
-const OPFS_DB_PATH = 'opfs://docusage.duckdb';
+const OPFS_DB_PATH = 'opfs://hydranote.duckdb';
 
 /**
  * Initialize DuckDB WASM with OPFS persistence

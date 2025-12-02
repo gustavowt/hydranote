@@ -12,7 +12,7 @@ import type {
 } from '../types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
 
-const STORAGE_KEY = 'docusage_llm_settings';
+const STORAGE_KEY = 'hydranote_llm_settings';
 
 // ============================================
 // Settings Management

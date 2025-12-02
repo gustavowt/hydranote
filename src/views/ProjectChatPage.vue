@@ -28,7 +28,7 @@
       <div v-else class="messages-container">
         <!-- Welcome message when no messages -->
         <div v-if="messages.length === 0" class="welcome-message">
-          <img src="/docusage-logo.png" alt="DocuSage" class="welcome-logo" />
+          <img src="/hydranote-logo.png" alt="HydraNote" class="welcome-logo" />
           <h2>Start a Conversation</h2>
           <p>Ask questions about your documents. I can search, read, summarize, and help you create new documents.</p>
           

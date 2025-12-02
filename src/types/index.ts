@@ -1,5 +1,5 @@
 /**
- * Core type definitions for DocuSage AI Pipeline
+ * Core type definitions for HydraNote AI Pipeline
  */
 
 // Supported file types for document ingestion

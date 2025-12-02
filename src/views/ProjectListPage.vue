@@ -2,7 +2,7 @@
   <ion-page>
     <ion-header :translucent="true">
       <ion-toolbar>
-        <ion-title>DocuSage</ion-title>
+        <ion-title>HydraNote</ion-title>
         <ion-buttons slot="end">
           <ion-button @click="router.push('/settings')">
             <ion-icon slot="icon-only" :icon="settingsOutline" />
@@ -17,13 +17,13 @@
     <ion-content :fullscreen="true" class="ion-padding">
       <ion-header collapse="condense">
         <ion-toolbar>
-          <ion-title size="large">DocuSage</ion-title>
+          <ion-title size="large">HydraNote</ion-title>
         </ion-toolbar>
       </ion-header>
 
       <!-- Hero Section -->
       <div class="hero-section">
-        <img src="/docusage-logo.png" alt="DocuSage" class="hero-logo" />
+        <img src="/hydranote-logo.png" alt="HydraNote" class="hero-logo" />
         <p class="hero-tagline">Your intelligent document assistant</p>
       </div>
 

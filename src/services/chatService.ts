@@ -31,7 +31,7 @@ export async function buildSystemPrompt(projectId: string): Promise<string> {
 
   const fileList = files.map(f => `  - ${f.name} (${f.type}, ${formatSize(f.size)}, id: ${f.id})`).join('\n');
 
-  return `You are DocuSage, an AI assistant specialized in document analysis and interaction.
+  return `You are HydraNote, an AI assistant specialized in document analysis and interaction.
 
 ## Project Context
 **Project Name:** ${project.name}
