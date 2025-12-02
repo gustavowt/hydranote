@@ -50,6 +50,10 @@ export {
   chat,
   testConnection,
   getOllamaModels,
+  loadNoteSettings,
+  saveNoteSettings,
+  getNoteFormatInstructions,
+  getDefaultNoteDirectory,
 } from './llmService';
 
 // Tool Service
@@ -59,6 +63,7 @@ export {
   executeSearchTool,
   executeSummarizeTool,
   executeWriteTool,
+  executeAddNoteTool,
   executeTool,
   executeToolCalls,
   formatToolResults,
@@ -97,3 +102,17 @@ export {
   generateEmbedding,
   generateEmbeddingsForChunks,
 } from './embeddingService';
+
+// Note Service (Phase 9)
+export {
+  formatNote,
+  generateNoteTitle,
+  titleToSlug,
+  generateUniqueFileName,
+  getProjectDirectories,
+  decideNoteDirectory,
+  persistNote,
+  indexNote,
+  addNote,
+  addNoteWithTitle,
+} from './noteService';

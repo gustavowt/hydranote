@@ -139,6 +139,43 @@
         </template>
       </template>
 
+      <!-- Note Settings (Phase 9) -->
+      <ion-list-header>
+        <ion-label>Note Settings</ion-label>
+      </ion-list-header>
+      <ion-list inset>
+        <ion-item>
+          <ion-textarea
+            v-model="settings.noteSettings.formatInstructions"
+            label="Format Instructions"
+            label-placement="stacked"
+            placeholder="Custom instructions for note formatting (e.g., 'Always use bullet points', 'Include a summary section')"
+            :rows="3"
+            :auto-grow="true"
+          />
+        </ion-item>
+        <ion-item>
+          <ion-input
+            v-model="settings.noteSettings.defaultDirectory"
+            label="Default Notes Directory"
+            label-placement="stacked"
+            placeholder="notes"
+            :clear-input="true"
+          />
+        </ion-item>
+        <ion-item>
+          <ion-toggle
+            v-model="settings.noteSettings.autoGenerateTitle"
+            justify="space-between"
+          >
+            <ion-label>
+              <h3>Auto-generate Note Titles</h3>
+              <p>Use AI to generate titles from note content</p>
+            </ion-label>
+          </ion-toggle>
+        </ion-item>
+      </ion-list>
+
       <!-- Test Connection -->
       <div class="action-buttons">
         <ion-button expand="block" @click="handleTestConnection" :disabled="testing">
@@ -177,6 +214,7 @@ import {
   IonItem,
   IonLabel,
   IonInput,
+  IonTextarea,
   IonSelect,
   IonSelectOption,
   IonRadio,
@@ -184,6 +222,7 @@ import {
   IonButton,
   IonIcon,
   IonSpinner,
+  IonToggle,
   toastController,
 } from '@ionic/vue';
 import {
@@ -389,6 +428,30 @@ ion-select {
 
 ion-spinner {
   --color: #6366f1;
+}
+
+ion-toggle {
+  --track-background: #3d3d5c;
+  --track-background-checked: #6366f1;
+  --handle-background: #e2e2e8;
+  --handle-background-checked: #ffffff;
+}
+
+ion-toggle ion-label h3 {
+  color: #e2e2e8;
+  font-size: 1rem;
+  margin: 0;
+}
+
+ion-toggle ion-label p {
+  color: #8b8b9e;
+  font-size: 0.85rem;
+  margin: 4px 0 0;
+}
+
+ion-textarea {
+  --color: #e2e2e8;
+  --placeholder-color: #6b6b80;
 }
 </style>
 

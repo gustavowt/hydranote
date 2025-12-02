@@ -215,68 +215,68 @@ Goal: create a **dedicated IA pipeline** for adding notes to a specific project,
 
 ### 9.1 – Settings & user instructions
 
-- [ ] **Settings model for note formatting**
-  - [ ] Add a configuration entry (per user, or per project) for note formatting, e.g.:
-    - [ ] `note_format_instructions: string`
-  - [ ] This string will be appended/injected into the system prompt when formatting notes.
+- [x] **Settings model for note formatting**
+  - [x] Add a configuration entry (per user, or per project) for note formatting, e.g.:
+    - [x] `note_format_instructions: string`
+  - [x] This string will be appended/injected into the system prompt when formatting notes.
 
-- [ ] **LLM contract: note formatting**
-  - [ ] Define a prompt template for a “FormatNote” step:
-    - [ ] Inputs: raw note text, user `note_format_instructions`, optional metadata (language, audience, etc.).
-    - [ ] Output: a single, coherent Markdown note string.
-  - [ ] Document for the LLM:
-    - [ ] Always answer with **only** the formatted Markdown, no explanations.
-    - [ ] Follow the instructions as strictly as possible.
+- [x] **LLM contract: note formatting**
+  - [x] Define a prompt template for a "FormatNote" step:
+    - [x] Inputs: raw note text, user `note_format_instructions`, optional metadata (language, audience, etc.).
+    - [x] Output: a single, coherent Markdown note string.
+  - [x] Document for the LLM:
+    - [x] Always answer with **only** the formatted Markdown, no explanations.
+    - [x] Follow the instructions as strictly as possible.
 
 ### 9.2 – `AddNote` tool API design
 
-- [ ] Define a new tool: **`AddNote`**
-  - [ ] Inputs (example):
-    - [ ] `project_id` (required)
-    - [ ] `raw_note_text` (required)
-    - [ ] `context_metadata` (optional: tags, topic, source, etc.)
-  - [ ] Output:
-    - [ ] Final file path (e.g. `notes/2025/add-note-title.md`)
-    - [ ] Any metadata relevant to the UI (title, directory, created_at).
+- [x] Define a new tool: **`AddNote`**
+  - [x] Inputs (example):
+    - [x] `project_id` (required)
+    - [x] `raw_note_text` (required)
+    - [x] `context_metadata` (optional: tags, topic, source, etc.)
+  - [x] Output:
+    - [x] Final file path (e.g. `notes/2025/add-note-title.md`)
+    - [x] Any metadata relevant to the UI (title, directory, created_at).
 
 ### 9.3 – `AddNote` pipeline steps
 
-- [ ] **Step 1 – Format note (Markdown)**
-  - [ ] Call the “FormatNote” prompt using `raw_note_text` + `note_format_instructions`.
-  - [ ] Receive `formatted_markdown_note` as output.
+- [x] **Step 1 – Format note (Markdown)**
+  - [x] Call the "FormatNote" prompt using `raw_note_text` + `note_format_instructions`.
+  - [x] Receive `formatted_markdown_note` as output.
 
-- [ ] **Step 2 – Generate file name**
-  - [ ] Ask an LLM (or deterministic code) to:
-    - [ ] Generate a short, human‑readable title for the note.
-    - [ ] Convert the title into a slug for the filename.
-  - [ ] Construct something like: `YYYY/MM/<slug>.md` or `notes/<slug>.md` according to project conventions.
-  - [ ] Ensure uniqueness (e.g. add a numeric suffix or timestamp if needed).
+- [x] **Step 2 – Generate file name**
+  - [x] Ask an LLM (or deterministic code) to:
+    - [x] Generate a short, human‑readable title for the note.
+    - [x] Convert the title into a slug for the filename.
+  - [x] Construct something like: `YYYY/MM/<slug>.md` or `notes/<slug>.md` according to project conventions.
+  - [x] Ensure uniqueness (e.g. add a numeric suffix or timestamp if needed).
 
-- [ ] **Step 3 – Decide directory / path**
-  - [ ] Define a second prompt “DecideNoteDirectory”:
-    - [ ] Inputs:
-      - [ ] Project’s current directory tree (summarized if large).
-      - [ ] Candidate file title + context (tags, topic, etc.).
-    - [ ] Behavior:
-      - [ ] **Strongly prefer an existing directory**.
-      - [ ] Only propose creating a new directory for clearly new categories or when explicitly instructed.
-    - [ ] Output:
-      - [ ] `target_directory_path` (e.g. `notes/meetings/2025/`)
-      - [ ] `should_create_directory: boolean` (true only in special cases).
-  - [ ] Implement the logic that:
-    - [ ] If `should_create_directory == true`, create the directory in the project.
-    - [ ] Otherwise, reuse the existing directory.
+- [x] **Step 3 – Decide directory / path**
+  - [x] Define a second prompt "DecideNoteDirectory":
+    - [x] Inputs:
+      - [x] Project's current directory tree (summarized if large).
+      - [x] Candidate file title + context (tags, topic, etc.).
+    - [x] Behavior:
+      - [x] **Strongly prefer an existing directory**.
+      - [x] Only propose creating a new directory for clearly new categories or when explicitly instructed.
+    - [x] Output:
+      - [x] `target_directory_path` (e.g. `notes/meetings/2025/`)
+      - [x] `should_create_directory: boolean` (true only in special cases).
+  - [x] Implement the logic that:
+    - [x] If `should_create_directory == true`, create the directory in the project.
+    - [x] Otherwise, reuse the existing directory.
 
-- [ ] **Step 4 – Persist note via `WriteFile`**
-  - [ ] Call the updated `WriteFile` tool with:
-    - [ ] `project_id`
-    - [ ] `file_path = target_directory_path + filename`
-    - [ ] `content = formatted_markdown_note`
-    - [ ] `file_type = "markdown"`
-  - [ ] Return final information to the caller (path, title, created_at, etc.).
+- [x] **Step 4 – Persist note via `WriteFile`**
+  - [x] Call the updated `WriteFile` tool with:
+    - [x] `project_id`
+    - [x] `file_path = target_directory_path + filename`
+    - [x] `content = formatted_markdown_note`
+    - [x] `file_type = "markdown"`
+  - [x] Return final information to the caller (path, title, created_at, etc.).
 
-- [ ] **Step 5 – Indexing hook**
-  - [ ] After the file is written, enqueue/index it in the project’s embeddings/indexing pipeline so it becomes searchable.
+- [x] **Step 5 – Indexing hook**
+  - [x] After the file is written, enqueue/index it in the project's embeddings/indexing pipeline so it becomes searchable.
 
 ---
 

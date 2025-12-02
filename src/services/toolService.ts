@@ -17,11 +17,14 @@ import type {
   Chunk,
   DocumentFormat,
   GeneratedDocument,
+  AddNoteParams,
+  NoteContextMetadata,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
 import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
 import { chatCompletion } from './llmService';
 import { generateDocument } from './documentGeneratorService';
+import { addNote, addNoteWithTitle } from './noteService';
 
 // ============================================
 // Execution Log Types
@@ -49,7 +52,8 @@ Available tools:
 - read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
 - search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
-- write: Generate a new document (PDF, DOCX, or Markdown). Use when user wants to create, write, generate, or produce a document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, gerar markdown, write a report, create a document, make a summary document, create note, save as markdown.
+- write: Generate a new document (PDF, DOCX, or Markdown). Use when user wants to create, write, generate, or produce a formatted document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, write a report, create a document, make a summary document.
+- addNote: Create and save a new note in the project. Use when user wants to save a quick note, take notes, or add information to their project. The note will be automatically formatted and organized. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, adicionar anotação, lembrete, remember this, save this.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -77,9 +81,11 @@ Single tool:
 - "Crie um documento PDF com o resumo" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
 - "Generate a DOCX summary" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Summary Document"}}]}
 - "Gerar PDF do relatório" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Relatório"}}]}
-- "Create a markdown note" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Note"}}]}
-- "Save this as markdown" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Document"}}]}
-- "Crie uma nota em markdown" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Nota"}}]}
+- "Add a note about the meeting" → {"tools": [{"name": "addNote", "params": {"content": "Meeting notes about the project..."}}]}
+- "Save this note: The deadline is next Friday" → {"tools": [{"name": "addNote", "params": {"content": "The deadline is next Friday"}}]}
+- "Criar nota: reunião com cliente amanhã" → {"tools": [{"name": "addNote", "params": {"content": "reunião com cliente amanhã"}}]}
+- "Take a note about the requirements" → {"tools": [{"name": "addNote", "params": {"content": "Requirements discussion..."}}]}
+- "Anotar: precisamos revisar o contrato" → {"tools": [{"name": "addNote", "params": {"content": "precisamos revisar o contrato"}}]}
 
 Multiple tools (complex queries):
 - "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
@@ -783,6 +789,73 @@ function formatFileSize(bytes: number): string {
 }
 
 // ============================================
+// AddNote Tool Implementation (Phase 9)
+// ============================================
+
+/**
+ * Execute the addNote tool
+ * Creates a formatted note and saves it to the project
+ */
+export async function executeAddNoteTool(
+  projectId: string,
+  params: { content: string; title?: string; topic?: string; tags?: string }
+): Promise<ToolResult> {
+  try {
+    const content = params.content;
+    
+    if (!content || content.trim().length === 0) {
+      return {
+        success: false,
+        tool: 'addNote',
+        error: 'Note content is required',
+      };
+    }
+
+    // Build context metadata
+    const contextMetadata: NoteContextMetadata = {};
+    if (params.topic) contextMetadata.topic = params.topic;
+    if (params.tags) contextMetadata.tags = params.tags.split(',').map(t => t.trim());
+
+    // Execute the addNote pipeline
+    let result;
+    if (params.title) {
+      result = await addNoteWithTitle(projectId, content, params.title, contextMetadata);
+    } else {
+      result = await addNote({
+        projectId,
+        rawNoteText: content,
+        contextMetadata,
+      });
+    }
+
+    if (!result.success) {
+      return {
+        success: false,
+        tool: 'addNote',
+        error: result.error || 'Failed to create note',
+      };
+    }
+
+    return {
+      success: true,
+      tool: 'addNote',
+      data: `Note "${result.title}" has been created and saved.\n\n**Location:** ${result.filePath}\n**Directory:** ${result.directory}`,
+      metadata: {
+        fileName: result.filePath,
+        fileId: result.fileId,
+        truncated: false,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'addNote',
+      error: error instanceof Error ? error.message : 'Failed to create note',
+    };
+  }
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -820,6 +893,14 @@ export async function executeTool(
         title: call.params.title || 'Generated Document',
         content: call.params.content || '',
       }, userMessage);
+
+    case 'addNote':
+      return executeAddNoteTool(projectId, {
+        content: call.params.content || call.params.text || call.params.note || userMessage || '',
+        title: call.params.title,
+        topic: call.params.topic,
+        tags: call.params.tags,
+      });
 
     default:
       return {

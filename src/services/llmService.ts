@@ -8,8 +8,9 @@ import type {
   LLMMessage,
   LLMCompletionRequest,
   LLMCompletionResponse,
+  NoteSettings,
 } from '../types';
-import { DEFAULT_LLM_SETTINGS } from '../types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
 
 const STORAGE_KEY = 'docusage_llm_settings';
 
@@ -25,7 +26,15 @@ export function loadSettings(): LLMSettings {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      return { ...DEFAULT_LLM_SETTINGS, ...parsed };
+      // Deep merge to ensure noteSettings is properly initialized
+      return {
+        ...DEFAULT_LLM_SETTINGS,
+        ...parsed,
+        noteSettings: {
+          ...DEFAULT_NOTE_SETTINGS,
+          ...(parsed.noteSettings || {}),
+        },
+      };
     }
   } catch {
     // Ignore parse errors
@@ -49,6 +58,43 @@ export function isConfigured(): boolean {
     return !!settings.openai.apiKey;
   }
   return !!settings.ollama.baseUrl && !!settings.ollama.model;
+}
+
+// ============================================
+// Note Settings Management (Phase 9)
+// ============================================
+
+/**
+ * Load note settings from stored settings
+ */
+export function loadNoteSettings(): NoteSettings {
+  const settings = loadSettings();
+  return settings.noteSettings || { ...DEFAULT_NOTE_SETTINGS };
+}
+
+/**
+ * Save note settings to storage
+ */
+export function saveNoteSettings(noteSettings: NoteSettings): void {
+  const settings = loadSettings();
+  settings.noteSettings = noteSettings;
+  saveSettings(settings);
+}
+
+/**
+ * Get note format instructions for use in prompts
+ */
+export function getNoteFormatInstructions(): string {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.formatInstructions || '';
+}
+
+/**
+ * Get default note directory
+ */
+export function getDefaultNoteDirectory(): string {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.defaultDirectory || 'notes';
 }
 
 // ============================================
@@ -234,4 +280,5 @@ export async function getOllamaModels(baseUrl: string): Promise<string[]> {
     return [];
   }
 }
+
 

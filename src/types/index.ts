@@ -155,7 +155,7 @@ export interface ChatSession {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote';
 
 /**
  * Tool definition for system prompt
@@ -236,6 +236,8 @@ export interface LLMSettings {
   provider: LLMProvider;
   openai: OpenAIConfig;
   ollama: OllamaConfig;
+  /** Note formatting settings (Phase 9) */
+  noteSettings: NoteSettings;
 }
 
 /**
@@ -250,6 +252,11 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   ollama: {
     baseUrl: 'http://localhost:11434',
     model: 'llama3.2',
+  },
+  noteSettings: {
+    formatInstructions: '',
+    defaultDirectory: 'notes',
+    autoGenerateTitle: true,
   },
 };
 
@@ -408,4 +415,85 @@ export interface GeneratedDocument {
   downloadUrl: string;
   /** Creation timestamp */
   createdAt: Date;
+}
+
+// ============================================
+// Note Settings Types (Phase 9)
+// ============================================
+
+/**
+ * Note formatting settings for the AddNote pipeline
+ */
+export interface NoteSettings {
+  /** User instructions for note formatting (injected into FormatNote prompt) */
+  formatInstructions: string;
+  /** Default note directory within projects */
+  defaultDirectory: string;
+  /** Whether to auto-generate note titles */
+  autoGenerateTitle: boolean;
+}
+
+/**
+ * Default note settings
+ */
+export const DEFAULT_NOTE_SETTINGS: NoteSettings = {
+  formatInstructions: '',
+  defaultDirectory: 'notes',
+  autoGenerateTitle: true,
+};
+
+/**
+ * AddNote tool input parameters
+ */
+export interface AddNoteParams {
+  /** The project to add the note to */
+  projectId: string;
+  /** Raw note text to be formatted and saved */
+  rawNoteText: string;
+  /** Optional context metadata */
+  contextMetadata?: NoteContextMetadata;
+}
+
+/**
+ * Optional metadata for note context
+ */
+export interface NoteContextMetadata {
+  /** Tags associated with the note */
+  tags?: string[];
+  /** Topic or category */
+  topic?: string;
+  /** Source of the note (e.g., meeting, research) */
+  source?: string;
+  /** Language preference */
+  language?: string;
+}
+
+/**
+ * Result from AddNote pipeline
+ */
+export interface AddNoteResult {
+  /** Success indicator */
+  success: boolean;
+  /** Final file path */
+  filePath: string;
+  /** Generated note title */
+  title: string;
+  /** Directory where note was saved */
+  directory: string;
+  /** File ID in database */
+  fileId: string;
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Directory decision result from AI
+ */
+export interface DirectoryDecision {
+  /** Target directory path */
+  targetDirectory: string;
+  /** Whether a new directory should be created */
+  shouldCreateDirectory: boolean;
 }

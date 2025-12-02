@@ -68,8 +68,14 @@ You have access to the following tools to help answer user requests:
 ### 4. WRITE Tool
 **Purpose:** Generate a new document (PDF, DOCX, or Markdown) based on content.
 **When to use:**
-- User wants to create, write, or generate a new document
-- Keywords: create document, generate PDF, write report, escreva, crie, gerar pdf/docx/markdown, create note, save as markdown
+- User wants to create, write, or generate a new formatted document
+- Keywords: create document, generate PDF, write report, escreva, crie, gerar pdf/docx
+
+### 5. ADD NOTE Tool
+**Purpose:** Create and save a quick note in the project with automatic formatting and organization.
+**When to use:**
+- User wants to save a note, take notes, or add information to the project
+- Keywords: add note, take note, save note, criar nota, salvar nota, anotar, adicionar anotação, lembrete, remember this
 
 ## Tool Usage Examples
 
@@ -92,8 +98,13 @@ You have access to the following tools to help answer user requests:
 - "Create a PDF report about the findings" → uses WRITE with format=pdf
 - "Generate a summary document in DOCX" → uses WRITE with format=docx
 - "Crie um documento com os pontos principais" → uses WRITE
-- "Create a markdown note" → uses WRITE with format=md
-- "Save this as markdown" → uses WRITE with format=md
+
+**ADD NOTE examples:**
+- "Add a note about the meeting decisions" → uses ADD NOTE
+- "Save this note: deadline is Friday" → uses ADD NOTE
+- "Criar nota sobre a reunião de hoje" → uses ADD NOTE
+- "Take a note: need to review the contract" → uses ADD NOTE
+- "Anotar: verificar requisitos do projeto" → uses ADD NOTE
 
 ## Instructions
 - When answering questions, use the context provided below from the project documents.
