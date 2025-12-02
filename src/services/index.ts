@@ -4,7 +4,7 @@
  */
 
 // Database
-export { initializeDatabase, getConnection } from './database';
+export { initializeDatabase, getConnection, flushDatabase } from './database';
 
 // Project Service
 export {
@@ -103,7 +103,7 @@ export {
   generateEmbeddingsForChunks,
 } from './embeddingService';
 
-// Note Service (Phase 9)
+// Note Service (Phase 9 + Phase 10)
 export {
   formatNote,
   generateNoteTitle,
@@ -115,4 +115,10 @@ export {
   indexNote,
   addNote,
   addNoteWithTitle,
+  // Phase 10: Global note routing
+  decideTargetProject,
+  globalAddNote,
 } from './noteService';
+
+// Export types from noteService
+export type { NoteExecutionStep, NoteExecutionCallback } from './noteService';

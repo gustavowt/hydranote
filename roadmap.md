@@ -280,62 +280,62 @@ Goal: create a **dedicated IA pipeline** for adding notes to a specific project,
 
 ---
 
-## Phase 10 – Dashboard “Add Note” entry point + project router
+## Phase 10 – Dashboard "Add Note" entry point + project router
 
 Goal: allow the user to add a note **from the main dashboard**, with an IA deciding which project the note belongs to (or if a new project should be created), and then reuse the `AddNote` pipeline.
 
 ### 10.1 – UI: Dashboard button & editor
 
-- [ ] **Dashboard button**
-  - [ ] Add a prominent `Add Note` button to the main dashboard.
-  - [ ] Label and icon should clearly indicate “quick note creation”.
+- [x] **Dashboard button**
+  - [x] Add a prominent `Add Note` button to the main dashboard.
+  - [x] Label and icon should clearly indicate "quick note creation".
 
-- [ ] **Markdown editor modal/page**
-  - [ ] When the user clicks `Add Note`:
-    - [ ] Open a full‑screen or modal editor inspired by Obsidian:
-      - [ ] Raw Markdown editing area.
-      - [ ] Optional preview mode or split view (optional for v1).
-    - [ ] Provide fields or inline controls for:
-      - [ ] Note content (required).
-      - [ ] Optional tags or quick metadata.
+- [x] **Markdown editor modal/page**
+  - [x] When the user clicks `Add Note`:
+    - [x] Open a full‑screen or modal editor inspired by Obsidian:
+      - [x] Raw Markdown editing area.
+      - [x] Optional preview mode or split view (optional for v1).
+    - [x] Provide fields or inline controls for:
+      - [x] Note content (required).
+      - [x] Optional tags or quick metadata.
 
-  - [ ] On “Save note”:
-    - [ ] Trigger the **global Add‑Note pipeline** described below.
+  - [x] On "Save note":
+    - [x] Trigger the **global Add‑Note pipeline** described below.
 
 ### 10.2 – Global project router (pre‑AddNote step)
 
-- [ ] **Define router prompt: `DecideTargetProjectForNote`**
-  - [ ] Inputs:
-    - [ ] Note content (as typed by the user).
-    - [ ] List of existing projects with:
-      - [ ] `project_id`
-      - [ ] `name`
-      - [ ] Short description / tags.
-    - [ ] Optional: user preferences (e.g. “default project for notes”).
-  - [ ] Behavior:
-    - [ ] Choose the **most appropriate existing project** whenever possible.
-    - [ ] Only choose “create new project” when clearly justified (e.g. note is about a completely new domain).
-  - [ ] Output:
-    - [ ] `target_project_id` **or**
-    - [ ] A structure like `{ action: "create_project", proposed_name, proposed_description }`.
+- [x] **Define router prompt: `DecideTargetProjectForNote`**
+  - [x] Inputs:
+    - [x] Note content (as typed by the user).
+    - [x] List of existing projects with:
+      - [x] `project_id`
+      - [x] `name`
+      - [x] Short description / tags.
+    - [x] Optional: user preferences (e.g. "default project for notes").
+  - [x] Behavior:
+    - [x] Choose the **most appropriate existing project** whenever possible.
+    - [x] Only choose "create new project" when clearly justified (e.g. note is about a completely new domain).
+  - [x] Output:
+    - [x] `target_project_id` **or**
+    - [x] A structure like `{ action: "create_project", proposed_name, proposed_description }`.
 
-- [ ] **Implement router step**
-  - [ ] Call the router prompt when the user saves the note from the dashboard editor.
-  - [ ] If the router suggests an existing project:
-    - [ ] Call the per‑project `AddNote` tool for that project.
-  - [ ] If the router suggests creating a project:
-    - [ ] Use the existing “CreateProject” tool/flow with the suggested name/description.
-    - [ ] After creation, call `AddNote` for the new project.
+- [x] **Implement router step**
+  - [x] Call the router prompt when the user saves the note from the dashboard editor.
+  - [x] If the router suggests an existing project:
+    - [x] Call the per‑project `AddNote` tool for that project.
+  - [x] If the router suggests creating a project:
+    - [x] Use the existing "CreateProject" tool/flow with the suggested name/description.
+    - [x] After creation, call `AddNote` for the new project.
 
 ### 10.3 – UX feedback
 
-- [ ] After the pipeline finishes:
-  - [ ] Show a confirmation/toast with:
-    - [ ] The project where the note was created.
-    - [ ] The final note title.
-  - [ ] Offer a quick link to:
-    - [ ] “Open note in project”.
-    - [ ] “Go to project chat with this note as context”.
+- [x] After the pipeline finishes:
+  - [x] Show a confirmation/toast with:
+    - [x] The project where the note was created.
+    - [x] The final note title.
+  - [x] Offer a quick link to:
+    - [x] "Open note in project".
+    - [x] "Go to project chat with this note as context".
 
 ---
 

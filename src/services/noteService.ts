@@ -11,12 +11,30 @@ import type {
   DirectoryDecision,
   ProjectFile,
   Chunk,
+  ProjectSummary,
+  ProjectRouterDecision,
+  GlobalAddNoteParams,
+  GlobalAddNoteResult,
 } from '../types';
+
+// ============================================
+// Execution Step Types (matching toolService pattern)
+// ============================================
+
+export interface NoteExecutionStep {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'error';
+  label: string;
+  detail?: string;
+}
+
+export type NoteExecutionCallback = (steps: NoteExecutionStep[]) => void;
 import { MARKDOWN_FILE_CONFIG } from '../types';
 import { chatCompletion } from './llmService';
 import { getNoteFormatInstructions, getDefaultNoteDirectory } from './llmService';
-import { get_project_files, getProject } from './projectService';
-import { getConnection } from './database';
+import { get_project_files, getProject, getAllProjects, createProject } from './projectService';
+import { updateProjectStatus } from './database';
+import { getConnection, flushDatabase } from './database';
 import { generateEmbedding } from './embeddingService';
 
 // ============================================
@@ -305,6 +323,9 @@ export async function persistNote(
     VALUES ('${fileId}', '${projectId}', '${escapedName}', 'md', ${size}, 'indexed', '${escapedContent}', '${now.toISOString()}', '${now.toISOString()}')
   `);
   
+  // Flush to persist immediately
+  await flushDatabase();
+  
   return {
     id: fileId,
     projectId,
@@ -443,6 +464,9 @@ export async function indexNote(file: ProjectFile): Promise<void> {
       console.error('Failed to generate embedding for chunk:', error);
     }
   }
+  
+  // Flush to persist immediately
+  await flushDatabase();
 }
 
 // ============================================
@@ -499,6 +523,10 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
     
     // Step 6: Index the note for search
     await indexNote(file);
+    
+    // Update project status to indexed
+    await updateProjectStatus(projectId, 'indexed');
+    await flushDatabase();
     
     return {
       success: true,
@@ -567,6 +595,10 @@ export async function addNoteWithTitle(
     // Step 6: Index the note for search
     await indexNote(file);
     
+    // Update project status to indexed
+    await updateProjectStatus(projectId, 'indexed');
+    await flushDatabase();
+    
     return {
       success: true,
       filePath: file.name,
@@ -583,6 +615,305 @@ export async function addNoteWithTitle(
       directory: '',
       fileId: '',
       createdAt: new Date(),
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+    };
+  }
+}
+
+// ============================================
+// Phase 10: Global Project Router
+// ============================================
+
+/**
+ * Prompt template for deciding which project a note belongs to
+ */
+function buildDecideTargetProjectPrompt(projects: ProjectSummary[]): string {
+  const projectList = projects.length > 0
+    ? projects.map(p => `  - ID: "${p.id}" | Name: "${p.name}"${p.description ? ` | Description: ${p.description}` : ''}`).join('\n')
+    : '  (No existing projects)';
+
+  return `You are a project classification assistant. Given a note's content, decide which project it belongs to.
+
+Existing projects:
+${projectList}
+
+Guidelines:
+- STRONGLY prefer assigning to an existing project when the note reasonably fits its topic or theme
+- Only suggest creating a new project if:
+  1. No existing projects exist, OR
+  2. The note is clearly about a completely different domain that doesn't fit any existing project
+- Consider project names and descriptions to find the best match
+- If uncertain between multiple projects, choose the one with the closest thematic match
+
+Respond with a JSON object ONLY:
+{
+  "action": "use_existing" | "create_project",
+  "targetProjectId": "project-id-here" (only if action is "use_existing"),
+  "proposedProjectName": "New Project Name" (only if action is "create_project"),
+  "proposedProjectDescription": "Brief description" (only if action is "create_project"),
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "Brief explanation of why this project was chosen"
+}`;
+}
+
+/**
+ * Decide which project a note should be added to
+ */
+export async function decideTargetProject(
+  noteContent: string,
+  tags?: string[]
+): Promise<ProjectRouterDecision> {
+  // Get all existing projects
+  const projects = await getAllProjects();
+  const projectSummaries: ProjectSummary[] = projects.map(p => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+  }));
+
+  // If no projects exist, always suggest creating one
+  if (projectSummaries.length === 0) {
+    // Generate a project name from the note content
+    const titleResponse = await chatCompletion({
+      messages: [
+        { role: 'system', content: 'Generate a short, descriptive project name (2-4 words) for organizing notes about this topic. Respond with ONLY the project name, no quotes or explanation.' },
+        { role: 'user', content: noteContent.slice(0, 1000) },
+      ],
+      temperature: 0.5,
+      maxTokens: 50,
+    });
+
+    return {
+      action: 'create_project',
+      proposedProjectName: titleResponse.content.trim() || 'My Notes',
+      proposedProjectDescription: 'Auto-created project for notes',
+      confidence: 'high',
+      reasoning: 'No existing projects available',
+    };
+  }
+
+  const systemPrompt = buildDecideTargetProjectPrompt(projectSummaries);
+  
+  let userContent = `Note content:\n${noteContent.slice(0, 2000)}`;
+  if (tags && tags.length > 0) {
+    userContent += `\n\nTags: ${tags.join(', ')}`;
+  }
+
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+    temperature: 0.2,
+    maxTokens: 300,
+  });
+
+  try {
+    // Extract JSON from response
+    let jsonStr = response.content.trim();
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[0];
+    }
+    
+    const parsed = JSON.parse(jsonStr);
+    
+    // Validate the decision
+    if (parsed.action === 'use_existing') {
+      // Verify the project exists
+      const projectExists = projectSummaries.some(p => p.id === parsed.targetProjectId);
+      if (!projectExists) {
+        // Fallback to first project if the suggested one doesn't exist
+        return {
+          action: 'use_existing',
+          targetProjectId: projectSummaries[0].id,
+          confidence: 'medium',
+          reasoning: 'Fallback to first available project',
+        };
+      }
+    }
+    
+    return {
+      action: parsed.action || 'use_existing',
+      targetProjectId: parsed.targetProjectId,
+      proposedProjectName: parsed.proposedProjectName,
+      proposedProjectDescription: parsed.proposedProjectDescription,
+      confidence: parsed.confidence || 'medium',
+      reasoning: parsed.reasoning,
+    };
+  } catch {
+    // Fallback: assign to first project or suggest creating one
+    if (projectSummaries.length > 0) {
+      return {
+        action: 'use_existing',
+        targetProjectId: projectSummaries[0].id,
+        confidence: 'low',
+        reasoning: 'Fallback due to parsing error',
+      };
+    }
+    
+    return {
+      action: 'create_project',
+      proposedProjectName: 'General Notes',
+      proposedProjectDescription: 'Default project for notes',
+      confidence: 'low',
+      reasoning: 'Fallback due to parsing error',
+    };
+  }
+}
+
+/**
+ * Helper to update execution steps
+ */
+function updateStep(
+  steps: NoteExecutionStep[],
+  id: string,
+  updates: Partial<NoteExecutionStep>,
+  callback?: NoteExecutionCallback
+): NoteExecutionStep[] {
+  const newSteps = steps.map(s => s.id === id ? { ...s, ...updates } : s);
+  callback?.(newSteps);
+  return newSteps;
+}
+
+/**
+ * Global add note pipeline - adds a note from the dashboard
+ * 
+ * Pipeline steps:
+ * 1. Decide target project (or create new one)
+ * 2. Format the note content
+ * 3. Generate title and filename
+ * 4. Save note to project
+ * 5. Index for search
+ */
+export async function globalAddNote(
+  params: GlobalAddNoteParams,
+  onProgress?: NoteExecutionCallback
+): Promise<GlobalAddNoteResult> {
+  const { rawNoteText, tags } = params;
+
+  // Initialize execution steps
+  let steps: NoteExecutionStep[] = [
+    { id: 'router', status: 'pending', label: 'Deciding target project' },
+    { id: 'format', status: 'pending', label: 'Formatting note' },
+    { id: 'title', status: 'pending', label: 'Generating title' },
+    { id: 'directory', status: 'pending', label: 'Choosing directory' },
+    { id: 'save', status: 'pending', label: 'Saving note' },
+    { id: 'index', status: 'pending', label: 'Indexing for search' },
+  ];
+  onProgress?.(steps);
+
+  try {
+    // Step 1: Decide target project
+    steps = updateStep(steps, 'router', { status: 'running' }, onProgress);
+    const routerDecision = await decideTargetProject(rawNoteText, tags);
+    
+    let projectId: string;
+    let projectName: string;
+    let newProjectCreated = false;
+
+    if (routerDecision.action === 'create_project') {
+      // Create a new project
+      steps = updateStep(steps, 'router', { 
+        status: 'running', 
+        detail: `Creating project: ${routerDecision.proposedProjectName}` 
+      }, onProgress);
+      
+      const newProject = await createProject(
+        routerDecision.proposedProjectName || 'New Project',
+        routerDecision.proposedProjectDescription
+      );
+      projectId = newProject.id;
+      projectName = newProject.name;
+      newProjectCreated = true;
+      
+      steps = updateStep(steps, 'router', { 
+        status: 'completed', 
+        detail: `Created: ${projectName}` 
+      }, onProgress);
+    } else {
+      // Use existing project
+      projectId = routerDecision.targetProjectId!;
+      const project = await getProject(projectId);
+      if (!project) {
+        steps = updateStep(steps, 'router', { status: 'error', detail: 'Project not found' }, onProgress);
+        return {
+          success: false,
+          projectId: '',
+          projectName: '',
+          newProjectCreated: false,
+          filePath: '',
+          title: '',
+          fileId: '',
+          error: 'Target project not found',
+        };
+      }
+      projectName = project.name;
+      steps = updateStep(steps, 'router', { 
+        status: 'completed', 
+        detail: projectName 
+      }, onProgress);
+    }
+
+    // Step 2: Format the note
+    steps = updateStep(steps, 'format', { status: 'running' }, onProgress);
+    const contextMetadata: NoteContextMetadata = tags ? { tags } : {};
+    const formattedContent = await formatNote(rawNoteText, contextMetadata);
+    steps = updateStep(steps, 'format', { status: 'completed' }, onProgress);
+
+    // Step 3: Generate title
+    steps = updateStep(steps, 'title', { status: 'running' }, onProgress);
+    const title = await generateNoteTitle(formattedContent);
+    const slug = titleToSlug(title);
+    steps = updateStep(steps, 'title', { status: 'completed', detail: title }, onProgress);
+
+    // Step 4: Decide directory
+    steps = updateStep(steps, 'directory', { status: 'running' }, onProgress);
+    const { targetDirectory } = await decideNoteDirectory(projectId, title, contextMetadata);
+    steps = updateStep(steps, 'directory', { status: 'completed', detail: targetDirectory }, onProgress);
+
+    // Step 5: Save the note
+    steps = updateStep(steps, 'save', { status: 'running' }, onProgress);
+    const fileName = await generateUniqueFileName(projectId, slug, targetDirectory);
+    const file = await persistNote(projectId, fileName, targetDirectory, formattedContent);
+    steps = updateStep(steps, 'save', { status: 'completed', detail: file.name }, onProgress);
+
+    // Step 6: Index the note
+    steps = updateStep(steps, 'index', { status: 'running' }, onProgress);
+    await indexNote(file);
+    
+    // Update project status to indexed
+    await updateProjectStatus(projectId, 'indexed');
+    await flushDatabase();
+    
+    steps = updateStep(steps, 'index', { status: 'completed' }, onProgress);
+
+    return {
+      success: true,
+      projectId,
+      projectName,
+      newProjectCreated,
+      filePath: file.name,
+      title,
+      fileId: file.id,
+    };
+  } catch (error) {
+    // Mark any running step as error
+    steps = steps.map(s => 
+      s.status === 'running' 
+        ? { ...s, status: 'error' as const, detail: error instanceof Error ? error.message : 'Error' }
+        : s
+    );
+    onProgress?.(steps);
+    
+    return {
+      success: false,
+      projectId: '',
+      projectName: '',
+      newProjectCreated: false,
+      filePath: '',
+      title: '',
+      fileId: '',
       error: error instanceof Error ? error.message : 'Unknown error occurred',
     };
   }

@@ -497,3 +497,66 @@ export interface DirectoryDecision {
   /** Whether a new directory should be created */
   shouldCreateDirectory: boolean;
 }
+
+// ============================================
+// Phase 10: Dashboard Add Note Types
+// ============================================
+
+/**
+ * Project summary for the router decision
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+/**
+ * Result from DecideTargetProjectForNote router
+ */
+export interface ProjectRouterDecision {
+  /** Action to take */
+  action: 'use_existing' | 'create_project';
+  /** Target project ID (if using existing) */
+  targetProjectId?: string;
+  /** Proposed project name (if creating new) */
+  proposedProjectName?: string;
+  /** Proposed project description (if creating new) */
+  proposedProjectDescription?: string;
+  /** Confidence level of the decision */
+  confidence: 'high' | 'medium' | 'low';
+  /** Reasoning for the decision */
+  reasoning?: string;
+}
+
+/**
+ * Parameters for global add note from dashboard
+ */
+export interface GlobalAddNoteParams {
+  /** Raw note content */
+  rawNoteText: string;
+  /** Optional tags */
+  tags?: string[];
+}
+
+/**
+ * Result from global add note pipeline
+ */
+export interface GlobalAddNoteResult {
+  /** Success indicator */
+  success: boolean;
+  /** The project where note was created */
+  projectId: string;
+  /** Project name */
+  projectName: string;
+  /** Whether a new project was created */
+  newProjectCreated: boolean;
+  /** Final file path */
+  filePath: string;
+  /** Generated note title */
+  title: string;
+  /** File ID in database */
+  fileId: string;
+  /** Error message if failed */
+  error?: string;
+}

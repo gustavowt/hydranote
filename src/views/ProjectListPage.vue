@@ -25,6 +25,12 @@
       <div class="hero-section">
         <img src="/hydranote-logo.png" alt="HydraNote" class="hero-logo" />
         <p class="hero-tagline">Your intelligent document assistant</p>
+        
+        <!-- Quick Add Note Button -->
+        <ion-button class="quick-add-note-btn" @click="showAddNoteModal = true">
+          <ion-icon slot="start" :icon="documentTextOutline" />
+          Add Note
+        </ion-button>
       </div>
 
       <!-- Empty State -->
@@ -106,6 +112,49 @@
           </ion-list>
         </ion-content>
       </ion-modal>
+
+      <!-- Add Note Modal -->
+      <AddNoteModal
+        :is-open="showAddNoteModal"
+        @close="showAddNoteModal = false"
+        @save="handleSaveNote"
+        ref="addNoteModalRef"
+      />
+
+      <!-- Note Created Toast/Result Modal -->
+      <ion-modal :is-open="showNoteResultModal" @didDismiss="showNoteResultModal = false" class="note-result-modal">
+        <ion-header>
+          <ion-toolbar>
+            <ion-title>Note Created</ion-title>
+            <ion-buttons slot="end">
+              <ion-button @click="showNoteResultModal = false">
+                <ion-icon slot="icon-only" :icon="closeOutline" />
+              </ion-button>
+            </ion-buttons>
+          </ion-toolbar>
+        </ion-header>
+        <ion-content class="ion-padding">
+          <div class="result-content">
+            <div class="result-icon success">
+              <ion-icon :icon="checkmarkCircleOutline" />
+            </div>
+            <h2>{{ noteResult?.title }}</h2>
+            <p class="result-info">
+              <span v-if="noteResult?.newProjectCreated" class="new-badge">New Project</span>
+              Saved to <strong>{{ noteResult?.projectName }}</strong>
+            </p>
+            <div class="result-actions">
+              <ion-button expand="block" @click="goToProjectChat">
+                <ion-icon slot="start" :icon="chatbubbleOutline" />
+                Open Project Chat
+              </ion-button>
+              <ion-button expand="block" fill="outline" @click="showNoteResultModal = false">
+                Done
+              </ion-button>
+            </div>
+          </div>
+        </ion-content>
+      </ion-modal>
     </ion-content>
   </ion-page>
 </template>
@@ -134,6 +183,7 @@ import {
   IonTextarea,
   IonSpinner,
   alertController,
+  toastController,
 } from '@ionic/vue';
 import {
   addOutline,
@@ -141,9 +191,15 @@ import {
   folderOpenOutline,
   trashOutline,
   settingsOutline,
+  documentTextOutline,
+  closeOutline,
+  checkmarkCircleOutline,
+  chatbubbleOutline,
 } from 'ionicons/icons';
-import type { Project } from '@/types';
-import { initialize, getAllProjects, createProject } from '@/services';
+import type { Project, GlobalAddNoteResult } from '@/types';
+import { initialize, getAllProjects, createProject, globalAddNote, getProject } from '@/services';
+import type { NoteExecutionStep } from '@/services';
+import AddNoteModal from '@/components/AddNoteModal.vue';
 
 const router = useRouter();
 const loading = ref(true);
@@ -154,17 +210,33 @@ const newProject = ref({
   description: '',
 });
 
+// Add Note state
+const showAddNoteModal = ref(false);
+const showNoteResultModal = ref(false);
+const noteResult = ref<GlobalAddNoteResult | null>(null);
+const addNoteModalRef = ref<InstanceType<typeof AddNoteModal> | null>(null);
+
+// Track load version to prevent race conditions
+let loadVersion = 0;
+
 onMounted(async () => {
   await initialize();
   await loadProjects();
 });
 
 async function loadProjects() {
+  const currentVersion = ++loadVersion;
   loading.value = true;
   try {
-    projects.value = await getAllProjects();
+    const loadedProjects = await getAllProjects();
+    // Only update if this is still the latest load request
+    if (currentVersion === loadVersion) {
+      projects.value = loadedProjects;
+    }
   } finally {
-    loading.value = false;
+    if (currentVersion === loadVersion) {
+      loading.value = false;
+    }
   }
 }
 
@@ -230,6 +302,73 @@ function formatDate(date: Date): string {
     day: 'numeric',
     year: 'numeric',
   }).format(date);
+}
+
+// Add Note handlers
+async function handleSaveNote(content: string, tags: string[], onProgress: (steps: NoteExecutionStep[]) => void) {
+  try {
+    const result = await globalAddNote(
+      {
+        rawNoteText: content,
+        tags: tags.length > 0 ? tags : undefined,
+      },
+      onProgress
+    );
+
+    if (result.success) {
+      // Store result first
+      noteResult.value = result;
+      
+      // Fetch the project (either new or existing) with updated status
+      if (result.projectId) {
+        const updatedProject = await getProject(result.projectId);
+        if (updatedProject) {
+          // Update or add the project in the list
+          const existingIndex = projects.value.findIndex(p => p.id === updatedProject.id);
+          if (existingIndex >= 0) {
+            // Update existing project
+            projects.value = [
+              ...projects.value.slice(0, existingIndex),
+              updatedProject,
+              ...projects.value.slice(existingIndex + 1)
+            ];
+          } else {
+            // Add new project at the beginning
+            projects.value = [updatedProject, ...projects.value];
+          }
+        }
+      }
+      
+      // Now close the add note modal and show result
+      showAddNoteModal.value = false;
+      showNoteResultModal.value = true;
+    } else {
+      addNoteModalRef.value?.resetSaving();
+      const toast = await toastController.create({
+        message: result.error || 'Failed to save note',
+        duration: 3000,
+        color: 'danger',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    addNoteModalRef.value?.resetSaving();
+    const toast = await toastController.create({
+      message: 'An error occurred while saving the note',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+function goToProjectChat() {
+  if (noteResult.value?.projectId) {
+    showNoteResultModal.value = false;
+    router.push(`/project/${noteResult.value.projectId}/chat`);
+  }
 }
 </script>
 
@@ -383,6 +522,116 @@ ion-modal ion-button {
 
 ion-modal ion-button[strong] {
   --color: #8b5cf6;
+}
+
+/* Quick Add Note Button */
+.quick-add-note-btn {
+  margin-top: 20px;
+  --background: linear-gradient(135deg, #3fb950, #238636);
+  --color: #ffffff;
+  --border-radius: 12px;
+  --padding-start: 24px;
+  --padding-end: 24px;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.quick-add-note-btn ion-icon {
+  margin-right: 8px;
+}
+
+/* Note Result Modal */
+.note-result-modal {
+  --width: 90%;
+  --max-width: 400px;
+  --height: auto;
+  --border-radius: 16px;
+}
+
+.note-result-modal ion-toolbar {
+  --background: #16162a;
+  --border-color: #2d2d44;
+}
+
+.note-result-modal ion-content {
+  --background: #1a1a2e;
+}
+
+.result-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 16px;
+}
+
+.result-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.result-icon.success {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.result-icon ion-icon {
+  font-size: 36px;
+}
+
+.result-content h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e2e2e8;
+}
+
+.result-info {
+  margin: 0 0 24px;
+  color: #8b8b9e;
+  font-size: 0.95rem;
+}
+
+.result-info strong {
+  color: #6366f1;
+}
+
+.new-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #ffffff;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-right: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.result-actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-actions ion-button {
+  --border-radius: 12px;
+}
+
+.result-actions ion-button:first-child {
+  --background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --color: #ffffff;
+}
+
+.result-actions ion-button[fill="outline"] {
+  --border-color: #3d3d5c;
+  --color: #8b8b9e;
 }
 </style>
 

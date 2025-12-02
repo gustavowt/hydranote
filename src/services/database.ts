@@ -144,10 +144,14 @@ export function getDatabase(): duckdb.AsyncDuckDB {
 
 export async function createProject(project: Project): Promise<void> {
   const conn = getConnection();
+  const escapedName = project.name.replace(/'/g, "''");
+  const escapedDesc = (project.description || '').replace(/'/g, "''");
   await conn.query(`
     INSERT INTO projects (id, name, description, status, created_at, updated_at)
-    VALUES ('${project.id}', '${project.name}', '${project.description || ''}', '${project.status}', '${project.createdAt.toISOString()}', '${project.updatedAt.toISOString()}')
+    VALUES ('${project.id}', '${escapedName}', '${escapedDesc}', '${project.status}', '${project.createdAt.toISOString()}', '${project.updatedAt.toISOString()}')
   `);
+  // Flush to persist immediately
+  await flushDatabase();
 }
 
 export async function getProject(projectId: string): Promise<Project | null> {
@@ -334,8 +338,13 @@ export async function vectorSearch(
 
 /**
  * Flush database to persist changes to OPFS
+ * Uses CHECKPOINT to force WAL to be written to the database file
  */
 export async function flushDatabase(): Promise<void> {
+  if (connection) {
+    // Force WAL checkpoint to persist all changes to the database file
+    await connection.query('CHECKPOINT');
+  }
   if (db) {
     await db.flushFiles();
   }
