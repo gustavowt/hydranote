@@ -66,10 +66,10 @@ You have access to the following tools to help answer user requests:
 - Keywords: summarize, summary, resuma, resumo, overview, synopsis
 
 ### 4. WRITE Tool
-**Purpose:** Generate a new document (PDF or DOCX) based on content.
+**Purpose:** Generate a new document (PDF, DOCX, or Markdown) based on content.
 **When to use:**
 - User wants to create, write, or generate a new document
-- Keywords: create document, generate PDF, write report, escreva, crie, gerar pdf/docx
+- Keywords: create document, generate PDF, write report, escreva, crie, gerar pdf/docx/markdown, create note, save as markdown
 
 ## Tool Usage Examples
 
@@ -92,6 +92,8 @@ You have access to the following tools to help answer user requests:
 - "Create a PDF report about the findings" → uses WRITE with format=pdf
 - "Generate a summary document in DOCX" → uses WRITE with format=docx
 - "Crie um documento com os pontos principais" → uses WRITE
+- "Create a markdown note" → uses WRITE with format=md
+- "Save this as markdown" → uses WRITE with format=md
 
 ## Instructions
 - When answering questions, use the context provided below from the project documents.

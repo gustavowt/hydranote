@@ -49,7 +49,7 @@ Available tools:
 - read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
 - search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
-- write: Generate a new document (PDF or DOCX). Use when user wants to create, write, generate, or produce a document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, write a report, create a document, make a summary document.
+- write: Generate a new document (PDF, DOCX, or Markdown). Use when user wants to create, write, generate, or produce a document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, gerar markdown, write a report, create a document, make a summary document, create note, save as markdown.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -77,6 +77,9 @@ Single tool:
 - "Crie um documento PDF com o resumo" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
 - "Generate a DOCX summary" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Summary Document"}}]}
 - "Gerar PDF do relatório" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Relatório"}}]}
+- "Create a markdown note" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Note"}}]}
+- "Save this as markdown" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Document"}}]}
+- "Crie uma nota em markdown" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Nota"}}]}
 
 Multiple tools (complex queries):
 - "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
@@ -667,6 +670,7 @@ export async function executeSummarizeTool(
 const DEFAULT_WRITE_CONFIG = {
   maxContentTokens: 4000,
   defaultFormat: 'pdf' as DocumentFormat,
+  supportedFormats: ['pdf', 'docx', 'md'] as DocumentFormat[],
 };
 
 /**
@@ -727,11 +731,11 @@ export async function executeWriteTool(
     const title = params.title || 'Generated Document';
 
     // Validate format
-    if (!['pdf', 'docx'].includes(format)) {
+    if (!DEFAULT_WRITE_CONFIG.supportedFormats.includes(format)) {
       return {
         success: false,
         tool: 'write',
-        error: `Invalid format: ${format}. Supported formats: pdf, docx`,
+        error: `Invalid format: ${format}. Supported formats: ${DEFAULT_WRITE_CONFIG.supportedFormats.join(', ')}`,
       };
     }
 

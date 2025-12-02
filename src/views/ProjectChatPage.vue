@@ -150,7 +150,13 @@
         </div>
 
         <ion-list v-else>
-          <ion-item v-for="file in files" :key="file.id">
+          <ion-item 
+            v-for="file in files" 
+            :key="file.id"
+            button
+            @click="openFile(file)"
+            :detail="file.type === 'md'"
+          >
             <ion-icon :icon="getFileIcon(file.type)" slot="start" />
             <ion-label>
               <h3>{{ file.name }}</h3>
@@ -169,13 +175,26 @@
         </div>
       </ion-content>
     </ion-modal>
+
+    <!-- Markdown Viewer/Editor Modal -->
+    <MarkdownViewerEditor
+      :is-open="showMarkdownViewer"
+      :file-name="selectedMarkdownFile?.name || ''"
+      :content="markdownContent"
+      :can-edit="true"
+      @close="closeMarkdownViewer"
+      @save="saveMarkdownFile"
+    />
   </ion-page>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { marked } from 'marked';
+import { Marked } from 'marked';
+import { markedHighlight } from 'marked-highlight';
+import hljs from 'highlight.js';
+import 'highlight.js/styles/github-dark.css';
 import {
   IonPage,
   IonHeader,
@@ -211,9 +230,11 @@ import {
   checkmarkCircle,
   closeCircle,
   ellipseOutline,
+  logoMarkdown,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, ChatMessage } from '@/types';
 import type { ExecutionStep } from '@/services';
+import MarkdownViewerEditor from '@/components/MarkdownViewerEditor.vue';
 import {
   initialize,
   getProject,
@@ -243,6 +264,11 @@ const uploading = ref(false);
 const uploadFileName = ref('');
 const sessionId = ref('');
 const executionSteps = ref<ExecutionStep[]>([]);
+
+// Markdown viewer/editor state
+const showMarkdownViewer = ref(false);
+const selectedMarkdownFile = ref<ProjectFile | null>(null);
+const markdownContent = ref('');
 
 const projectId = computed(() => route.params.id as string);
 
@@ -426,6 +452,7 @@ async function showInfoPopover() {
 
 function getFileIcon(type: string): string {
   if (['png', 'jpg', 'jpeg', 'webp'].includes(type)) return imageOutline;
+  if (type === 'md') return logoMarkdown;
   return documentOutline;
 }
 
@@ -463,6 +490,61 @@ function formatSize(bytes: number): string {
 function uniqueSourceFiles(chunks: { fileName: string }[]): string[] {
   return [...new Set(chunks.map(c => c.fileName))].slice(0, 3);
 }
+
+async function openFile(file: ProjectFile) {
+  if (file.type === 'md') {
+    // Open markdown file in viewer/editor
+    selectedMarkdownFile.value = file;
+    markdownContent.value = file.content || '';
+    showMarkdownViewer.value = true;
+  } else {
+    // For other files, trigger a read through chat
+    await sendMessage(`Read the file "${file.name}"`);
+    showFilesModal.value = false;
+  }
+}
+
+function closeMarkdownViewer() {
+  showMarkdownViewer.value = false;
+  selectedMarkdownFile.value = null;
+  markdownContent.value = '';
+}
+
+async function saveMarkdownFile(content: string) {
+  // Note: Full save implementation would require updating the file in the database
+  // For now, we update the local state
+  if (selectedMarkdownFile.value) {
+    selectedMarkdownFile.value.content = content;
+    markdownContent.value = content;
+    
+    // Update the files list
+    const index = files.value.findIndex(f => f.id === selectedMarkdownFile.value?.id);
+    if (index !== -1) {
+      files.value[index] = { ...files.value[index], content };
+    }
+  }
+}
+
+// Configure marked with highlight.js for syntax highlighting
+const marked = new Marked(
+  markedHighlight({
+    langPrefix: 'hljs language-',
+    highlight(code: string, lang: string) {
+      if (lang && hljs.getLanguage(lang)) {
+        try {
+          return hljs.highlight(code, { language: lang }).value;
+        } catch {
+          // Fall back to auto-detection
+        }
+      }
+      try {
+        return hljs.highlightAuto(code).value;
+      } catch {
+        return code;
+      }
+    },
+  })
+);
 
 function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string;

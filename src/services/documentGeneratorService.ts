@@ -15,6 +15,7 @@ import {
 } from 'docx';
 import { saveAs } from 'file-saver';
 import type { DocumentFormat, GeneratedDocument } from '../types';
+import { MARKDOWN_FILE_CONFIG } from '../types';
 import { getConnection } from './database';
 
 // ============================================
@@ -339,6 +340,33 @@ export async function generateDOCX(
 }
 
 // ============================================
+// Markdown Generation (Phase 8)
+// ============================================
+
+/**
+ * Generate a Markdown document from content
+ * Preserves formatting as-is since content is already markdown
+ */
+export async function generateMarkdown(
+  title: string,
+  content: string
+): Promise<Blob> {
+  // Build the markdown document with title
+  const markdownContent = `# ${title}
+
+*Generated: ${new Date().toLocaleDateString()}*
+
+---
+
+${content}`;
+
+  // Create blob with proper encoding
+  return new Blob([markdownContent], { 
+    type: `${MARKDOWN_FILE_CONFIG.mimeType};charset=${MARKDOWN_FILE_CONFIG.encoding}` 
+  });
+}
+
+// ============================================
 // Document Storage
 // ============================================
 
@@ -430,10 +458,18 @@ export async function generateDocument(
 ): Promise<GeneratedDocument> {
   let blob: Blob;
 
-  if (format === 'pdf') {
-    blob = await generatePDF(title, content);
-  } else {
-    blob = await generateDOCX(title, content);
+  switch (format) {
+    case 'pdf':
+      blob = await generatePDF(title, content);
+      break;
+    case 'docx':
+      blob = await generateDOCX(title, content);
+      break;
+    case 'md':
+      blob = await generateMarkdown(title, content);
+      break;
+    default:
+      throw new Error(`Unsupported format: ${format}`);
   }
 
   return storeGeneratedDocument(projectId, title, format, blob);

@@ -1,38 +1,12 @@
 /**
- * Services barrel export
+ * Services Index
+ * Central export point for all services
  */
 
 // Database
-export {
-  initializeDatabase,
-  getConnection,
-  getDatabase,
-  closeDatabase,
-  flushDatabase,
-} from './database';
+export { initializeDatabase, getConnection } from './database';
 
-// Document Processing
-export {
-  extractText,
-  chunkText,
-  processDocument,
-  detectFileType,
-  isFileTypeSupported,
-  getSupportedExtensions,
-} from './documentProcessor';
-
-// Embedding Service
-export {
-  configureEmbeddingService,
-  getEmbeddingConfig,
-  setApiKey,
-  generateEmbedding,
-  generateEmbeddingsForChunks,
-  generateEmbeddingsBatch,
-  cosineSimilarity,
-} from './embeddingService';
-
-// Project Service (main API)
+// Project Service
 export {
   initialize,
   createProject,
@@ -49,7 +23,7 @@ export {
   getProjectStats,
 } from './projectService';
 
-// Chat Service (Phase 2)
+// Chat Service
 export {
   buildSystemPrompt,
   estimateTokens,
@@ -66,31 +40,6 @@ export {
   recordAssistantResponse,
 } from './chatService';
 
-// Tool Service (Phase 3+)
-export {
-  routeMessage,
-  executeTool,
-  executeToolCalls,
-  executeReadTool,
-  executeSearchTool,
-  executeSummarizeTool,
-  executeWriteTool,
-  formatToolResults,
-  orchestrateToolExecution,
-} from './toolService';
-export type { ExecutionStep, ExecutionLogCallback, OrchestratedResult, RoutingResult } from './toolService';
-
-// Document Generator Service (Phase 6)
-export {
-  generatePDF,
-  generateDOCX,
-  generateDocument,
-  downloadDocument,
-  downloadBlob,
-  getGeneratedDocument,
-  downloadGeneratedDocument,
-} from './documentGeneratorService';
-
 // LLM Service
 export {
   loadSettings,
@@ -103,3 +52,48 @@ export {
   getOllamaModels,
 } from './llmService';
 
+// Tool Service
+export {
+  routeMessage,
+  executeReadTool,
+  executeSearchTool,
+  executeSummarizeTool,
+  executeWriteTool,
+  executeTool,
+  executeToolCalls,
+  formatToolResults,
+  orchestrateToolExecution,
+} from './toolService';
+
+// Export types from toolService
+export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult } from './toolService';
+
+// Document Generator Service
+export {
+  generatePDF,
+  generateDOCX,
+  generateMarkdown,
+  generateDocument,
+  getGeneratedDocument,
+  downloadGeneratedDocument,
+  storeGeneratedDocument,
+  downloadDocument,
+  downloadBlob,
+} from './documentGeneratorService';
+
+// Document Processor
+export {
+  detectFileType,
+  extractText,
+  chunkText,
+  chunkMarkdownText,
+  processDocument,
+  isFileTypeSupported,
+  getSupportedExtensions,
+} from './documentProcessor';
+
+// Embedding Service
+export {
+  generateEmbedding,
+  generateEmbeddingsForChunks,
+} from './embeddingService';

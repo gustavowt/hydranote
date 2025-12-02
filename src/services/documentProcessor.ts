@@ -172,15 +172,15 @@ export function chunkText(
       }
     }
     
-    const chunkText = cleanedText.slice(startOffset, endOffset).trim();
+    const chunkTextContent = cleanedText.slice(startOffset, endOffset).trim();
     
-    if (chunkText.length > 0) {
+    if (chunkTextContent.length > 0) {
       chunks.push({
         id: generateId(),
         fileId,
         projectId,
         index: chunkIndex,
-        text: chunkText,
+        text: chunkTextContent,
         startOffset,
         endOffset,
         createdAt: new Date(),
@@ -201,7 +201,108 @@ export function chunkText(
 }
 
 /**
+ * Chunk Markdown text using headings as primary boundaries (Phase 8)
+ * Falls back to regular chunking if sections are too large
+ */
+export function chunkMarkdownText(
+  text: string,
+  fileId: string,
+  projectId: string,
+  config: ChunkingConfig = { maxChunkSize: 1000, overlap: 200 }
+): Chunk[] {
+  const { maxChunkSize } = config;
+  const chunks: Chunk[] = [];
+  
+  if (text.trim().length === 0) {
+    return chunks;
+  }
+  
+  // Split by markdown headings (# ## ### etc.)
+  const headingPattern = /^(#{1,6})\s+(.+)$/gm;
+  const sections: { heading: string; content: string; startOffset: number }[] = [];
+  
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  
+  // Find all headings and their positions
+  const matches: { index: number; heading: string }[] = [];
+  while ((match = headingPattern.exec(text)) !== null) {
+    matches.push({ index: match.index, heading: match[0] });
+  }
+  
+  // Create sections based on headings
+  for (let i = 0; i < matches.length; i++) {
+    const currentMatch = matches[i];
+    const nextMatch = matches[i + 1];
+    
+    // Content before first heading (if any)
+    if (i === 0 && currentMatch.index > 0) {
+      const preContent = text.slice(0, currentMatch.index).trim();
+      if (preContent.length > 0) {
+        sections.push({
+          heading: '',
+          content: preContent,
+          startOffset: 0,
+        });
+      }
+    }
+    
+    // Current section content
+    const sectionStart = currentMatch.index;
+    const sectionEnd = nextMatch ? nextMatch.index : text.length;
+    const sectionContent = text.slice(sectionStart, sectionEnd).trim();
+    
+    sections.push({
+      heading: currentMatch.heading,
+      content: sectionContent,
+      startOffset: sectionStart,
+    });
+  }
+  
+  // If no headings found, use regular chunking
+  if (sections.length === 0) {
+    return chunkText(text, fileId, projectId, config);
+  }
+  
+  // Process each section
+  let chunkIndex = 0;
+  
+  for (const section of sections) {
+    // If section is small enough, add as single chunk
+    if (section.content.length <= maxChunkSize) {
+      chunks.push({
+        id: generateId(),
+        fileId,
+        projectId,
+        index: chunkIndex,
+        text: section.content,
+        startOffset: section.startOffset,
+        endOffset: section.startOffset + section.content.length,
+        createdAt: new Date(),
+      });
+      chunkIndex++;
+    } else {
+      // Section too large, sub-chunk it
+      const subChunks = chunkText(section.content, fileId, projectId, config);
+      for (const subChunk of subChunks) {
+        chunks.push({
+          ...subChunk,
+          id: generateId(),
+          index: chunkIndex,
+          startOffset: section.startOffset + subChunk.startOffset,
+          endOffset: section.startOffset + subChunk.endOffset,
+        });
+        chunkIndex++;
+      }
+    }
+  }
+  
+  return chunks;
+}
+
+/**
  * Process a document: extract text and create chunks
+ * Uses markdown-aware chunking for .md files (Phase 8)
  */
 export async function processDocument(
   file: File,
@@ -210,7 +311,12 @@ export async function processDocument(
   config?: ChunkingConfig
 ): Promise<{ text: string; chunks: Chunk[] }> {
   const text = await extractText(file);
-  const chunks = chunkText(text, fileId, projectId, config);
+  const fileType = detectFileType(file.name);
+  
+  // Use markdown-aware chunking for .md files
+  const chunks = fileType === 'md'
+    ? chunkMarkdownText(text, fileId, projectId, config)
+    : chunkText(text, fileId, projectId, config);
   
   return { text, chunks };
 }

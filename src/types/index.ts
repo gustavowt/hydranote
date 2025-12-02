@@ -354,19 +354,33 @@ export const DEFAULT_PROGRESSIVE_READ_CONFIG: ProgressiveReadConfig = {
 };
 
 // ============================================
-// Write Tool Types (Phase 6)
+// Write Tool Types (Phase 6 + Phase 8)
 // ============================================
 
 /**
  * Supported output formats for document generation
  */
-export type DocumentFormat = 'pdf' | 'docx';
+export type DocumentFormat = 'pdf' | 'docx' | 'md';
+
+/**
+ * File type for write operations (Phase 8)
+ */
+export type WriteFileType = 'pdf' | 'docx' | 'markdown';
+
+/**
+ * Markdown file constants (Phase 8)
+ */
+export const MARKDOWN_FILE_CONFIG = {
+  extension: '.md',
+  mimeType: 'text/markdown',
+  encoding: 'utf-8',
+} as const;
 
 /**
  * Write tool specific parameters
  */
 export interface WriteToolParams {
-  /** Output format: pdf or docx */
+  /** Output format: pdf, docx, or md */
   format: DocumentFormat;
   /** Document title */
   title: string;
@@ -374,6 +388,8 @@ export interface WriteToolParams {
   content: string;
   /** Optional: Use project context to enrich content */
   useContext?: boolean;
+  /** Optional: File type hint (Phase 8) - defaults to format */
+  fileType?: WriteFileType;
 }
 
 /**
