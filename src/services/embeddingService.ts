@@ -4,6 +4,7 @@
  */
 
 import type { Chunk, Embedding, EmbeddingConfig } from '../types';
+import { loadSettings } from './llmService';
 
 // Default embedding configuration
 const DEFAULT_CONFIG: EmbeddingConfig = {
@@ -12,16 +13,12 @@ const DEFAULT_CONFIG: EmbeddingConfig = {
 };
 
 let currentConfig: EmbeddingConfig = { ...DEFAULT_CONFIG };
-let apiKey: string | null = null;
 
 /**
  * Configure the embedding service
  */
-export function configureEmbeddingService(config: Partial<EmbeddingConfig>, key?: string): void {
+export function configureEmbeddingService(config: Partial<EmbeddingConfig>): void {
   currentConfig = { ...currentConfig, ...config };
-  if (key) {
-    apiKey = key;
-  }
 }
 
 /**
@@ -32,20 +29,20 @@ export function getEmbeddingConfig(): EmbeddingConfig {
 }
 
 /**
- * Set API key for embedding service
+ * Get API key from LLM settings if OpenAI is selected
  */
-export function setApiKey(key: string): void {
-  apiKey = key;
+function getOpenAIApiKey(): string | null {
+  const settings = loadSettings();
+  if (settings.provider === 'openai' && settings.openai.apiKey) {
+    return settings.openai.apiKey;
+  }
+  return null;
 }
 
 /**
  * Generate embedding for a single text using OpenAI API
  */
-async function generateEmbeddingFromAPI(text: string): Promise<number[]> {
-  if (!apiKey) {
-    throw new Error('API key not configured. Call setApiKey() first.');
-  }
-
+async function generateEmbeddingFromAPI(text: string, apiKey: string): Promise<number[]> {
   const response = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: {
@@ -116,14 +113,15 @@ function simpleHash(str: string): number {
 
 /**
  * Generate embedding for text
- * Uses API if configured, otherwise falls back to local embedding
+ * Uses OpenAI API if configured, otherwise falls back to local embedding
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
+  const apiKey = getOpenAIApiKey();
   if (apiKey) {
-    return generateEmbeddingFromAPI(text);
+    return generateEmbeddingFromAPI(text, apiKey);
   }
   
-  // Fallback to local embedding for development
+  // Fallback to local embedding for development/Ollama
   return generateLocalEmbedding(text, currentConfig.dimensions);
 }
 
