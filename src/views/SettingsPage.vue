@@ -57,6 +57,16 @@
               :clear-input="true"
             />
           </ion-item>
+          <ion-item lines="none" class="api-key-help">
+            <ion-label class="ion-text-wrap">
+              <p>
+                Create an API key at 
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
+                  platform.openai.com/api-keys
+                </a>
+              </p>
+            </ion-label>
+          </ion-item>
           <ion-item>
             <ion-select
               v-model="settings.openai.model"
@@ -452,6 +462,27 @@ ion-toggle ion-label p {
 ion-textarea {
   --color: #e2e2e8;
   --placeholder-color: #6b6b80;
+}
+
+.api-key-help {
+  --background: transparent;
+  --padding-top: 0;
+  --inner-padding-top: 0;
+}
+
+.api-key-help p {
+  font-size: 0.8rem;
+  color: #8b8b9e !important;
+  margin: 0;
+}
+
+.api-key-help a {
+  color: #6366f1;
+  text-decoration: none;
+}
+
+.api-key-help a:hover {
+  text-decoration: underline;
 }
 </style>
 
