@@ -394,3 +394,4 @@ src/
     └── SettingsPage.vue      # Settings
 ```
 
+
