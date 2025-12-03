@@ -345,49 +345,49 @@ Goal: improve navigation and **make it easy to reference project files** while c
 
 ### 11.1 – Sidebar file tree (per project)
 
-- [ ] **Backend: project file listing**
-  - [ ] Expose an API to retrieve the full file tree for a project:
-    - [ ] Directory structure.
-    - [ ] File paths, names, and types.
-  - [ ] Support pagination/lazy‑loading for large trees if necessary.
+- [x] **Backend: project file listing**
+  - [x] Expose an API to retrieve the full file tree for a project:
+    - [x] Directory structure.
+    - [x] File paths, names, and types.
+  - [x] Support pagination/lazy‑loading for large trees if necessary.
 
-- [ ] **Frontend: tree UI**
-  - [ ] In the project view, add a **left sidebar** showing:
-    - [ ] Collapsible directories (like VS Code).
-    - [ ] Files as leaf nodes, with icons by type (`.md`, `.pdf`, etc.).
-  - [ ] When the user clicks a file:
-    - [ ] Open the file in a viewer/editor panel (depending on type).
-    - [ ] Optionally highlight the selected file in the tree.
+- [x] **Frontend: tree UI**
+  - [x] In the project view, add a **left sidebar** showing:
+    - [x] Collapsible directories (like VS Code).
+    - [x] Files as leaf nodes, with icons by type (`.md`, `.pdf`, etc.).
+  - [x] When the user clicks a file:
+    - [x] Open the file in a viewer/editor panel (depending on type).
+    - [x] Optionally highlight the selected file in the tree.
 
 ### 11.2 – `@`‑based file reference autocomplete
 
-- [ ] **Reference syntax definition**
-  - [ ] Decide a canonical syntax to represent file references in text, for example:
-    - [ ] `@file:path/to/file.md`
-    - [ ] or `@file:display-name` (mapped internally to path).
-  - [ ] Ensure the LLM router understands this syntax and can map it to the correct file/tool.
+- [x] **Reference syntax definition**
+  - [x] Decide a canonical syntax to represent file references in text, for example:
+    - [x] `@file:path/to/file.md`
+    - [x] or `@file:display-name` (mapped internally to path).
+  - [x] Ensure the LLM router understands this syntax and can map it to the correct file/tool.
 
-- [ ] **Chat/editor behavior**
-  - [ ] While the user types in the project chat or note editor:
-    - [ ] When the user types `@`, start an autocomplete for project files.
-    - [ ] Allow searching by file name and maybe by directory.
-  - [ ] When the user selects a file from the autocomplete:
-    - [ ] Insert the chosen reference token into the text.
+- [x] **Chat/editor behavior**
+  - [x] While the user types in the project chat or note editor:
+    - [x] When the user types `@`, start an autocomplete for project files.
+    - [x] Allow searching by file name and maybe by directory.
+  - [x] When the user selects a file from the autocomplete:
+    - [x] Insert the chosen reference token into the text.
 
-- [ ] **LLM integration**
-  - [ ] Update the router/system prompt so that:
-    - [ ] When it detects `@file:...` references, it:
-      - [ ] Resolves them to actual project file paths.
-      - [ ] Uses the appropriate tool(s) (`ReadFile`, `Search`, etc.) to fetch content.
-    - [ ] The LLM includes referenced file content or summaries in its responses where appropriate.
+- [x] **LLM integration**
+  - [x] Update the router/system prompt so that:
+    - [x] When it detects `@file:...` references, it:
+      - [x] Resolves them to actual project file paths.
+      - [x] Uses the appropriate tool(s) (`ReadFile`, `Search`, etc.) to fetch content.
+    - [x] The LLM includes referenced file content or summaries in its responses where appropriate.
 
 ### 11.3 – Optional enhancements
 
-- [ ] Hover preview:
-  - [ ] When hovering over a file in the tree or over an `@file` reference, show a small preview (first lines or a short summary).
+- [x] Hover preview:
+  - [x] When hovering over a file in the tree or over an `@file` reference, show a small preview (first lines or a short summary).
 
-- [ ] Recent / pinned files:
-  - [ ] Add a section in the sidebar for “Recent files” or “Pinned files” to speed up navigation.
+- [x] Recent / pinned files:
+  - [x] Add a section in the sidebar for "Recent files" or "Pinned files" to speed up navigation.
 
 ---
 
