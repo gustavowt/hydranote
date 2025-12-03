@@ -499,64 +499,67 @@ export interface DirectoryDecision {
 }
 
 // ============================================
-// Phase 10: Dashboard Add Note Types
+// Phase 11: File Tree & @ References Types
 // ============================================
 
 /**
- * Project summary for the router decision
+ * Represents a file node in the file tree
  */
-export interface ProjectSummary {
+export interface FileTreeNode {
+  /** Unique identifier (file ID for files, path for directories) */
   id: string;
+  /** Display name */
   name: string;
-  description?: string;
+  /** Full path relative to project root */
+  path: string;
+  /** Node type */
+  type: 'file' | 'directory';
+  /** File type (only for files) */
+  fileType?: SupportedFileType;
+  /** File size in bytes (only for files) */
+  size?: number;
+  /** File status (only for files) */
+  status?: FileStatus;
+  /** Children nodes (only for directories) */
+  children?: FileTreeNode[];
+  /** Whether directory is expanded (UI state) */
+  expanded?: boolean;
 }
 
 /**
- * Result from DecideTargetProjectForNote router
+ * File tree for a project
  */
-export interface ProjectRouterDecision {
-  /** Action to take */
-  action: 'use_existing' | 'create_project';
-  /** Target project ID (if using existing) */
-  targetProjectId?: string;
-  /** Proposed project name (if creating new) */
-  proposedProjectName?: string;
-  /** Proposed project description (if creating new) */
-  proposedProjectDescription?: string;
-  /** Confidence level of the decision */
-  confidence: 'high' | 'medium' | 'low';
-  /** Reasoning for the decision */
-  reasoning?: string;
-}
-
-/**
- * Parameters for global add note from dashboard
- */
-export interface GlobalAddNoteParams {
-  /** Raw note content */
-  rawNoteText: string;
-  /** Optional tags */
-  tags?: string[];
-}
-
-/**
- * Result from global add note pipeline
- */
-export interface GlobalAddNoteResult {
-  /** Success indicator */
-  success: boolean;
-  /** The project where note was created */
+export interface ProjectFileTree {
+  /** Project ID */
   projectId: string;
-  /** Project name */
-  projectName: string;
-  /** Whether a new project was created */
-  newProjectCreated: boolean;
-  /** Final file path */
-  filePath: string;
-  /** Generated note title */
-  title: string;
-  /** File ID in database */
-  fileId: string;
-  /** Error message if failed */
-  error?: string;
+  /** Root nodes of the tree */
+  nodes: FileTreeNode[];
+  /** Total file count */
+  totalFiles: number;
+  /** Total directory count */
+  totalDirectories: number;
 }
+
+/**
+ * File reference parsed from @file:... syntax
+ */
+export interface FileReference {
+  /** Original matched text (e.g., "@file:notes/meeting.md") */
+  original: string;
+  /** File path or name */
+  filePath: string;
+  /** Start position in text */
+  startIndex: number;
+  /** End position in text */
+  endIndex: number;
+}
+
+/**
+ * File reference syntax constants
+ */
+export const FILE_REFERENCE_SYNTAX = {
+  /** Prefix for file references */
+  prefix: '@file:',
+  /** Regex pattern to match file references */
+  pattern: /@file:([^\s]+)/g,
+} as const;

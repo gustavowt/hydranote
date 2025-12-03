@@ -4,7 +4,7 @@
  * Provides helper functions as specified in the roadmap
  */
 
-import type { Project, ProjectFile, Chunk, Embedding, ChunkingConfig, SearchResult } from '../types';
+import type { Project, ProjectFile, Chunk, Embedding, ChunkingConfig, SearchResult, SupportedFileType, FileTreeNode, ProjectFileTree } from '../types';
 import {
   initializeDatabase,
   createProject as dbCreateProject,
@@ -330,5 +330,197 @@ export async function getProjectStats(projectId: string): Promise<{
   };
 }
 
+// ============================================
+// Phase 11: File Tree API
+// ============================================
 
+/**
+ * Build a hierarchical file tree from flat file list
+ */
+function buildFileTree(files: ProjectFile[]): FileTreeNode[] {
+  const root: Map<string, FileTreeNode> = new Map();
+  
+  // Sort files by path for consistent ordering
+  const sortedFiles = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  
+  for (const file of sortedFiles) {
+    const pathParts = file.name.split('/');
+    const fileName = pathParts.pop()!;
+    
+    // Build directory structure
+    let currentLevel = root;
+    let currentPath = '';
+    
+    for (const part of pathParts) {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      
+      if (!currentLevel.has(part)) {
+        const dirNode: FileTreeNode = {
+          id: `dir:${currentPath}`,
+          name: part,
+          path: currentPath,
+          type: 'directory',
+          children: [],
+          expanded: false,
+        };
+        currentLevel.set(part, dirNode);
+      }
+      
+      const dirNode = currentLevel.get(part)!;
+      if (!dirNode.children) {
+        dirNode.children = [];
+      }
+      
+      // Convert children array to a map for easier lookup
+      const childMap = new Map<string, FileTreeNode>();
+      for (const child of dirNode.children) {
+        childMap.set(child.name, child);
+      }
+      currentLevel = childMap;
+      
+      // Update the parent's children with the map values
+      dirNode.children = Array.from(childMap.values());
+    }
+    
+    // Add the file node
+    const fileNode: FileTreeNode = {
+      id: file.id,
+      name: fileName,
+      path: file.name,
+      type: 'file',
+      fileType: file.type,
+      size: file.size,
+      status: file.status,
+    };
+    
+    if (pathParts.length === 0) {
+      // File at root level
+      root.set(fileName, fileNode);
+    } else {
+      // File inside a directory - find the parent
+      let parent = root.get(pathParts[0])!;
+      for (let i = 1; i < pathParts.length; i++) {
+        const child = parent.children?.find(c => c.name === pathParts[i]);
+        if (child) {
+          parent = child;
+        }
+      }
+      if (parent.children) {
+        parent.children.push(fileNode);
+      }
+    }
+  }
+  
+  // Convert root map to array and sort (directories first, then files)
+  const sortNodes = (nodes: FileTreeNode[]): FileTreeNode[] => {
+    return nodes.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'directory' ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    }).map(node => {
+      if (node.children) {
+        node.children = sortNodes(node.children);
+      }
+      return node;
+    });
+  };
+  
+  return sortNodes(Array.from(root.values()));
+}
+
+/**
+ * Count directories in tree
+ */
+function countDirectories(nodes: FileTreeNode[]): number {
+  let count = 0;
+  for (const node of nodes) {
+    if (node.type === 'directory') {
+      count++;
+      if (node.children) {
+        count += countDirectories(node.children);
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Get hierarchical file tree for a project
+ * Phase 11: Sidebar file tree API
+ */
+export async function getProjectFileTree(projectId: string): Promise<ProjectFileTree> {
+  await ensureInitialized();
+  
+  const files = await get_project_files(projectId);
+  const nodes = buildFileTree(files);
+  
+  return {
+    projectId,
+    nodes,
+    totalFiles: files.length,
+    totalDirectories: countDirectories(nodes),
+  };
+}
+
+/**
+ * Get flat list of files for autocomplete
+ * Returns files sorted by name for easy filtering
+ */
+export async function getProjectFilesForAutocomplete(projectId: string): Promise<Array<{
+  id: string;
+  name: string;
+  path: string;
+  type: SupportedFileType;
+}>> {
+  await ensureInitialized();
+  
+  const files = await get_project_files(projectId);
+  
+  return files
+    .map(f => ({
+      id: f.id,
+      name: f.name.split('/').pop() || f.name,
+      path: f.name,
+      type: f.type,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Find file by path or name
+ * Used for resolving @file: references
+ */
+export async function findFileByPath(
+  projectId: string,
+  pathOrName: string
+): Promise<ProjectFile | null> {
+  await ensureInitialized();
+  
+  const files = await get_project_files(projectId);
+  
+  // Try exact path match first
+  let file = files.find(f => f.name === pathOrName);
+  if (file) return file;
+  
+  // Try matching just the filename
+  file = files.find(f => {
+    const fileName = f.name.split('/').pop();
+    return fileName === pathOrName;
+  });
+  if (file) return file;
+  
+  // Try case-insensitive match
+  const lowerPath = pathOrName.toLowerCase();
+  file = files.find(f => f.name.toLowerCase() === lowerPath);
+  if (file) return file;
+  
+  // Try case-insensitive filename match
+  file = files.find(f => {
+    const fileName = f.name.split('/').pop()?.toLowerCase();
+    return fileName === lowerPath;
+  });
+  
+  return file || null;
+}
 

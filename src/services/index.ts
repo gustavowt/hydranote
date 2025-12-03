@@ -21,6 +21,10 @@ export {
   getFile,
   getFileWithChunks,
   getProjectStats,
+  // Phase 11: File tree API
+  getProjectFileTree,
+  getProjectFilesForAutocomplete,
+  findFileByPath,
 } from './projectService';
 
 // Chat Service
