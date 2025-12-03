@@ -1,0 +1,348 @@
+<template>
+  <ion-page>
+    <ion-header :translucent="true" class="workspace-header">
+      <ion-toolbar>
+        <ion-title>
+          <div class="header-brand">
+            <img src="/hydranote-logo.png" alt="HydraNote" class="logo" />
+            <span>HydraNote</span>
+          </div>
+        </ion-title>
+        <ion-buttons slot="end">
+          <ion-button @click="handleNewNote" class="add-note-btn">
+            <ion-icon slot="start" :icon="addOutline" />
+            New Note
+          </ion-button>
+          <ion-button @click="router.push('/settings')">
+            <ion-icon slot="icon-only" :icon="settingsOutline" />
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+
+    <!-- Main Workspace Layout -->
+    <div class="workspace-layout">
+      <!-- Left Sidebar: Projects Tree -->
+      <ProjectsTreeSidebar
+        ref="projectsTreeRef"
+        :selected-project-id="selectedProjectId"
+        :selected-file-id="selectedFileId"
+        @select-project="handleProjectSelect"
+        @select-file="handleFileSelect"
+        @create-project="showCreateProjectModal = true"
+      />
+
+      <!-- Center: Markdown Editor -->
+      <MarkdownEditor
+        ref="markdownEditorRef"
+        :current-file="currentFile"
+        :current-project="currentProject"
+        :initial-content="editorInitialContent"
+        @save="handleSaveExistingFile"
+        @content-change="handleContentChange"
+        @note-saved="handleNoteSaved"
+      />
+
+      <!-- Right Sidebar: Chat -->
+      <ChatSidebar
+        ref="chatSidebarRef"
+        :initial-project-id="selectedProjectId"
+        @project-change="handleChatProjectChange"
+      />
+    </div>
+
+    <!-- Create Project Modal -->
+    <ion-modal :is-open="showCreateProjectModal" @didDismiss="showCreateProjectModal = false">
+      <ion-header>
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button @click="showCreateProjectModal = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-title>New Project</ion-title>
+          <ion-buttons slot="end">
+            <ion-button :strong="true" @click="handleCreateProject" :disabled="!newProject.name.trim()">
+              Create
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-list>
+          <ion-item>
+            <ion-input
+              v-model="newProject.name"
+              label="Project Name"
+              label-placement="stacked"
+              placeholder="Enter project name"
+              :clear-input="true"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-textarea
+              v-model="newProject.description"
+              label="Description"
+              label-placement="stacked"
+              placeholder="Optional description"
+              :rows="3"
+            />
+          </ion-item>
+        </ion-list>
+      </ion-content>
+    </ion-modal>
+
+  </ion-page>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import {
+  IonPage,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonButtons,
+  IonButton,
+  IonIcon,
+  IonModal,
+  IonList,
+  IonItem,
+  IonInput,
+  IonTextarea,
+  toastController,
+} from '@ionic/vue';
+import {
+  addOutline,
+  settingsOutline,
+} from 'ionicons/icons';
+import type { Project, ProjectFile, GlobalAddNoteResult } from '@/types';
+import {
+  initialize,
+  getAllProjects,
+  createProject,
+  getProject,
+  get_project_files,
+} from '@/services';
+import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
+import MarkdownEditor from '@/components/MarkdownEditor.vue';
+import ChatSidebar from '@/components/ChatSidebar.vue';
+
+const router = useRouter();
+
+// Refs for child components
+const projectsTreeRef = ref<InstanceType<typeof ProjectsTreeSidebar> | null>(null);
+const markdownEditorRef = ref<InstanceType<typeof MarkdownEditor> | null>(null);
+const chatSidebarRef = ref<InstanceType<typeof ChatSidebar> | null>(null);
+
+// State
+const projects = ref<Project[]>([]);
+const selectedProjectId = ref<string | undefined>(undefined);
+const selectedFileId = ref<string | undefined>(undefined);
+const currentProject = ref<Project | null>(null);
+const currentFile = ref<ProjectFile | null>(null);
+const editorInitialContent = ref('');
+
+// Modal state
+const showCreateProjectModal = ref(false);
+
+const newProject = ref({
+  name: '',
+  description: '',
+});
+
+onMounted(async () => {
+  await initialize();
+  await loadProjects();
+});
+
+async function loadProjects() {
+  projects.value = await getAllProjects();
+}
+
+// Project selection handlers
+async function handleProjectSelect(projectId: string) {
+  selectedProjectId.value = projectId;
+  currentProject.value = await getProject(projectId) || null;
+  
+  // Also update chat sidebar
+  chatSidebarRef.value?.selectProject(projectId);
+}
+
+async function handleFileSelect(projectId: string, file: { id: string; path: string; type: string }) {
+  selectedProjectId.value = projectId;
+  selectedFileId.value = file.id;
+  currentProject.value = await getProject(projectId) || null;
+  
+  // Load file content
+  const files = await get_project_files(projectId);
+  const projectFile = files.find(f => f.id === file.id);
+  
+  if (projectFile) {
+    currentFile.value = projectFile;
+    editorInitialContent.value = projectFile.content || '';
+  }
+  
+  // Update chat sidebar project
+  chatSidebarRef.value?.selectProject(projectId);
+}
+
+function handleChatProjectChange(projectId: string) {
+  selectedProjectId.value = projectId;
+}
+
+// New Note handler
+function handleNewNote() {
+  // Clear current file and reset editor for a new note
+  currentFile.value = null;
+  currentProject.value = null;
+  selectedFileId.value = undefined;
+  editorInitialContent.value = '';
+  markdownEditorRef.value?.clearContent();
+  markdownEditorRef.value?.focusEditor();
+}
+
+// Save handlers
+async function handleSaveExistingFile(content: string, file?: ProjectFile) {
+  if (file) {
+    // Save existing file
+    // TODO: Implement file update service
+    const toast = await toastController.create({
+      message: 'Note saved!',
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+async function handleNoteSaved(result: GlobalAddNoteResult) {
+  // Refresh sidebars after a new note is saved
+  await loadProjects();
+  await projectsTreeRef.value?.refresh();
+  await chatSidebarRef.value?.refresh();
+  
+  // Optionally select the new project/file
+  if (result.projectId) {
+    selectedProjectId.value = result.projectId;
+    selectedFileId.value = result.fileId;
+  }
+}
+
+function handleContentChange(_content: string) {
+  // Could be used for auto-save or draft saving
+}
+
+// Create project handler
+async function handleCreateProject() {
+  if (!newProject.value.name.trim()) return;
+
+  try {
+    const project = await createProject(
+      newProject.value.name.trim(),
+      newProject.value.description.trim() || undefined
+    );
+    
+    projects.value.unshift(project);
+    showCreateProjectModal.value = false;
+    newProject.value = { name: '', description: '' };
+    
+    // Select the new project
+    handleProjectSelect(project.id);
+    
+    // Refresh sidebars
+    await projectsTreeRef.value?.refresh();
+    await chatSidebarRef.value?.refresh();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to create project',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+</script>
+
+<style scoped>
+.workspace-header ion-toolbar {
+  --background: #0d1117;
+  --color: #e6edf3;
+  --border-color: #21262d;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-brand .logo {
+  height: 28px;
+  width: auto;
+}
+
+.header-brand span {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.add-note-btn {
+  --background: #238636;
+  --color: #ffffff;
+  --border-radius: 6px;
+  margin-right: 8px;
+  font-weight: 500;
+}
+
+.add-note-btn:hover {
+  --background: #2ea043;
+}
+
+/* Workspace Layout */
+.workspace-layout {
+  display: flex;
+  flex: 1;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  background: #010409;
+}
+
+/* Modal Styling */
+ion-modal ion-toolbar {
+  --background: #161b22;
+  --color: #e6edf3;
+  --border-color: #21262d;
+}
+
+ion-modal ion-content {
+  --background: #0d1117;
+}
+
+ion-modal ion-list {
+  background: transparent;
+}
+
+ion-modal ion-item {
+  --background: #161b22;
+  --color: #e6edf3;
+  --border-color: #21262d;
+}
+
+ion-modal ion-input,
+ion-modal ion-textarea {
+  --color: #e6edf3;
+  --placeholder-color: #484f58;
+}
+
+ion-modal ion-button {
+  --color: #58a6ff;
+}
+
+ion-modal ion-button[strong] {
+  --color: #3fb950;
+}
+</style>
+
