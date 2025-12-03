@@ -17,7 +17,20 @@
       </ion-toolbar>
     </ion-header>
 
-    <ion-content ref="contentRef" :fullscreen="true" class="chat-content">
+    <!-- Main Layout with Sidebar -->
+    <div class="main-layout">
+      <!-- File Tree Sidebar -->
+      <FileTreeSidebar
+        v-if="project"
+        ref="fileTreeRef"
+        :project-id="projectId"
+        :selected-file-id="selectedFileId"
+        @select-file="handleSidebarFileSelect"
+        @collapse-change="handleSidebarCollapseChange"
+      />
+
+      <!-- Chat Content Area -->
+      <ion-content ref="contentRef" :fullscreen="true" class="chat-content">
       <!-- Loading State -->
       <div v-if="loading" class="loading-state">
         <ion-spinner name="crescent" />
@@ -91,18 +104,21 @@
         </div>
       </div>
     </ion-content>
+    </div>
 
     <!-- Chat Input -->
     <ion-footer class="chat-footer">
       <ion-toolbar>
-        <div class="input-container">
+        <div class="input-container" ref="inputContainerRef">
           <ion-textarea
+            ref="textareaRef"
             v-model="inputMessage"
             :rows="1"
             :auto-grow="true"
-            placeholder="Ask about your documents..."
+            placeholder="Ask about your documents... (type @ to reference files)"
             :disabled="isTyping"
-            @keydown.enter.exact.prevent="sendMessage()"
+            @keydown="handleInputKeydown"
+            @ionInput="handleInputChange"
           />
           <ion-button 
             fill="clear" 
@@ -114,6 +130,17 @@
         </div>
       </ion-toolbar>
     </ion-footer>
+
+    <!-- File Reference Autocomplete (Teleported to body) -->
+    <FileReferenceAutocomplete
+      v-if="project"
+      :project-id="projectId"
+      :search-query="autocompleteQuery"
+      :is-visible="showAutocomplete"
+      :anchor-rect="autocompleteAnchorRect"
+      @select="handleAutocompleteSelect"
+      @close="closeAutocomplete"
+    />
 
     <!-- Files Modal -->
     <ion-modal :is-open="showFilesModal" @didDismiss="showFilesModal = false">
@@ -232,9 +259,11 @@ import {
   ellipseOutline,
   logoMarkdown,
 } from 'ionicons/icons';
-import type { Project, ProjectFile, ChatMessage } from '@/types';
+import type { Project, ProjectFile, ChatMessage, SupportedFileType } from '@/types';
 import type { ExecutionStep } from '@/services';
 import MarkdownViewerEditor from '@/components/MarkdownViewerEditor.vue';
+import FileReferenceAutocomplete from '@/components/FileReferenceAutocomplete.vue';
+import FileTreeSidebar from '@/components/FileTreeSidebar.vue';
 import {
   initialize,
   getProject,
@@ -252,6 +281,9 @@ const route = useRoute();
 const router = useRouter();
 const contentRef = ref<InstanceType<typeof IonContent> | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
+const inputContainerRef = ref<HTMLElement | null>(null);
+const fileTreeRef = ref<InstanceType<typeof FileTreeSidebar> | null>(null);
 
 const loading = ref(true);
 const project = ref<Project | null>(null);
@@ -269,6 +301,16 @@ const executionSteps = ref<ExecutionStep[]>([]);
 const showMarkdownViewer = ref(false);
 const selectedMarkdownFile = ref<ProjectFile | null>(null);
 const markdownContent = ref('');
+
+// Sidebar state
+const sidebarCollapsed = ref(false);
+const selectedFileId = ref<string | undefined>(undefined);
+
+// Autocomplete state
+const showAutocomplete = ref(false);
+const autocompleteQuery = ref('');
+const autocompleteStartIndex = ref(-1);
+const autocompleteAnchorRect = ref<DOMRect | null>(null);
 
 const projectId = computed(() => route.params.id as string);
 
@@ -432,6 +474,9 @@ async function handleFileUpload(event: Event) {
 
   uploading.value = false;
   input.value = '';
+  
+  // Refresh file tree after upload
+  await refreshFileTree();
 }
 
 async function showInfoPopover() {
@@ -549,11 +594,141 @@ const marked = new Marked(
 function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string;
 }
+
+// ============================================
+// Sidebar Functions
+// ============================================
+
+function handleSidebarCollapseChange(collapsed: boolean) {
+  sidebarCollapsed.value = collapsed;
+}
+
+async function handleSidebarFileSelect(file: { id: string; path: string; type: string }) {
+  selectedFileId.value = file.id;
+  
+  // For markdown files, open in viewer
+  if (file.type === 'md') {
+    const projectFile = files.value.find(f => f.id === file.id);
+    if (projectFile) {
+      selectedMarkdownFile.value = projectFile;
+      markdownContent.value = projectFile.content || '';
+      showMarkdownViewer.value = true;
+    }
+  } else {
+    // For other files, send a read request in chat
+    await sendMessage(`Read the file "${file.path}"`);
+  }
+}
+
+// Refresh file tree when files are uploaded
+async function refreshFileTree() {
+  await fileTreeRef.value?.refresh();
+}
+
+// ============================================
+// Autocomplete Functions
+// ============================================
+
+function handleInputKeydown(event: KeyboardEvent) {
+  // Handle Enter key for sending
+  if (event.key === 'Enter' && !event.shiftKey && !showAutocomplete.value) {
+    event.preventDefault();
+    sendMessage();
+    return;
+  }
+  
+  // Don't interfere with autocomplete navigation
+  if (showAutocomplete.value) {
+    if (['ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Tab'].includes(event.key)) {
+      // Let the autocomplete component handle these
+      return;
+    }
+  }
+}
+
+function handleInputChange() {
+  const value = inputMessage.value;
+  const cursorPos = getCursorPosition();
+  
+  // Find if we're in an @ mention context
+  const textBeforeCursor = value.substring(0, cursorPos);
+  const atIndex = textBeforeCursor.lastIndexOf('@');
+  
+  if (atIndex !== -1) {
+    const textAfterAt = textBeforeCursor.substring(atIndex + 1);
+    
+    // Check if there's a space after the @, which would end the mention
+    if (!textAfterAt.includes(' ') && !textAfterAt.includes('\n')) {
+      // We're in an @ mention context
+      autocompleteStartIndex.value = atIndex;
+      autocompleteQuery.value = textAfterAt;
+      showAutocomplete.value = true;
+      updateAutocompletePosition();
+      return;
+    }
+  }
+  
+  // Not in @ context
+  closeAutocomplete();
+}
+
+function getCursorPosition(): number {
+  // For IonTextarea, we need to get the actual textarea element
+  const textarea = textareaRef.value?.$el?.querySelector('textarea');
+  if (textarea) {
+    return textarea.selectionStart || inputMessage.value.length;
+  }
+  return inputMessage.value.length;
+}
+
+function updateAutocompletePosition() {
+  if (!inputContainerRef.value) return;
+  
+  // Get the input container's bounding rect
+  const rect = inputContainerRef.value.getBoundingClientRect();
+  autocompleteAnchorRect.value = rect;
+}
+
+function handleAutocompleteSelect(file: { id: string; name: string; path: string; type: SupportedFileType }) {
+  // Replace from the @ symbol to the end of current input with the file reference
+  const start = autocompleteStartIndex.value;
+  const before = inputMessage.value.substring(0, start);
+  
+  // Insert the file reference
+  const fileRef = `@file:${file.path} `;
+  inputMessage.value = before + fileRef;
+  
+  closeAutocomplete();
+  
+  // Focus back on the textarea
+  nextTick(() => {
+    const textarea = textareaRef.value?.$el?.querySelector('textarea');
+    if (textarea) {
+      textarea.focus();
+    }
+  });
+}
+
+function closeAutocomplete() {
+  showAutocomplete.value = false;
+  autocompleteQuery.value = '';
+  autocompleteStartIndex.value = -1;
+  autocompleteAnchorRect.value = null;
+}
 </script>
 
 <style scoped>
+/* Main Layout with Sidebar */
+.main-layout {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
 .chat-content {
   --background: #1a1a2e;
+  flex: 1;
 }
 
 .loading-state {
