@@ -34,10 +34,11 @@
 
     <ion-content class="add-note-content">
       <!-- Saving State with Execution Log -->
-      <div v-if="saving" class="saving-state">
+      <div v-if="saving || pendingConfirmation" class="saving-state">
         <div class="saving-header">
-          <ion-spinner name="crescent" />
-          <h2>Saving Note</h2>
+          <ion-spinner v-if="!pendingConfirmation" name="crescent" />
+          <ion-icon v-else :icon="helpCircleOutline" class="confirm-icon" />
+          <h2>{{ pendingConfirmation ? 'Confirm Project' : 'Saving Note' }}</h2>
         </div>
         <div class="execution-steps">
           <div 
@@ -49,10 +50,50 @@
               <ion-spinner v-if="step.status === 'running'" name="dots" />
               <ion-icon v-else-if="step.status === 'completed'" :icon="checkmarkCircle" />
               <ion-icon v-else-if="step.status === 'error'" :icon="closeCircle" />
+              <ion-icon v-else-if="step.status === 'waiting'" :icon="pauseCircleOutline" />
               <ion-icon v-else :icon="ellipseOutline" />
             </span>
             <span class="step-label">{{ step.label }}</span>
             <span v-if="step.detail" class="step-detail">{{ step.detail }}</span>
+          </div>
+        </div>
+
+        <!-- Inline Project Confirmation -->
+        <div v-if="pendingConfirmation" class="inline-confirmation">
+          <p class="confirm-message">
+            Create new project <strong>"{{ pendingConfirmation.proposedProjectName }}"</strong>?
+          </p>
+          <p v-if="pendingConfirmation.reasoning" class="confirm-reasoning">
+            {{ pendingConfirmation.reasoning }}
+          </p>
+          <div class="confirm-buttons">
+            <ion-button size="small" @click="confirmNewProject" color="success">
+              <ion-icon slot="start" :icon="checkmarkOutline" />
+              Yes, create
+            </ion-button>
+            <ion-button size="small" fill="outline" @click="showProjectPicker = true" v-if="availableProjects.length > 0">
+              <ion-icon slot="start" :icon="folderOutline" />
+              Choose existing
+            </ion-button>
+            <ion-button size="small" fill="clear" @click="cancelConfirmation" color="medium">
+              Cancel
+            </ion-button>
+          </div>
+          
+          <!-- Project picker dropdown -->
+          <div v-if="showProjectPicker" class="project-picker">
+            <p class="picker-label">Select a project:</p>
+            <ion-button 
+              v-for="project in availableProjects" 
+              :key="project.id"
+              size="small"
+              fill="outline"
+              expand="block"
+              @click="selectExistingProject(project.id)"
+              class="project-option"
+            >
+              {{ project.name }}
+            </ion-button>
           </div>
         </div>
       </div>
@@ -118,7 +159,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, type Ref } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
@@ -150,6 +191,10 @@ import {
   checkmarkCircle,
   closeCircle,
   ellipseOutline,
+  helpCircleOutline,
+  checkmarkOutline,
+  folderOutline,
+  pauseCircleOutline,
 } from 'ionicons/icons';
 import type { NoteExecutionStep } from '@/services';
 
@@ -174,15 +219,31 @@ const marked = new Marked(
   })
 );
 
-interface Props {
-  isOpen: boolean;
+interface Project {
+  id: string;
+  name: string;
 }
 
-const props = defineProps<Props>();
+interface PendingConfirmation {
+  proposedProjectName: string;
+  proposedProjectDescription?: string;
+  reasoning?: string;
+}
+
+interface Props {
+  isOpen: boolean;
+  availableProjects?: Project[];
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  availableProjects: () => [],
+});
 
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'save', content: string, tags: string[], onProgress: (steps: NoteExecutionStep[]) => void): void;
+  (e: 'confirmNewProject', content: string, tags: string[], projectName: string, projectDescription?: string): void;
+  (e: 'selectExistingProject', content: string, tags: string[], projectId: string): void;
 }>();
 
 const viewMode = ref<'edit' | 'split' | 'preview'>('edit');
@@ -193,6 +254,12 @@ const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
+
+// Inline confirmation state
+const pendingConfirmation = ref<PendingConfirmation | null>(null);
+const showProjectPicker = ref(false);
+
+const availableProjects = computed(() => props.availableProjects || []);
 
 const canSave = computed(() => noteContent.value.trim().length > 0);
 
@@ -209,6 +276,8 @@ watch(() => props.isOpen, (isOpen) => {
     tagInput.value = '';
     saving.value = false;
     executionSteps.value = [];
+    pendingConfirmation.value = null;
+    showProjectPicker.value = false;
     
     // Focus editor on next tick
     nextTick(() => {
@@ -276,12 +345,49 @@ function handleBackspace() {
   }
 }
 
+// Confirmation handling functions
+function confirmNewProject() {
+  if (!pendingConfirmation.value) return;
+  
+  // Reset confirmation state and continue saving
+  const confirmation = pendingConfirmation.value;
+  pendingConfirmation.value = null;
+  showProjectPicker.value = false;
+  saving.value = true;
+  
+  emit('confirmNewProject', noteContent.value, tags.value, confirmation.proposedProjectName, confirmation.proposedProjectDescription);
+}
+
+function selectExistingProject(projectId: string) {
+  pendingConfirmation.value = null;
+  showProjectPicker.value = false;
+  saving.value = true;
+  
+  emit('selectExistingProject', noteContent.value, tags.value, projectId);
+}
+
+function cancelConfirmation() {
+  pendingConfirmation.value = null;
+  showProjectPicker.value = false;
+  saving.value = false;
+  executionSteps.value = [];
+}
+
+// Show pending confirmation (called from parent)
+function showConfirmation(confirmation: PendingConfirmation, steps: NoteExecutionStep[]) {
+  saving.value = false;
+  pendingConfirmation.value = confirmation;
+  executionSteps.value = steps;
+}
+
 // Expose method to reset saving state (called from parent on error)
 function resetSaving() {
   saving.value = false;
+  pendingConfirmation.value = null;
+  showProjectPicker.value = false;
 }
 
-defineExpose({ resetSaving });
+defineExpose({ resetSaving, showConfirmation, executionSteps, saving });
 </script>
 
 <style scoped>
@@ -705,6 +811,81 @@ ion-spinner {
 
 .step.completed .step-detail {
   color: #7ee787;
+}
+
+.step.waiting {
+  color: #f0883e;
+}
+
+/* Inline Confirmation Styles */
+.saving-header .confirm-icon {
+  font-size: 40px;
+  color: #f0883e;
+  margin-bottom: 16px;
+}
+
+.inline-confirmation {
+  width: 100%;
+  max-width: 360px;
+  margin-top: 20px;
+  padding: 16px;
+  background: #21262d;
+  border-radius: 12px;
+  border: 1px solid #f0883e40;
+}
+
+.confirm-message {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: #e6edf3;
+  text-align: center;
+}
+
+.confirm-message strong {
+  color: #58a6ff;
+}
+
+.confirm-reasoning {
+  margin: 0 0 16px;
+  font-size: 0.8rem;
+  color: #8b949e;
+  text-align: center;
+  font-style: italic;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.confirm-buttons ion-button {
+  --border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.project-picker {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #30363d;
+}
+
+.picker-label {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: #8b949e;
+  text-align: center;
+}
+
+.project-option {
+  margin-bottom: 6px;
+  --border-color: #30363d;
+  --color: #c9d1d9;
+}
+
+.project-option:last-child {
+  margin-bottom: 0;
 }
 </style>
 

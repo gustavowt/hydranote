@@ -395,31 +395,31 @@ Goal: improve navigation and **make it easy to reference project files** while c
 
 Goal: refine the IA behavior and UX around the new note and project routing features.
 
-- [ ] **Guardrails for directory creation**
-  - [ ] Add explicit instructions to directory‑deciding prompts to:
-    - [ ] Avoid creating too many directories.
-    - [ ] Reuse existing categories whenever possible.
-  - [ ] Log cases where new directories are created to audit later.
+- [x] **Guardrails for directory creation**
+  - [x] Add explicit instructions to directory‑deciding prompts to:
+    - [x] Avoid creating too many directories.
+    - [x] Reuse existing categories whenever possible.
+  - [x] Log cases where new directories are created to audit later.
 
-- [ ] **Guardrails for project creation**
-  - [ ] Add clear rules when the IA is allowed to create new projects from dashboard notes.
-  - [ ] Optionally add a confirmation step:
-    - [ ] “The AI suggests creating a new project ‘X’. Confirm?”
+- [x] **Guardrails for project creation**
+  - [x] Add clear rules when the IA is allowed to create new projects from dashboard notes.
+  - [x] Optionally add a confirmation step:
+    - [x] "The AI suggests creating a new project 'X'. Confirm?"
 
-- [ ] **Telemetry & metrics**
-  - [ ] Track how often:
-    - [ ] Notes are created from the dashboard vs. inside a project.
-    - [ ] New projects are created automatically vs. user-initiated.
-    - [ ] New directories are created by the IA.
-  - [ ] Use this data to tweak prompts and defaults.
+- [x] **Telemetry & metrics**
+  - [x] Track how often:
+    - [x] Notes are created from the dashboard vs. inside a project.
+    - [x] New projects are created automatically vs. user-initiated.
+    - [x] New directories are created by the IA.
+  - [x] Use this data to tweak prompts and defaults.
 
-- [ ] **Documentation**
-  - [ ] Update developer documentation for:
-    - [ ] `WriteFile` changes.
-    - [ ] `AddNote` tool interface.
-    - [ ] Global project router behavior.
-    - [ ] Sidebar and `@file` reference semantics.
-  - [ ] Update any in‑app help/onboarding related to notes and Markdown support.
+- [x] **Documentation**
+  - [x] Update developer documentation for:
+    - [x] `WriteFile` changes.
+    - [x] `AddNote` tool interface.
+    - [x] Global project router behavior.
+    - [x] Sidebar and `@file` reference semantics.
+  - [x] Update any in‑app help/onboarding related to notes and Markdown support.
 
 # End of Roadmap
 

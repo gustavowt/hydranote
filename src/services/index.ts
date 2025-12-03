@@ -126,3 +126,18 @@ export {
 
 // Export types from noteService
 export type { NoteExecutionStep, NoteExecutionCallback } from './noteService';
+
+// Telemetry Service (Phase 12)
+export {
+  trackEvent,
+  trackNoteCreated,
+  trackProjectCreated,
+  trackDirectoryCreated,
+  trackNoteCreationFailed,
+  getMetrics,
+  getAllEvents,
+  getEventsByType,
+  getRecentEvents,
+  clearEvents,
+  getMetricsSummary,
+} from './telemetryService';

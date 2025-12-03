@@ -563,3 +563,171 @@ export const FILE_REFERENCE_SYNTAX = {
   /** Regex pattern to match file references */
   pattern: /@file:([^\s]+)/g,
 } as const;
+
+// ============================================
+// Phase 12: Telemetry & Metrics Types
+// ============================================
+
+/**
+ * Telemetry event types
+ */
+export type TelemetryEventType =
+  | 'note_created'
+  | 'project_created'
+  | 'directory_created'
+  | 'note_creation_failed';
+
+/**
+ * Note creation source
+ */
+export type NoteCreationSource = 'dashboard' | 'project_chat';
+
+/**
+ * Base telemetry event
+ */
+export interface TelemetryEvent {
+  /** Event type */
+  type: TelemetryEventType;
+  /** Timestamp */
+  timestamp: Date;
+  /** Event-specific data */
+  data: Record<string, unknown>;
+}
+
+/**
+ * Note created event data
+ */
+export interface NoteCreatedEventData {
+  /** Source of note creation */
+  source: NoteCreationSource;
+  /** Project ID where note was saved */
+  projectId: string;
+  /** Whether project was auto-selected or manually specified */
+  autoSelected: boolean;
+  /** File path of the created note */
+  filePath: string;
+}
+
+/**
+ * Project created event data
+ */
+export interface ProjectCreatedEventData {
+  /** Project ID */
+  projectId: string;
+  /** Whether project was created automatically (via AI routing) */
+  automatic: boolean;
+  /** Reason for creation */
+  reason: 'user_initiated' | 'ai_suggested';
+}
+
+/**
+ * Directory created event data
+ */
+export interface DirectoryCreatedEventData {
+  /** Project ID */
+  projectId: string;
+  /** Directory path */
+  directoryPath: string;
+  /** Note title that triggered directory creation */
+  triggeringNoteTitle: string;
+  /** AI reasoning for creating new directory */
+  reasoning?: string;
+}
+
+/**
+ * Telemetry metrics summary
+ */
+export interface TelemetryMetrics {
+  /** Total notes created */
+  notesCreated: number;
+  /** Notes created from dashboard */
+  notesFromDashboard: number;
+  /** Notes created from project chat */
+  notesFromProjectChat: number;
+  /** Projects created automatically */
+  projectsAutoCreated: number;
+  /** Projects created by user */
+  projectsUserCreated: number;
+  /** Directories created by AI */
+  directoriesCreated: number;
+}
+
+// ============================================
+// Phase 12: Project Router Decision Extended
+// ============================================
+
+/**
+ * Extended project router decision with confirmation flag
+ */
+export interface ProjectRouterDecision {
+  /** Action to take */
+  action: 'use_existing' | 'create_project';
+  /** Target project ID (only if action is 'use_existing') */
+  targetProjectId?: string;
+  /** Proposed project name (only if action is 'create_project') */
+  proposedProjectName?: string;
+  /** Proposed project description (only if action is 'create_project') */
+  proposedProjectDescription?: string;
+  /** Confidence level */
+  confidence: 'high' | 'medium' | 'low';
+  /** AI reasoning */
+  reasoning?: string;
+  /** Whether user confirmation is required (for create_project) */
+  requiresConfirmation?: boolean;
+}
+
+/**
+ * Summary of a project for routing decisions
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+/**
+ * Global add note parameters (from dashboard)
+ */
+export interface GlobalAddNoteParams {
+  /** Raw note text */
+  rawNoteText: string;
+  /** Optional tags */
+  tags?: string[];
+  /** Skip confirmation for new projects (user already confirmed) */
+  skipProjectConfirmation?: boolean;
+  /** Pre-selected project ID (if user confirmed a suggestion) */
+  confirmedProjectId?: string;
+  /** Pre-confirmed new project details */
+  confirmedNewProject?: {
+    name: string;
+    description?: string;
+  };
+}
+
+/**
+ * Global add note result
+ */
+export interface GlobalAddNoteResult {
+  /** Success indicator */
+  success: boolean;
+  /** Project ID where note was saved */
+  projectId: string;
+  /** Project name */
+  projectName: string;
+  /** Whether a new project was created */
+  newProjectCreated: boolean;
+  /** Final file path */
+  filePath: string;
+  /** Generated note title */
+  title: string;
+  /** File ID in database */
+  fileId: string;
+  /** Error message if failed */
+  error?: string;
+  /** Pending confirmation for new project (if needed) */
+  pendingConfirmation?: {
+    proposedProjectName: string;
+    proposedProjectDescription?: string;
+    reasoning?: string;
+  };
+}

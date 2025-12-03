@@ -15,7 +15,14 @@ import type {
   ProjectRouterDecision,
   GlobalAddNoteParams,
   GlobalAddNoteResult,
+  NoteCreationSource,
 } from '../types';
+import {
+  trackNoteCreated,
+  trackProjectCreated,
+  trackDirectoryCreated,
+  trackNoteCreationFailed,
+} from './telemetryService';
 
 // ============================================
 // Execution Step Types (matching toolService pattern)
@@ -23,7 +30,7 @@ import type {
 
 export interface NoteExecutionStep {
   id: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'error' | 'waiting';
   label: string;
   detail?: string;
 }
@@ -81,6 +88,7 @@ IMPORTANT: Respond with ONLY the title text. No quotes, no explanations, just th
 
 /**
  * Prompt template for deciding which directory to save the note in
+ * Phase 12: Balanced guidelines for good organization
  */
 function buildDecideDirectoryPrompt(existingDirectories: string[]): string {
   const dirList = existingDirectories.length > 0
@@ -92,19 +100,37 @@ function buildDecideDirectoryPrompt(existingDirectories: string[]): string {
 Existing directories in the project:
 ${dirList}
 
-Guidelines:
-- STRONGLY prefer using an existing directory whenever the note reasonably fits
-- Only suggest creating a new directory if the note represents a clearly distinct category
-- Use lowercase, hyphen-separated names for new directories (e.g., "meeting-notes", "research")
-- Keep directory structures shallow (avoid deep nesting)
+## Guidelines
 
+1. **Check existing directories first**: If an existing directory fits the note's topic, use it.
+
+2. **Create directories for good organization**: Feel free to create a new directory when:
+   - The note has a clear, specific topic that deserves its own category
+   - It would help keep the project organized
+   - The topic is distinct from existing directories
+
+3. **Directory naming**:
+   - Use lowercase, hyphen-separated names (e.g., "meeting-notes", "project-ideas")
+   - Be specific enough to be useful (e.g., "client-meetings" instead of just "stuff")
+   - Keep depth reasonable (1-2 levels max)
+
+4. **Default behavior**: If unsure, use "notes" as a general catch-all directory.
+
+## Response Format
 Respond with a JSON object ONLY:
-{"targetDirectory": "path/to/directory", "shouldCreateDirectory": false}
+{"targetDirectory": "path/to/directory", "shouldCreateDirectory": true/false, "reasoning": "brief explanation"}
 
-Examples:
-- Note about a team meeting → {"targetDirectory": "meeting-notes", "shouldCreateDirectory": false}
-- Note about project X → {"targetDirectory": "projects/project-x", "shouldCreateDirectory": true}
-- General note → {"targetDirectory": "notes", "shouldCreateDirectory": false}`;
+## Examples
+
+Given directories: [notes, meetings]
+- "Weekly team standup notes" → {"targetDirectory": "meetings", "shouldCreateDirectory": false, "reasoning": "Fits existing meetings directory"}
+- "API design decisions" → {"targetDirectory": "architecture", "shouldCreateDirectory": true, "reasoning": "Architecture decisions deserve their own category"}
+- "Recipe for pasta" → {"targetDirectory": "personal", "shouldCreateDirectory": true, "reasoning": "Personal content separate from work"}
+- "Random thought" → {"targetDirectory": "notes", "shouldCreateDirectory": false, "reasoning": "General note goes to notes"}
+
+Given directories: [notes]
+- "Meeting with client X" → {"targetDirectory": "meetings", "shouldCreateDirectory": true, "reasoning": "Meeting notes should have their own directory"}
+- "Quick reminder" → {"targetDirectory": "notes", "shouldCreateDirectory": false, "reasoning": "General note fits in notes"}`;
 }
 
 // ============================================
@@ -245,7 +271,15 @@ export async function getProjectDirectories(projectId: string): Promise<string[]
 }
 
 /**
+ * Extended directory decision with reasoning for audit
+ */
+interface DirectoryDecisionWithReasoning extends DirectoryDecision {
+  reasoning?: string;
+}
+
+/**
  * Decide which directory to save the note in using LLM
+ * Phase 12: Enhanced with telemetry tracking for new directories
  */
 export async function decideNoteDirectory(
   projectId: string,
@@ -265,7 +299,7 @@ export async function decideNoteDirectory(
       { role: 'user', content: context },
     ],
     temperature: 0.2,
-    maxTokens: 200,
+    maxTokens: 300,
   });
 
   try {
@@ -277,9 +311,25 @@ export async function decideNoteDirectory(
     }
     
     const parsed = JSON.parse(jsonStr);
-    return {
+    const decision: DirectoryDecisionWithReasoning = {
       targetDirectory: parsed.targetDirectory || getDefaultNoteDirectory(),
       shouldCreateDirectory: parsed.shouldCreateDirectory === true,
+      reasoning: parsed.reasoning,
+    };
+
+    // Phase 12: Track new directory creation for audit
+    if (decision.shouldCreateDirectory) {
+      trackDirectoryCreated({
+        projectId,
+        directoryPath: decision.targetDirectory,
+        triggeringNoteTitle: noteTitle,
+        reasoning: decision.reasoning,
+      });
+    }
+
+    return {
+      targetDirectory: decision.targetDirectory,
+      shouldCreateDirectory: decision.shouldCreateDirectory,
     };
   } catch {
     // Fallback to default directory if parsing fails
@@ -475,6 +525,7 @@ export async function indexNote(file: ProjectFile): Promise<void> {
 
 /**
  * Execute the full AddNote pipeline
+ * Phase 12: Enhanced with telemetry tracking
  * 
  * Pipeline steps:
  * 1. Format note - Transform raw text into structured markdown
@@ -490,6 +541,7 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
     // Validate project exists
     const project = await getProject(projectId);
     if (!project) {
+      trackNoteCreationFailed('project_chat', `Project not found: ${projectId}`, projectId);
       return {
         success: false,
         filePath: '',
@@ -508,7 +560,7 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
     const title = await generateNoteTitle(formattedContent);
     const slug = titleToSlug(title);
     
-    // Step 3: Decide directory
+    // Step 3: Decide directory (telemetry tracked inside decideNoteDirectory)
     const { targetDirectory, shouldCreateDirectory } = await decideNoteDirectory(
       projectId,
       title,
@@ -528,6 +580,14 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
     await updateProjectStatus(projectId, 'indexed');
     await flushDatabase();
     
+    // Phase 12: Track successful note creation from project chat
+    trackNoteCreated({
+      source: 'project_chat',
+      projectId,
+      autoSelected: false, // Project was already selected
+      filePath: file.name,
+    });
+    
     return {
       success: true,
       filePath: file.name,
@@ -537,6 +597,7 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
       createdAt: file.createdAt,
     };
   } catch (error) {
+    trackNoteCreationFailed('project_chat', error instanceof Error ? error.message : 'Unknown error', projectId);
     return {
       success: false,
       filePath: '',
@@ -626,6 +687,7 @@ export async function addNoteWithTitle(
 
 /**
  * Prompt template for deciding which project a note belongs to
+ * Phase 12: Balanced guidelines for project organization
  */
 function buildDecideTargetProjectPrompt(projects: ProjectSummary[]): string {
   const projectList = projects.length > 0
@@ -637,14 +699,24 @@ function buildDecideTargetProjectPrompt(projects: ProjectSummary[]): string {
 Existing projects:
 ${projectList}
 
-Guidelines:
-- STRONGLY prefer assigning to an existing project when the note reasonably fits its topic or theme
-- Only suggest creating a new project if:
-  1. No existing projects exist, OR
-  2. The note is clearly about a completely different domain that doesn't fit any existing project
-- Consider project names and descriptions to find the best match
-- If uncertain between multiple projects, choose the one with the closest thematic match
+## Guidelines
 
+1. **Check existing projects first**: If an existing project clearly fits the note's topic, use it.
+
+2. **Create new projects when appropriate**: Feel free to suggest a new project when:
+   - The note is about a distinct topic not covered by existing projects
+   - It would help the user stay organized
+   - The topic deserves its own dedicated space
+
+3. **Project naming**: When creating a new project:
+   - Use clear, descriptive names (e.g., "Travel Planning", "Home Renovation", "Book Notes")
+   - Keep names concise but specific
+
+4. **When in doubt**: If the note could fit multiple projects, choose the most relevant one.
+
+5. **New projects require confirmation**: Always set requiresConfirmation: true when suggesting a new project.
+
+## Response Format
 Respond with a JSON object ONLY:
 {
   "action": "use_existing" | "create_project",
@@ -652,12 +724,30 @@ Respond with a JSON object ONLY:
   "proposedProjectName": "New Project Name" (only if action is "create_project"),
   "proposedProjectDescription": "Brief description" (only if action is "create_project"),
   "confidence": "high" | "medium" | "low",
-  "reasoning": "Brief explanation of why this project was chosen"
-}`;
+  "reasoning": "Brief explanation of why this project was chosen",
+  "requiresConfirmation": true (only if action is "create_project")
+}
+
+## Examples
+
+Given projects: [Work Notes, Personal]
+- "Meeting notes from standup" → use_existing: Work Notes
+- "Grocery shopping list" → use_existing: Personal
+- "Learning Spanish vocabulary" → create_project: "Language Learning" (distinct topic)
+- "Recipe for pasta" → use_existing: Personal OR create_project: "Recipes" (user preference)
+
+Given projects: [Software Development]
+- "API design notes" → use_existing: Software Development
+- "Vacation planning ideas" → create_project: "Travel" (unrelated to software)
+- "Book review: Clean Code" → use_existing: Software Development (related to dev)
+
+Given projects: []
+- Any note → create_project with appropriate name and requiresConfirmation: true`;
 }
 
 /**
  * Decide which project a note should be added to
+ * Phase 12: Enhanced with confirmation requirement for new projects
  */
 export async function decideTargetProject(
   noteContent: string,
@@ -671,7 +761,7 @@ export async function decideTargetProject(
     description: p.description,
   }));
 
-  // If no projects exist, always suggest creating one
+  // If no projects exist, suggest creating one (requires confirmation)
   if (projectSummaries.length === 0) {
     // Generate a project name from the note content
     const titleResponse = await chatCompletion({
@@ -689,6 +779,7 @@ export async function decideTargetProject(
       proposedProjectDescription: 'Auto-created project for notes',
       confidence: 'high',
       reasoning: 'No existing projects available',
+      requiresConfirmation: true, // Phase 12: Always require confirmation
     };
   }
 
@@ -705,7 +796,7 @@ export async function decideTargetProject(
       { role: 'user', content: userContent },
     ],
     temperature: 0.2,
-    maxTokens: 300,
+    maxTokens: 400,
   });
 
   try {
@@ -733,6 +824,9 @@ export async function decideTargetProject(
       }
     }
     
+    // Phase 12: Ensure create_project always requires confirmation
+    const requiresConfirmation = parsed.action === 'create_project' ? true : undefined;
+    
     return {
       action: parsed.action || 'use_existing',
       targetProjectId: parsed.targetProjectId,
@@ -740,6 +834,7 @@ export async function decideTargetProject(
       proposedProjectDescription: parsed.proposedProjectDescription,
       confidence: parsed.confidence || 'medium',
       reasoning: parsed.reasoning,
+      requiresConfirmation,
     };
   } catch {
     // Fallback: assign to first project or suggest creating one
@@ -758,6 +853,7 @@ export async function decideTargetProject(
       proposedProjectDescription: 'Default project for notes',
       confidence: 'low',
       reasoning: 'Fallback due to parsing error',
+      requiresConfirmation: true, // Phase 12: Require confirmation
     };
   }
 }
@@ -778,9 +874,10 @@ function updateStep(
 
 /**
  * Global add note pipeline - adds a note from the dashboard
+ * Phase 12: Enhanced with confirmation flow and telemetry tracking
  * 
  * Pipeline steps:
- * 1. Decide target project (or create new one)
+ * 1. Decide target project (or create new one - may require confirmation)
  * 2. Format the note content
  * 3. Generate title and filename
  * 4. Save note to project
@@ -790,7 +887,7 @@ export async function globalAddNote(
   params: GlobalAddNoteParams,
   onProgress?: NoteExecutionCallback
 ): Promise<GlobalAddNoteResult> {
-  const { rawNoteText, tags } = params;
+  const { rawNoteText, tags, skipProjectConfirmation, confirmedProjectId, confirmedNewProject } = params;
 
   // Initialize execution steps
   let steps: NoteExecutionStep[] = [
@@ -804,39 +901,20 @@ export async function globalAddNote(
   onProgress?.(steps);
 
   try {
-    // Step 1: Decide target project
-    steps = updateStep(steps, 'router', { status: 'running' }, onProgress);
-    const routerDecision = await decideTargetProject(rawNoteText, tags);
-    
     let projectId: string;
     let projectName: string;
     let newProjectCreated = false;
 
-    if (routerDecision.action === 'create_project') {
-      // Create a new project
-      steps = updateStep(steps, 'router', { 
-        status: 'running', 
-        detail: `Creating project: ${routerDecision.proposedProjectName}` 
-      }, onProgress);
-      
-      const newProject = await createProject(
-        routerDecision.proposedProjectName || 'New Project',
-        routerDecision.proposedProjectDescription
-      );
-      projectId = newProject.id;
-      projectName = newProject.name;
-      newProjectCreated = true;
-      
-      steps = updateStep(steps, 'router', { 
-        status: 'completed', 
-        detail: `Created: ${projectName}` 
-      }, onProgress);
-    } else {
-      // Use existing project
-      projectId = routerDecision.targetProjectId!;
-      const project = await getProject(projectId);
+    // Step 1: Decide target project (may require user confirmation)
+    steps = updateStep(steps, 'router', { status: 'running' }, onProgress);
+
+    // Check if user already confirmed a project choice
+    if (confirmedProjectId) {
+      // User confirmed to use an existing project
+      const project = await getProject(confirmedProjectId);
       if (!project) {
         steps = updateStep(steps, 'router', { status: 'error', detail: 'Project not found' }, onProgress);
+        trackNoteCreationFailed('dashboard', 'Confirmed project not found', confirmedProjectId);
         return {
           success: false,
           projectId: '',
@@ -845,14 +923,116 @@ export async function globalAddNote(
           filePath: '',
           title: '',
           fileId: '',
-          error: 'Target project not found',
+          error: 'Confirmed project not found',
         };
       }
+      projectId = project.id;
       projectName = project.name;
+      steps = updateStep(steps, 'router', { status: 'completed', detail: projectName }, onProgress);
+    } else if (confirmedNewProject) {
+      // User confirmed to create a new project
+      steps = updateStep(steps, 'router', { 
+        status: 'running', 
+        detail: `Creating project: ${confirmedNewProject.name}` 
+      }, onProgress);
+      
+      const newProject = await createProject(
+        confirmedNewProject.name,
+        confirmedNewProject.description
+      );
+      projectId = newProject.id;
+      projectName = newProject.name;
+      newProjectCreated = true;
+      
+      // Phase 12: Track project creation (user confirmed)
+      trackProjectCreated({
+        projectId,
+        automatic: false,
+        reason: 'ai_suggested',
+      });
+      
       steps = updateStep(steps, 'router', { 
         status: 'completed', 
-        detail: projectName 
+        detail: `Created: ${projectName}` 
       }, onProgress);
+    } else {
+      // No pre-confirmation, run the AI router
+      const routerDecision = await decideTargetProject(rawNoteText, tags);
+      
+      // Phase 12: Check if confirmation is required for new project
+      if (routerDecision.action === 'create_project' && routerDecision.requiresConfirmation && !skipProjectConfirmation) {
+        // Return early with pending confirmation
+        steps = updateStep(steps, 'router', { 
+          status: 'completed', 
+          detail: 'Confirmation needed' 
+        }, onProgress);
+        
+        return {
+          success: false,
+          projectId: '',
+          projectName: '',
+          newProjectCreated: false,
+          filePath: '',
+          title: '',
+          fileId: '',
+          pendingConfirmation: {
+            proposedProjectName: routerDecision.proposedProjectName || 'New Project',
+            proposedProjectDescription: routerDecision.proposedProjectDescription,
+            reasoning: routerDecision.reasoning,
+          },
+        };
+      }
+
+      if (routerDecision.action === 'create_project') {
+        // Create a new project (either no confirmation required or skipProjectConfirmation=true)
+        steps = updateStep(steps, 'router', { 
+          status: 'running', 
+          detail: `Creating project: ${routerDecision.proposedProjectName}` 
+        }, onProgress);
+        
+        const newProject = await createProject(
+          routerDecision.proposedProjectName || 'New Project',
+          routerDecision.proposedProjectDescription
+        );
+        projectId = newProject.id;
+        projectName = newProject.name;
+        newProjectCreated = true;
+        
+        // Phase 12: Track automatic project creation
+        trackProjectCreated({
+          projectId,
+          automatic: true,
+          reason: 'ai_suggested',
+        });
+        
+        steps = updateStep(steps, 'router', { 
+          status: 'completed', 
+          detail: `Created: ${projectName}` 
+        }, onProgress);
+      } else {
+        // Use existing project
+        projectId = routerDecision.targetProjectId!;
+        const project = await getProject(projectId);
+        if (!project) {
+          steps = updateStep(steps, 'router', { status: 'error', detail: 'Project not found' }, onProgress);
+          trackNoteCreationFailed('dashboard', 'Target project not found', projectId);
+          return {
+            success: false,
+            projectId: '',
+            projectName: '',
+            newProjectCreated: false,
+            filePath: '',
+            title: '',
+            fileId: '',
+            error: 'Target project not found',
+          };
+        }
+        projectName = project.name;
+        steps = updateStep(steps, 'router', { 
+          status: 'completed', 
+          detail: projectName 
+        }, onProgress);
+      }
     }
 
     // Step 2: Format the note
@@ -867,7 +1047,7 @@ export async function globalAddNote(
     const slug = titleToSlug(title);
     steps = updateStep(steps, 'title', { status: 'completed', detail: title }, onProgress);
 
-    // Step 4: Decide directory
+    // Step 4: Decide directory (telemetry tracked inside decideNoteDirectory)
     steps = updateStep(steps, 'directory', { status: 'running' }, onProgress);
     const { targetDirectory } = await decideNoteDirectory(projectId, title, contextMetadata);
     steps = updateStep(steps, 'directory', { status: 'completed', detail: targetDirectory }, onProgress);
@@ -888,6 +1068,14 @@ export async function globalAddNote(
     
     steps = updateStep(steps, 'index', { status: 'completed' }, onProgress);
 
+    // Phase 12: Track successful note creation
+    trackNoteCreated({
+      source: 'dashboard',
+      projectId,
+      autoSelected: !confirmedProjectId && !confirmedNewProject,
+      filePath: file.name,
+    });
+
     return {
       success: true,
       projectId,
@@ -905,6 +1093,9 @@ export async function globalAddNote(
         : s
     );
     onProgress?.(steps);
+    
+    // Phase 12: Track failed note creation
+    trackNoteCreationFailed('dashboard', error instanceof Error ? error.message : 'Unknown error');
     
     return {
       success: false,

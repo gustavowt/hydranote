@@ -116,8 +116,11 @@
       <!-- Add Note Modal -->
       <AddNoteModal
         :is-open="showAddNoteModal"
+        :available-projects="projects"
         @close="showAddNoteModal = false"
         @save="handleSaveNote"
+        @confirm-new-project="handleConfirmNewProject"
+        @select-existing-project="handleSelectExistingProject"
         ref="addNoteModalRef"
       />
 
@@ -155,6 +158,7 @@
           </div>
         </ion-content>
       </ion-modal>
+
     </ion-content>
   </ion-page>
 </template>
@@ -315,33 +319,21 @@ async function handleSaveNote(content: string, tags: string[], onProgress: (step
       onProgress
     );
 
+    // Check if confirmation is needed for new project - show inline
+    if (result.pendingConfirmation) {
+      // Update the router step to show waiting state
+      const steps = addNoteModalRef.value?.executionSteps || [];
+      const updatedSteps = steps.map(s => 
+        s.id === 'router' 
+          ? { ...s, status: 'waiting' as const, detail: 'Waiting for confirmation' }
+          : s
+      );
+      addNoteModalRef.value?.showConfirmation(result.pendingConfirmation, updatedSteps);
+      return;
+    }
+
     if (result.success) {
-      // Store result first
-      noteResult.value = result;
-      
-      // Fetch the project (either new or existing) with updated status
-      if (result.projectId) {
-        const updatedProject = await getProject(result.projectId);
-        if (updatedProject) {
-          // Update or add the project in the list
-          const existingIndex = projects.value.findIndex(p => p.id === updatedProject.id);
-          if (existingIndex >= 0) {
-            // Update existing project
-            projects.value = [
-              ...projects.value.slice(0, existingIndex),
-              updatedProject,
-              ...projects.value.slice(existingIndex + 1)
-            ];
-          } else {
-            // Add new project at the beginning
-            projects.value = [updatedProject, ...projects.value];
-          }
-        }
-      }
-      
-      // Now close the add note modal and show result
-      showAddNoteModal.value = false;
-      showNoteResultModal.value = true;
+      await handleSuccessfulSave(result);
     } else {
       addNoteModalRef.value?.resetSaving();
       const toast = await toastController.create({
@@ -362,6 +354,116 @@ async function handleSaveNote(content: string, tags: string[], onProgress: (step
     });
     await toast.present();
   }
+}
+
+// Handle confirmed new project creation
+async function handleConfirmNewProject(content: string, tags: string[], projectName: string, projectDescription?: string) {
+  const onProgress = (steps: NoteExecutionStep[]) => {
+    if (addNoteModalRef.value) {
+      // @ts-ignore - accessing exposed ref
+      addNoteModalRef.value.executionSteps = [...steps];
+    }
+  };
+
+  try {
+    const result = await globalAddNote(
+      {
+        rawNoteText: content,
+        tags: tags.length > 0 ? tags : undefined,
+        confirmedNewProject: { name: projectName, description: projectDescription },
+      },
+      onProgress
+    );
+
+    if (result.success) {
+      await handleSuccessfulSave(result);
+    } else {
+      addNoteModalRef.value?.resetSaving();
+      const toast = await toastController.create({
+        message: result.error || 'Failed to save note',
+        duration: 3000,
+        color: 'danger',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    addNoteModalRef.value?.resetSaving();
+    const toast = await toastController.create({
+      message: 'An error occurred while saving the note',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+// Handle selecting existing project
+async function handleSelectExistingProject(content: string, tags: string[], projectId: string) {
+  const onProgress = (steps: NoteExecutionStep[]) => {
+    if (addNoteModalRef.value) {
+      // @ts-ignore - accessing exposed ref
+      addNoteModalRef.value.executionSteps = [...steps];
+    }
+  };
+
+  try {
+    const result = await globalAddNote(
+      {
+        rawNoteText: content,
+        tags: tags.length > 0 ? tags : undefined,
+        confirmedProjectId: projectId,
+      },
+      onProgress
+    );
+
+    if (result.success) {
+      await handleSuccessfulSave(result);
+    } else {
+      addNoteModalRef.value?.resetSaving();
+      const toast = await toastController.create({
+        message: result.error || 'Failed to save note',
+        duration: 3000,
+        color: 'danger',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    addNoteModalRef.value?.resetSaving();
+    const toast = await toastController.create({
+      message: 'An error occurred while saving the note',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+// Common success handler
+async function handleSuccessfulSave(result: GlobalAddNoteResult) {
+  noteResult.value = result;
+  
+  if (result.projectId) {
+    const updatedProject = await getProject(result.projectId);
+    if (updatedProject) {
+      const existingIndex = projects.value.findIndex(p => p.id === updatedProject.id);
+      if (existingIndex >= 0) {
+        projects.value = [
+          ...projects.value.slice(0, existingIndex),
+          updatedProject,
+          ...projects.value.slice(existingIndex + 1)
+        ];
+      } else {
+        projects.value = [updatedProject, ...projects.value];
+      }
+    }
+  }
+  
+  showAddNoteModal.value = false;
+  showNoteResultModal.value = true;
 }
 
 function goToProjectChat() {
