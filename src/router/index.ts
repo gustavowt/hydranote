@@ -1,23 +1,25 @@
 import { createRouter, createWebHistory } from '@ionic/vue-router';
 import { RouteRecordRaw } from 'vue-router';
-import ProjectListPage from '../views/ProjectListPage.vue';
-import ProjectChatPage from '../views/ProjectChatPage.vue';
+import WorkspacePage from '../views/WorkspacePage.vue';
 import SettingsPage from '../views/SettingsPage.vue';
 
 const routes: Array<RouteRecordRaw> = [
   {
     path: '/',
-    redirect: '/home',
+    redirect: '/workspace',
+  },
+  {
+    path: '/workspace',
+    name: 'Workspace',
+    component: WorkspacePage,
   },
   {
     path: '/home',
-    name: 'Home',
-    component: ProjectListPage,
+    redirect: '/workspace',
   },
   {
     path: '/project/:id/chat',
-    name: 'ProjectChat',
-    component: ProjectChatPage,
+    redirect: '/workspace',
   },
   {
     path: '/settings',
