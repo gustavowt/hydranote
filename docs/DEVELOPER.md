@@ -7,9 +7,13 @@ This document provides technical documentation for developers working on HydraNo
 1. [Architecture Overview](#architecture-overview)
 2. [Services](#services)
 3. [Tools](#tools)
-4. [File Management](#file-management)
-5. [Telemetry & Metrics](#telemetry--metrics)
-6. [Phase 12 Guardrails](#phase-12-guardrails)
+4. [Workspace Components](#workspace-components)
+5. [File Management](#file-management)
+6. [Telemetry & Metrics](#telemetry--metrics)
+7. [Phase 12 Guardrails](#phase-12-guardrails)
+8. [Routing](#routing)
+9. [Configuration](#configuration)
+10. [File Structure](#file-structure)
 
 ---
 
@@ -21,6 +25,27 @@ HydraNote is an AI-powered document indexing and interaction system built with:
 - **Database**: DuckDB (in-browser, WASM)
 - **AI**: OpenAI API / Ollama (local LLMs)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
+
+### Workspace Layout
+
+The app uses a unified three-panel workspace layout:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Header Bar                              │
+├──────────────┬─────────────────────────────┬────────────────────┤
+│   Projects   │                             │                    │
+│     Tree     │      Markdown Editor        │    Chat Sidebar    │
+│   Sidebar    │    (edit/split/preview)     │                    │
+│  (280px)     │         (flex)              │      (360px)       │
+│              │                             │                    │
+│  Collapsible │                             │     Collapsible    │
+└──────────────┴─────────────────────────────┴────────────────────┘
+```
+
+- **ProjectsTreeSidebar**: Hierarchical view of projects and files
+- **MarkdownEditor**: Full editor with edit/split/preview modes, inline note saving
+- **ChatSidebar**: Project-scoped chat with AI, @file references
 
 ### Core Data Flow
 
@@ -203,6 +228,107 @@ interface AddNoteParams {
 
 ---
 
+## Workspace Components
+
+### WorkspacePage (`WorkspacePage.vue`)
+
+Main layout orchestrating the three-panel workspace.
+
+#### State Management
+
+| State | Description |
+|-------|-------------|
+| `selectedProjectId` | Currently active project |
+| `selectedFileId` | Currently open file |
+| `currentFile` | File object with content |
+| `currentProject` | Project object |
+
+#### Child Component Communication
+
+```typescript
+// ProjectsTreeSidebar events
+@select-project="handleProjectSelect"
+@select-file="handleFileSelect"
+@create-project="showCreateProjectModal = true"
+
+// MarkdownEditor events
+@save="handleSaveExistingFile"
+@content-change="handleContentChange"
+@note-saved="handleNoteSaved"
+
+// ChatSidebar events
+@project-change="handleChatProjectChange"
+```
+
+### MarkdownEditor (`MarkdownEditor.vue`)
+
+Full-featured markdown editor with three view modes.
+
+#### Props
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `currentFile` | `ProjectFile \| null` | File being edited |
+| `currentProject` | `Project \| null` | Current project context |
+| `initialContent` | `string` | Initial editor content |
+
+#### View Modes
+
+- **edit**: Raw markdown textarea
+- **split**: Side-by-side editor and preview
+- **view**: Rendered markdown preview
+
+#### Exposed Methods
+
+```typescript
+setContent(content: string)   // Set editor content
+clearContent()                // Clear editor
+focusEditor()                 // Focus textarea
+```
+
+### ChatSidebar (`ChatSidebar.vue`)
+
+Collapsible AI chat panel with project context.
+
+#### Props
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `initialProjectId` | `string?` | Initial project to select |
+
+#### Features
+
+- Project selector dropdown
+- @file: autocomplete for file references
+- Markdown rendering in responses
+- Quick action buttons for common queries
+
+#### Exposed Methods
+
+```typescript
+selectProject(projectId: string)  // Switch to project
+refresh()                         // Reload projects
+```
+
+### ProjectsTreeSidebar (`ProjectsTreeSidebar.vue`)
+
+Collapsible hierarchical project/file navigator.
+
+#### Props
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `selectedProjectId` | `string?` | Currently selected project |
+| `selectedFileId` | `string?` | Currently selected file |
+
+#### Exposed Methods
+
+```typescript
+refresh()  // Reload projects and file trees
+```
+
+---
+
 ## File Management
 
 ### File Tree API (Phase 11)
@@ -315,6 +441,22 @@ type NoteCreationSource = 'dashboard' | 'project_chat';
 
 ---
 
+## Routing
+
+All routes redirect to the unified workspace:
+
+```typescript
+const routes = [
+  { path: '/', redirect: '/workspace' },
+  { path: '/workspace', component: WorkspacePage },
+  { path: '/home', redirect: '/workspace' },
+  { path: '/project/:id/chat', redirect: '/workspace' },
+  { path: '/settings', component: SettingsPage },
+];
+```
+
+---
+
 ## Configuration
 
 ### LLM Settings
@@ -372,9 +514,13 @@ console.log(getRecentEvents(10));
 ```
 src/
 ├── components/
-│   ├── AddNoteModal.vue      # Dashboard note editor
-│   ├── FileTreeSidebar.vue   # Project file tree (Phase 11)
-│   └── ...
+│   ├── ChatSidebar.vue              # Right panel: AI chat with project context
+│   ├── FileReferenceAutocomplete.vue # @file: autocomplete dropdown
+│   ├── FileTreeNode.vue             # Recursive file tree node component
+│   ├── FileTreeSidebar.vue          # Legacy file tree (Phase 11)
+│   ├── MarkdownEditor.vue           # Center panel: markdown editor
+│   ├── MarkdownViewerEditor.vue     # Read-only markdown viewer
+│   └── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
 ├── services/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations
@@ -389,8 +535,7 @@ src/
 ├── types/
 │   └── index.ts              # Type definitions
 └── views/
-    ├── ProjectChatPage.vue   # Chat interface
-    ├── ProjectListPage.vue   # Dashboard
+    ├── WorkspacePage.vue     # Main unified workspace layout
     └── SettingsPage.vue      # Settings
 ```
 
