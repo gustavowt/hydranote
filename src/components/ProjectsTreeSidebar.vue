@@ -336,7 +336,9 @@ defineExpose({ refresh });
   justify-content: space-between;
   padding: 12px 8px 12px 16px;
   border-bottom: 1px solid var(--hn-border-default);
+  background: var(--hn-bg-surface);
   min-height: 48px;
+  box-sizing: border-box;
 }
 
 .header-content {

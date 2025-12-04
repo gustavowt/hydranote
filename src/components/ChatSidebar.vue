@@ -9,22 +9,24 @@
 
     <!-- Expanded Sidebar -->
     <template v-else>
-      <!-- Sidebar Header with Project Selector -->
+      <!-- Sidebar Header -->
       <div class="sidebar-header">
         <div class="header-top">
           <ion-icon :icon="chatbubbleOutline" class="header-icon" />
           <span class="header-title">Chat</span>
-          <ion-button 
-            fill="clear" 
-            size="small" 
-            class="collapse-btn"
-            @click="toggleCollapse"
-          >
-            <ion-icon slot="icon-only" :icon="chevronForwardOutline" />
-          </ion-button>
         </div>
-        
-        <!-- Project Selector -->
+        <ion-button 
+          fill="clear" 
+          size="small" 
+          class="collapse-btn"
+          @click="toggleCollapse"
+        >
+          <ion-icon slot="icon-only" :icon="chevronForwardOutline" />
+        </ion-button>
+      </div>
+
+      <!-- Project Selector -->
+      <div class="project-selector-container">
         <div class="project-selector" v-if="projects.length > 0">
           <ion-select 
             v-model="selectedProjectId"
@@ -238,6 +240,10 @@ onMounted(async () => {
 
 watch(() => props.initialProjectId, async (newId) => {
   if (newId && newId !== selectedProjectId.value) {
+    // Ensure projects are loaded before setting selection
+    if (projects.value.length === 0) {
+      await loadProjects();
+    }
     selectedProjectId.value = newId;
     await loadSession();
   }
@@ -430,9 +436,13 @@ function formatTime(date: Date): string {
 }
 
 // Expose methods
-function selectProject(projectId: string) {
+async function selectProject(projectId: string) {
+  // Ensure projects are loaded before setting selection
+  if (projects.value.length === 0) {
+    await loadProjects();
+  }
   selectedProjectId.value = projectId;
-  loadSession();
+  await loadSession();
 }
 
 async function refresh() {
@@ -518,16 +528,21 @@ defineExpose({ selectProject, refresh });
 
 /* Expanded Sidebar */
 .sidebar-header {
-  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 8px 12px 16px;
   border-bottom: 1px solid var(--hn-border-default);
   background: var(--hn-bg-surface);
+  min-height: 48px;
+  box-sizing: border-box;
 }
 
 .header-top {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
+  flex: 1;
 }
 
 .header-icon {
@@ -558,9 +573,14 @@ defineExpose({ selectProject, refresh });
   --color: var(--hn-text-primary);
 }
 
-/* Project Selector */
+/* Project Selector Container */
+.project-selector-container {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--hn-border-default);
+}
+
 .project-selector {
-  margin-top: 8px;
+  /* No extra margin needed */
 }
 
 .project-select {

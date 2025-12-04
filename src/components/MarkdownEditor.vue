@@ -366,10 +366,11 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 10px 8px 12px 16px;
   background: var(--hn-bg-surface);
   border-bottom: 1px solid var(--hn-border-default);
-  min-height: 42px;
+  min-height: 48px;
+  box-sizing: border-box;
   gap: 12px;
 }
 
