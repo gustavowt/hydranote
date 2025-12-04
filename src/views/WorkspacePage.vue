@@ -25,6 +25,7 @@
       <!-- Left Sidebar: Projects Tree -->
       <ProjectsTreeSidebar
         ref="projectsTreeRef"
+        :projects="projects"
         :selected-project-id="selectedProjectId"
         :selected-file-id="selectedFileId"
         @select-project="handleProjectSelect"
@@ -46,6 +47,7 @@
       <!-- Right Sidebar: Chat -->
       <ChatSidebar
         ref="chatSidebarRef"
+        :projects="projects"
         :initial-project-id="selectedProjectId"
         @project-change="handleChatProjectChange"
       />
@@ -218,10 +220,10 @@ async function handleSaveExistingFile(content: string, file?: ProjectFile) {
 }
 
 async function handleNoteSaved(result: GlobalAddNoteResult) {
-  // Refresh sidebars after a new note is saved
+  // Refresh projects list (sidebars react via props)
   await loadProjects();
+  // Refresh file trees in projects sidebar
   await projectsTreeRef.value?.refresh();
-  await chatSidebarRef.value?.refresh();
   
   // Optionally select the new project/file
   if (result.projectId) {
@@ -250,10 +252,6 @@ async function handleCreateProject() {
     
     // Select the new project
     handleProjectSelect(project.id);
-    
-    // Refresh sidebars
-    await projectsTreeRef.value?.refresh();
-    await chatSidebarRef.value?.refresh();
   } catch (error) {
     const toast = await toastController.create({
       message: 'Failed to create project',

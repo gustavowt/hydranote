@@ -164,7 +164,6 @@ import {
 } from 'ionicons/icons';
 import type { Project, ChatMessage, SupportedFileType } from '@/types';
 import {
-  getAllProjects,
   getOrCreateSession,
   addMessage,
   getMessages,
@@ -176,6 +175,7 @@ import {
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
 
 interface Props {
+  projects: Project[];
   initialProjectId?: string;
 }
 
@@ -208,7 +208,6 @@ const marked = new Marked(
 );
 
 const isCollapsed = ref(false);
-const projects = ref<Project[]>([]);
 const selectedProjectId = ref<string | undefined>(undefined);
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
@@ -231,7 +230,6 @@ const quickActions = [
 ];
 
 onMounted(async () => {
-  await loadProjects();
   if (props.initialProjectId) {
     selectedProjectId.value = props.initialProjectId;
     await loadSession();
@@ -240,18 +238,10 @@ onMounted(async () => {
 
 watch(() => props.initialProjectId, async (newId) => {
   if (newId && newId !== selectedProjectId.value) {
-    // Ensure projects are loaded before setting selection
-    if (projects.value.length === 0) {
-      await loadProjects();
-    }
     selectedProjectId.value = newId;
     await loadSession();
   }
 });
-
-async function loadProjects() {
-  projects.value = await getAllProjects();
-}
 
 async function loadSession() {
   if (!selectedProjectId.value) return;
@@ -437,19 +427,11 @@ function formatTime(date: Date): string {
 
 // Expose methods
 async function selectProject(projectId: string) {
-  // Ensure projects are loaded before setting selection
-  if (projects.value.length === 0) {
-    await loadProjects();
-  }
   selectedProjectId.value = projectId;
   await loadSession();
 }
 
-async function refresh() {
-  await loadProjects();
-}
-
-defineExpose({ selectProject, refresh });
+defineExpose({ selectProject });
 </script>
 
 <style scoped>

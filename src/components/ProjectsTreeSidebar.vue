@@ -38,13 +38,8 @@
 
       <!-- Tree Content -->
       <div class="tree-content">
-        <!-- Loading State -->
-        <div v-if="loading" class="tree-loading">
-          <ion-spinner name="dots" />
-        </div>
-
         <!-- Empty State -->
-        <div v-else-if="projects.length === 0" class="tree-empty">
+        <div v-if="projects.length === 0" class="tree-empty">
           <ion-icon :icon="folderOpenOutline" />
           <p>No projects yet</p>
           <ion-button fill="clear" size="small" @click="$emit('create-project')">
@@ -118,7 +113,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { IonIcon, IonButton, IonSpinner } from '@ionic/vue';
 import {
   layersOutline,
@@ -130,10 +125,11 @@ import {
   addOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFileTree, FileTreeNode as FileTreeNodeType } from '@/types';
-import { getAllProjects, getProjectFileTree } from '@/services';
+import { getProjectFileTree } from '@/services';
 import FileTreeNode from './FileTreeNode.vue';
 
 interface Props {
+  projects: Project[];
   selectedProjectId?: string;
   selectedFileId?: string;
 }
@@ -147,8 +143,6 @@ const emit = defineEmits<{
   (e: 'collapse-change', collapsed: boolean): void;
 }>();
 
-const loading = ref(true);
-const projects = ref<Project[]>([]);
 const isCollapsed = ref(false);
 const expandedProjects = ref<Set<string>>(new Set());
 const loadingFiles = ref<Set<string>>(new Set());
@@ -163,10 +157,6 @@ const projectFileCounts = computed(() => {
   return counts;
 });
 
-onMounted(async () => {
-  await loadProjects();
-});
-
 // Watch for external project selection to auto-expand
 watch(() => props.selectedProjectId, (newId) => {
   if (newId && !expandedProjects.value.has(newId)) {
@@ -174,15 +164,6 @@ watch(() => props.selectedProjectId, (newId) => {
     loadProjectFiles(newId);
   }
 });
-
-async function loadProjects() {
-  loading.value = true;
-  try {
-    projects.value = await getAllProjects();
-  } finally {
-    loading.value = false;
-  }
-}
 
 async function loadProjectFiles(projectId: string) {
   if (projectFileTrees.value[projectId]) return; // Already loaded
@@ -242,9 +223,8 @@ function toggleCollapse() {
   emit('collapse-change', isCollapsed.value);
 }
 
-// Expose refresh method
+// Expose refresh method (only refreshes file trees, projects come from parent)
 async function refresh() {
-  await loadProjects();
   // Reload file trees for expanded projects
   for (const projectId of expandedProjects.value) {
     delete projectFileTrees.value[projectId];
