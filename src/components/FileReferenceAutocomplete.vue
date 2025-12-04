@@ -155,20 +155,20 @@ function getFileIcon(type: SupportedFileType): string {
 function getIconColor(type: SupportedFileType): string {
   switch (type) {
     case 'md':
-      return '#58a6ff';
+      return 'var(--hn-purple)';
     case 'pdf':
-      return '#f85149';
+      return 'var(--hn-danger)';
     case 'docx':
-      return '#3fb950';
+      return 'var(--hn-green)';
     case 'txt':
-      return '#8b949e';
+      return 'var(--hn-text-secondary)';
     case 'png':
     case 'jpg':
     case 'jpeg':
     case 'webp':
-      return '#a371f7';
+      return 'var(--hn-purple-light)';
     default:
-      return '#8b949e';
+      return 'var(--hn-text-secondary)';
   }
 }
 
@@ -230,8 +230,8 @@ defineExpose({ refresh });
   z-index: 99999;
   width: 320px;
   max-height: 360px;
-  background: #1c2128;
-  border: 1px solid #30363d;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
@@ -244,15 +244,15 @@ defineExpose({ refresh });
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: #161b22;
-  border-bottom: 1px solid #30363d;
+  background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-default);
   font-size: 0.8rem;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .autocomplete-header ion-icon {
   font-size: 14px;
-  color: #58a6ff;
+  color: var(--hn-purple);
 }
 
 .autocomplete-list {
@@ -273,7 +273,7 @@ defineExpose({ refresh });
 
 .autocomplete-item:hover,
 .autocomplete-item.selected {
-  background: rgba(56, 139, 253, 0.15);
+  background: var(--hn-purple-muted);
 }
 
 .autocomplete-item ion-icon {
@@ -290,7 +290,7 @@ defineExpose({ refresh });
 
 .file-name {
   font-size: 0.9rem;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -298,7 +298,7 @@ defineExpose({ refresh });
 
 .file-path {
   font-size: 0.75rem;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -309,10 +309,10 @@ defineExpose({ refresh });
   justify-content: center;
   gap: 16px;
   padding: 8px 14px;
-  background: #161b22;
-  border-top: 1px solid #30363d;
+  background: var(--hn-bg-surface);
+  border-top: 1px solid var(--hn-border-default);
   font-size: 0.7rem;
-  color: #6e7681;
+  color: var(--hn-text-muted);
 }
 
 .autocomplete-footer span {
@@ -326,9 +326,9 @@ defineExpose({ refresh });
   padding: 2px 5px;
   font-size: 0.65rem;
   font-family: inherit;
-  color: #8b949e;
-  background: #21262d;
-  border: 1px solid #30363d;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
   border-radius: 4px;
 }
 
@@ -342,12 +342,12 @@ defineExpose({ refresh });
 }
 
 .autocomplete-list::-webkit-scrollbar-thumb {
-  background: #30363d;
+  background: var(--hn-border-default);
   border-radius: 3px;
 }
 
 .autocomplete-list::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
+  background: var(--hn-border-strong);
 }
 </style>
 

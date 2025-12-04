@@ -357,7 +357,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #0d1117;
+  background: var(--hn-bg-deep);
   flex: 1;
 }
 
@@ -367,8 +367,8 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  background: #161b22;
-  border-bottom: 1px solid #21262d;
+  background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-default);
   min-height: 42px;
   gap: 12px;
 }
@@ -384,14 +384,14 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .header-icon {
   font-size: 16px;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   flex-shrink: 0;
 }
 
 .header-title {
   font-size: 0.9rem;
   font-weight: 500;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -401,7 +401,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .unsaved-indicator {
   font-size: 20px;
-  color: #f0883e;
+  color: var(--hn-warning);
   line-height: 1;
   flex-shrink: 0;
 }
@@ -418,7 +418,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   display: flex;
   align-items: center;
   gap: 2px;
-  background: #21262d;
+  background: var(--hn-bg-elevated);
   border-radius: 6px;
   padding: 2px;
 }
@@ -433,17 +433,17 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   background: transparent;
   border-radius: 4px;
   cursor: pointer;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   transition: all 0.15s ease;
 }
 
 .mode-btn:hover {
-  color: #c9d1d9;
+  color: var(--hn-text-primary);
 }
 
 .mode-btn.active {
-  background: #30363d;
-  color: #58a6ff;
+  background: var(--hn-bg-hover);
+  color: var(--hn-teal);
 }
 
 .mode-btn ion-icon {
@@ -451,7 +451,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .save-btn {
-  --background: #238636;
+  --background: var(--hn-green);
   --color: #ffffff;
   --border-radius: 6px;
   --padding-start: 10px;
@@ -462,7 +462,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .save-btn:hover {
-  --background: #2ea043;
+  --background: var(--hn-green-light);
 }
 
 .save-btn ion-icon {
@@ -504,14 +504,14 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .split-pane .editor-pane {
-  border-right: 1px solid #21262d;
+  border-right: 1px solid var(--hn-border-default);
 }
 
 .markdown-textarea {
   width: 100%;
   height: 100%;
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--hn-bg-deep);
+  color: var(--hn-text-primary);
   border: none;
   padding: 20px 24px;
   font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
@@ -522,17 +522,17 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .markdown-textarea::placeholder {
-  color: #484f58;
+  color: var(--hn-text-muted);
 }
 
 /* Markdown Preview Styles */
 .markdown-preview {
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   line-height: 1.7;
 }
 
 .markdown-preview :deep(.placeholder-text) {
-  color: #484f58;
+  color: var(--hn-text-muted);
   font-style: italic;
 }
 
@@ -550,13 +550,13 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .markdown-preview :deep(h1) { 
   font-size: 2em; 
-  border-bottom: 1px solid #21262d; 
+  border-bottom: 1px solid var(--hn-border-default); 
   padding-bottom: 0.3em; 
 }
 
 .markdown-preview :deep(h2) { 
   font-size: 1.5em; 
-  border-bottom: 1px solid #21262d; 
+  border-bottom: 1px solid var(--hn-border-default); 
   padding-bottom: 0.3em; 
 }
 
@@ -578,21 +578,21 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .markdown-preview :deep(code) {
-  background: rgba(110, 118, 129, 0.2);
+  background: var(--hn-bg-elevated);
   padding: 0.2em 0.5em;
   border-radius: 4px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 0.9em;
-  color: #79c0ff;
+  color: var(--hn-code);
 }
 
 .markdown-preview :deep(pre) {
-  background: #161b22;
+  background: var(--hn-bg-surface);
   padding: 16px 20px;
   border-radius: 8px;
   overflow-x: auto;
   margin: 1.2em 0;
-  border: 1px solid #21262d;
+  border: 1px solid var(--hn-border-default);
 }
 
 .markdown-preview :deep(pre code) {
@@ -600,20 +600,20 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   padding: 0;
   font-size: 0.85em;
   line-height: 1.6;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
 }
 
 .markdown-preview :deep(blockquote) {
-  border-left: 4px solid #3fb950;
+  border-left: 4px solid var(--hn-teal);
   margin: 1.2em 0;
   padding: 0.6em 0 0.6em 1.2em;
-  color: #8b949e;
-  background: rgba(63, 185, 80, 0.08);
+  color: var(--hn-text-secondary);
+  background: var(--hn-teal-muted);
   border-radius: 0 8px 8px 0;
 }
 
 .markdown-preview :deep(a) {
-  color: #58a6ff;
+  color: var(--hn-purple);
   text-decoration: none;
 }
 
@@ -628,12 +628,12 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .markdown-preview :deep(em) {
   font-style: italic;
-  color: #c9d1d9;
+  color: var(--hn-text-primary);
 }
 
 .markdown-preview :deep(hr) {
   border: none;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--hn-border-default);
   margin: 2em 0;
 }
 
@@ -645,13 +645,13 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .markdown-preview :deep(th),
 .markdown-preview :deep(td) {
-  border: 1px solid #21262d;
+  border: 1px solid var(--hn-border-default);
   padding: 10px 14px;
   text-align: left;
 }
 
 .markdown-preview :deep(th) {
-  background: #161b22;
+  background: var(--hn-bg-surface);
   font-weight: 600;
   color: #ffffff;
 }
@@ -672,10 +672,10 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   align-items: center;
   gap: 16px;
   padding: 6px 16px;
-  background: #161b22;
-  border-top: 1px solid #21262d;
+  background: var(--hn-bg-surface);
+  border-top: 1px solid var(--hn-border-default);
   font-size: 0.75rem;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .status-item {
@@ -690,7 +690,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .status-item.project-tag {
   margin-left: auto;
-  color: #58a6ff;
+  color: var(--hn-teal);
 }
 
 /* Scrollbar styling */
@@ -706,13 +706,13 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .preview-pane::-webkit-scrollbar-thumb,
 .markdown-textarea::-webkit-scrollbar-thumb {
-  background: #21262d;
+  background: var(--hn-border-default);
   border-radius: 4px;
 }
 
 .preview-pane::-webkit-scrollbar-thumb:hover,
 .markdown-textarea::-webkit-scrollbar-thumb:hover {
-  background: #30363d;
+  background: var(--hn-border-strong);
 }
 
 /* Saving Overlay */
@@ -722,7 +722,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(13, 17, 23, 0.95);
+  background: rgba(15, 20, 25, 0.95);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -739,22 +739,22 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 .saving-content ion-spinner {
   width: 36px;
   height: 36px;
-  --color: #58a6ff;
+  --color: var(--hn-teal);
 }
 
 .saving-content h3 {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
 }
 
 /* Execution Steps */
 .execution-steps {
-  background: #161b22;
+  background: var(--hn-bg-surface);
   border-radius: 10px;
   padding: 16px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--hn-border-default);
   min-width: 280px;
 }
 
@@ -764,8 +764,8 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   gap: 10px;
   padding: 8px 0;
   font-size: 0.85rem;
-  color: #8b949e;
-  border-bottom: 1px solid #21262d;
+  color: var(--hn-text-secondary);
+  border-bottom: 1px solid var(--hn-border-subtle);
 }
 
 .step:last-child {
@@ -773,11 +773,11 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .step.running {
-  color: #58a6ff;
+  color: var(--hn-teal);
 }
 
 .step.completed {
-  color: #3fb950;
+  color: var(--hn-green);
 }
 
 .step-icon {
@@ -792,7 +792,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 .step-icon ion-spinner {
   width: 16px;
   height: 16px;
-  --color: #58a6ff;
+  --color: var(--hn-teal);
 }
 
 .step-icon ion-icon {
@@ -804,7 +804,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .step-detail {
-  color: #484f58;
+  color: var(--hn-text-faint);
   font-size: 0.75rem;
   margin-left: auto;
   max-width: 120px;
@@ -814,7 +814,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 }
 
 .step.completed .step-detail {
-  color: #7ee787;
+  color: var(--hn-green-light);
 }
 </style>
 

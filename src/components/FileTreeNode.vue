@@ -103,26 +103,26 @@ const nodeIcon = computed(() => {
 
 const iconColor = computed(() => {
   if (props.node.type === 'directory') {
-    return props.node.expanded ? '#58a6ff' : '#8b949e';
+    return props.node.expanded ? 'var(--hn-teal)' : 'var(--hn-text-secondary)';
   }
   
   // File colors by type
   switch (props.node.fileType) {
     case 'md':
-      return '#58a6ff';
+      return 'var(--hn-purple)';
     case 'pdf':
-      return '#f85149';
+      return 'var(--hn-danger)';
     case 'docx':
-      return '#3fb950';
+      return 'var(--hn-green)';
     case 'txt':
-      return '#8b949e';
+      return 'var(--hn-text-secondary)';
     case 'png':
     case 'jpg':
     case 'jpeg':
     case 'webp':
-      return '#a371f7';
+      return 'var(--hn-purple-light)';
     default:
-      return '#8b949e';
+      return 'var(--hn-text-secondary)';
   }
 });
 
@@ -151,20 +151,20 @@ function handleClick() {
 }
 
 .node-row:hover {
-  background: rgba(177, 186, 196, 0.12);
+  background: var(--hn-bg-elevated);
 }
 
 .node-row.selected {
-  background: rgba(56, 139, 253, 0.15);
+  background: var(--hn-teal-muted);
 }
 
 .node-row.selected:hover {
-  background: rgba(56, 139, 253, 0.2);
+  background: var(--hn-teal-glow);
 }
 
 .chevron-icon {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   flex-shrink: 0;
   width: 16px;
 }
@@ -182,7 +182,7 @@ function handleClick() {
 .node-name {
   flex: 1;
   font-size: 0.85rem;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -201,19 +201,19 @@ function handleClick() {
 }
 
 .status-dot.indexed {
-  background: #3fb950;
+  background: var(--hn-green);
 }
 
 .status-dot.processing {
-  background: #d29922;
+  background: var(--hn-warning);
 }
 
 .status-dot.error {
-  background: #f85149;
+  background: var(--hn-danger);
 }
 
 .status-dot.pending {
-  background: #8b949e;
+  background: var(--hn-text-secondary);
 }
 
 .node-children {

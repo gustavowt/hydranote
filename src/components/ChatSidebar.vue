@@ -450,8 +450,8 @@ defineExpose({ selectProject, refresh });
   min-width: 360px;
   max-width: 360px;
   height: 100%;
-  background: #0d1117;
-  border-left: 1px solid #21262d;
+  background: var(--hn-bg-deep);
+  border-left: 1px solid var(--hn-border-default);
   transition: all 0.2s ease;
   overflow: hidden;
 }
@@ -476,26 +476,26 @@ defineExpose({ selectProject, refresh });
   align-items: center;
   gap: 8px;
   padding: 12px 6px;
-  background: #161b22;
+  background: var(--hn-bg-surface);
   border-radius: 8px 0 0 8px;
   cursor: pointer;
   transition: all 0.15s ease;
-  border: 1px solid #21262d;
+  border: 1px solid var(--hn-border-default);
   border-right: none;
   z-index: 10;
 }
 
 .collapsed-tab:hover {
-  background: #21262d;
+  background: var(--hn-bg-elevated);
 }
 
 .collapsed-tab ion-icon {
   font-size: 16px;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .collapsed-tab:hover ion-icon {
-  color: #58a6ff;
+  color: var(--hn-purple);
 }
 
 .collapsed-tab .tab-label {
@@ -503,13 +503,13 @@ defineExpose({ selectProject, refresh });
   text-orientation: mixed;
   font-size: 0.7rem;
   font-weight: 600;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
 
 .collapsed-tab:hover .tab-label {
-  color: #e6edf3;
+  color: var(--hn-text-primary);
 }
 
 .collapsed-tab .tab-chevron {
@@ -519,8 +519,8 @@ defineExpose({ selectProject, refresh });
 /* Expanded Sidebar */
 .sidebar-header {
   padding: 12px 16px;
-  border-bottom: 1px solid #21262d;
-  background: #161b22;
+  border-bottom: 1px solid var(--hn-border-default);
+  background: var(--hn-bg-surface);
 }
 
 .header-top {
@@ -532,14 +532,14 @@ defineExpose({ selectProject, refresh });
 
 .header-icon {
   font-size: 18px;
-  color: #a371f7;
+  color: var(--hn-purple);
   flex-shrink: 0;
 }
 
 .header-title {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   flex: 1;
@@ -548,14 +548,14 @@ defineExpose({ selectProject, refresh });
 .collapse-btn {
   --padding-start: 4px;
   --padding-end: 4px;
-  --color: #8b949e;
+  --color: var(--hn-text-secondary);
   margin: 0;
   height: 28px;
   width: 28px;
 }
 
 .collapse-btn:hover {
-  --color: #e6edf3;
+  --color: var(--hn-text-primary);
 }
 
 /* Project Selector */
@@ -564,9 +564,9 @@ defineExpose({ selectProject, refresh });
 }
 
 .project-select {
-  --background: #21262d;
-  --color: #e6edf3;
-  --placeholder-color: #8b949e;
+  --background: var(--hn-bg-elevated);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-secondary);
   --padding-start: 12px;
   --padding-end: 12px;
   border-radius: 6px;
@@ -576,7 +576,7 @@ defineExpose({ selectProject, refresh });
 
 .no-projects {
   font-size: 0.85rem;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   font-style: italic;
   margin-top: 8px;
 }
@@ -595,7 +595,7 @@ defineExpose({ selectProject, refresh });
   justify-content: center;
   height: 100%;
   text-align: center;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .empty-state ion-icon {
@@ -615,13 +615,13 @@ defineExpose({ selectProject, refresh });
   align-items: center;
   text-align: center;
   padding: 24px 8px;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .welcome-message .welcome-icon {
   font-size: 32px;
   margin-bottom: 8px;
-  color: #a371f7;
+  color: var(--hn-purple);
 }
 
 .welcome-message p {
@@ -643,10 +643,10 @@ defineExpose({ selectProject, refresh });
   gap: 10px;
   width: 100%;
   padding: 10px 14px;
-  background: #21262d;
-  border: 1px solid #30363d;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
   border-radius: 8px;
-  color: #c9d1d9;
+  color: var(--hn-text-primary);
   font-size: 0.85rem;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -654,13 +654,13 @@ defineExpose({ selectProject, refresh });
 }
 
 .quick-action-btn:hover {
-  background: #30363d;
-  border-color: #484f58;
+  background: var(--hn-bg-hover);
+  border-color: var(--hn-border-strong);
 }
 
 .quick-action-btn ion-icon {
   font-size: 18px;
-  color: #a371f7;
+  color: var(--hn-purple);
   flex-shrink: 0;
 }
 
@@ -690,14 +690,14 @@ defineExpose({ selectProject, refresh });
 }
 
 .message.user .message-bubble {
-  background: linear-gradient(135deg, #238636, #2ea043);
+  background: linear-gradient(135deg, var(--hn-green-dark), var(--hn-green));
   color: #ffffff;
   border-bottom-right-radius: 4px;
 }
 
 .message.assistant .message-bubble {
-  background: #21262d;
-  color: #e6edf3;
+  background: var(--hn-bg-elevated);
+  color: var(--hn-text-primary);
   border-bottom-left-radius: 4px;
 }
 
@@ -756,7 +756,7 @@ defineExpose({ selectProject, refresh });
 }
 
 .message.assistant .message-time {
-  color: #484f58;
+  color: var(--hn-text-faint);
 }
 
 /* Typing Indicator */
@@ -769,7 +769,7 @@ defineExpose({ selectProject, refresh });
 .typing .dot {
   width: 6px;
   height: 6px;
-  background: #a371f7;
+  background: var(--hn-purple);
   border-radius: 50%;
   animation: typing 1.4s infinite ease-in-out both;
 }
@@ -785,8 +785,8 @@ defineExpose({ selectProject, refresh });
 /* Chat Input */
 .chat-input {
   padding: 12px 16px;
-  border-top: 1px solid #21262d;
-  background: #161b22;
+  border-top: 1px solid var(--hn-border-default);
+  background: var(--hn-bg-surface);
 }
 
 .input-container {
@@ -796,9 +796,9 @@ defineExpose({ selectProject, refresh });
 }
 
 .input-container ion-textarea {
-  --background: #21262d;
-  --color: #e6edf3;
-  --placeholder-color: #484f58;
+  --background: var(--hn-bg-elevated);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
   --padding-start: 12px;
   --padding-end: 12px;
   --padding-top: 10px;
@@ -811,7 +811,7 @@ defineExpose({ selectProject, refresh });
 .input-container ion-button {
   --padding-start: 8px;
   --padding-end: 8px;
-  --color: #a371f7;
+  --color: var(--hn-purple);
   margin-bottom: 4px;
 }
 
@@ -825,11 +825,11 @@ defineExpose({ selectProject, refresh });
 }
 
 .chat-content::-webkit-scrollbar-thumb {
-  background: #21262d;
+  background: var(--hn-border-default);
   border-radius: 3px;
 }
 
 .chat-content::-webkit-scrollbar-thumb:hover {
-  background: #30363d;
+  background: var(--hn-border-strong);
 }
 </style>

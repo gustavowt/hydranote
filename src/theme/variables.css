@@ -1,2 +1,149 @@
-/* For information on how to create your own theme, please refer to:
-http://ionicframework.com/docs/theming/ */
+/* HydraNote Theme - Inspired by Logo Colors
+   Purple (hydra heads), Teal (body gradient), Green (tentacle tips)
+   http://ionicframework.com/docs/theming/ */
+
+:root {
+  /* ========================================
+     BASE BACKGROUNDS - Deep Navy Spectrum
+     ======================================== */
+  --hn-bg-deepest: #12171d;
+  --hn-bg-deep: #181f28;
+  --hn-bg-surface: #1e2732;
+  --hn-bg-elevated: #262f3c;
+  --hn-bg-hover: #2e3947;
+
+  /* ========================================
+     BORDERS
+     ======================================== */
+  --hn-border-subtle: #1e2833;
+  --hn-border-default: #2a3544;
+  --hn-border-strong: #3a4860;
+
+  /* ========================================
+     TEXT - High Contrast for Readability
+     ======================================== */
+  --hn-text-primary: #e8eef5;
+  --hn-text-secondary: #9aa5b5;
+  --hn-text-muted: #6b7685;
+  --hn-text-faint: #4a5566;
+
+  /* ========================================
+     PRIMARY ACCENT - Purple (Logo Heads)
+     ======================================== */
+  --hn-purple: #9171d0;
+  --hn-purple-light: #a688e0;
+  --hn-purple-dark: #7a5cb8;
+  --hn-purple-muted: rgba(145, 113, 208, 0.15);
+  --hn-purple-glow: rgba(145, 113, 208, 0.25);
+
+  /* ========================================
+     SECONDARY ACCENT - Teal (Logo Body)
+     ======================================== */
+  --hn-teal: #3eb8a0;
+  --hn-teal-light: #52c9b3;
+  --hn-teal-dark: #2d9a85;
+  --hn-teal-muted: rgba(62, 184, 160, 0.15);
+  --hn-teal-glow: rgba(62, 184, 160, 0.25);
+
+  /* ========================================
+     SUCCESS - Green (Logo Tentacle Tips)
+     ======================================== */
+  --hn-green: #3fb950;
+  --hn-green-light: #56d364;
+  --hn-green-dark: #2d8a3e;
+  --hn-green-muted: rgba(63, 185, 80, 0.15);
+
+  /* ========================================
+     SEMANTIC COLORS
+     ======================================== */
+  --hn-danger: #f85149;
+  --hn-danger-muted: rgba(248, 81, 73, 0.15);
+  
+  --hn-warning: #d29922;
+  --hn-warning-muted: rgba(210, 153, 34, 0.15);
+
+  --hn-info: #58a6ff;
+  --hn-info-muted: rgba(88, 166, 255, 0.15);
+
+  /* ========================================
+     SPECIAL COLORS
+     ======================================== */
+  --hn-folder: #e3b341;
+  --hn-link: var(--hn-purple);
+  --hn-code: #79c0ff;
+
+  /* ========================================
+     IONIC OVERRIDES
+     ======================================== */
+  --ion-background-color: var(--hn-bg-deepest);
+  --ion-background-color-rgb: 10, 15, 20;
+
+  --ion-text-color: var(--hn-text-primary);
+  --ion-text-color-rgb: 232, 238, 245;
+
+  --ion-color-primary: var(--hn-purple);
+  --ion-color-primary-rgb: 145, 113, 208;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: var(--hn-purple-dark);
+  --ion-color-primary-tint: var(--hn-purple-light);
+
+  --ion-color-secondary: var(--hn-teal);
+  --ion-color-secondary-rgb: 62, 184, 160;
+  --ion-color-secondary-contrast: #ffffff;
+  --ion-color-secondary-contrast-rgb: 255, 255, 255;
+  --ion-color-secondary-shade: var(--hn-teal-dark);
+  --ion-color-secondary-tint: var(--hn-teal-light);
+
+  --ion-color-success: var(--hn-green);
+  --ion-color-success-rgb: 63, 185, 80;
+  --ion-color-success-contrast: #ffffff;
+  --ion-color-success-contrast-rgb: 255, 255, 255;
+  --ion-color-success-shade: var(--hn-green-dark);
+  --ion-color-success-tint: var(--hn-green-light);
+
+  --ion-color-danger: var(--hn-danger);
+  --ion-color-danger-rgb: 248, 81, 73;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255;
+
+  --ion-color-warning: var(--hn-warning);
+  --ion-color-warning-rgb: 210, 153, 34;
+  --ion-color-warning-contrast: #000000;
+
+  --ion-toolbar-background: var(--hn-bg-deep);
+  --ion-toolbar-color: var(--hn-text-primary);
+  --ion-toolbar-border-color: var(--hn-border-default);
+
+  --ion-item-background: var(--hn-bg-surface);
+  --ion-item-color: var(--hn-text-primary);
+  --ion-item-border-color: var(--hn-border-subtle);
+
+  --ion-card-background: var(--hn-bg-surface);
+  --ion-card-color: var(--hn-text-primary);
+}
+
+/* Dark mode is always on for this app */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ion-color-step-50: #0f1419;
+    --ion-color-step-100: #151c24;
+    --ion-color-step-150: #1c2530;
+    --ion-color-step-200: #232d3a;
+    --ion-color-step-250: #2a3544;
+    --ion-color-step-300: #3a4860;
+    --ion-color-step-350: #4a5566;
+    --ion-color-step-400: #5a6578;
+    --ion-color-step-450: #6b7685;
+    --ion-color-step-500: #7c8795;
+    --ion-color-step-550: #8d98a5;
+    --ion-color-step-600: #9aa5b5;
+    --ion-color-step-650: #a8b2c0;
+    --ion-color-step-700: #b6c0cc;
+    --ion-color-step-750: #c4ced8;
+    --ion-color-step-800: #d2dce5;
+    --ion-color-step-850: #e0e8f0;
+    --ion-color-step-900: #e8eef5;
+    --ion-color-step-950: #f0f4f8;
+  }
+}

@@ -263,8 +263,8 @@ defineExpose({ refresh });
   min-width: 280px;
   max-width: 280px;
   height: 100%;
-  background: #0d1117;
-  border-right: 1px solid #21262d;
+  background: var(--hn-bg-deep);
+  border-right: 1px solid var(--hn-border-default);
   transition: all 0.2s ease;
   overflow: hidden;
 }
@@ -289,26 +289,26 @@ defineExpose({ refresh });
   align-items: center;
   gap: 8px;
   padding: 12px 6px;
-  background: #161b22;
+  background: var(--hn-bg-surface);
   border-radius: 0 8px 8px 0;
   cursor: pointer;
   transition: all 0.15s ease;
-  border: 1px solid #21262d;
+  border: 1px solid var(--hn-border-default);
   border-left: none;
   z-index: 10;
 }
 
 .collapsed-tab:hover {
-  background: #21262d;
+  background: var(--hn-bg-elevated);
 }
 
 .collapsed-tab ion-icon {
   font-size: 16px;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
 }
 
 .collapsed-tab:hover ion-icon {
-  color: #58a6ff;
+  color: var(--hn-teal);
 }
 
 .collapsed-tab .tab-label {
@@ -316,13 +316,13 @@ defineExpose({ refresh });
   text-orientation: mixed;
   font-size: 0.7rem;
   font-weight: 600;
-  color: #8b949e;
+  color: var(--hn-text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
 
 .collapsed-tab:hover .tab-label {
-  color: #e6edf3;
+  color: var(--hn-text-primary);
 }
 
 .collapsed-tab .tab-chevron {
@@ -335,7 +335,7 @@ defineExpose({ refresh });
   align-items: center;
   justify-content: space-between;
   padding: 12px 8px 12px 16px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--hn-border-default);
   min-height: 48px;
 }
 
@@ -349,22 +349,22 @@ defineExpose({ refresh });
 
 .header-icon {
   font-size: 18px;
-  color: #58a6ff;
+  color: var(--hn-teal);
   flex-shrink: 0;
 }
 
 .header-title {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .project-count {
   font-size: 0.7rem;
-  color: #8b949e;
-  background: #21262d;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-elevated);
   padding: 2px 6px;
   border-radius: 10px;
 }
@@ -379,7 +379,7 @@ defineExpose({ refresh });
 .collapse-btn {
   --padding-start: 4px;
   --padding-end: 4px;
-  --color: #8b949e;
+  --color: var(--hn-text-secondary);
   margin: 0;
   height: 28px;
   width: 28px;
@@ -387,7 +387,7 @@ defineExpose({ refresh });
 
 .add-btn:hover,
 .collapse-btn:hover {
-  --color: #e6edf3;
+  --color: var(--hn-text-primary);
 }
 
 .tree-content {
@@ -404,7 +404,7 @@ defineExpose({ refresh });
 }
 
 .tree-loading ion-spinner {
-  --color: #8b949e;
+  --color: var(--hn-text-secondary);
 }
 
 .tree-empty {
@@ -413,7 +413,7 @@ defineExpose({ refresh });
   align-items: center;
   justify-content: center;
   padding: 32px 16px;
-  color: #484f58;
+  color: var(--hn-text-faint);
   text-align: center;
 }
 
@@ -448,20 +448,20 @@ defineExpose({ refresh });
 }
 
 .project-header:hover {
-  background: #161b22;
+  background: var(--hn-bg-surface);
 }
 
 .project-header.selected {
-  background: rgba(56, 139, 253, 0.15);
+  background: var(--hn-teal-muted);
 }
 
 .project-header.selected .project-name {
-  color: #58a6ff;
+  color: var(--hn-teal);
 }
 
 .expand-icon {
   font-size: 12px;
-  color: #484f58;
+  color: var(--hn-text-faint);
   flex-shrink: 0;
   transition: transform 0.15s ease;
 }
@@ -472,7 +472,7 @@ defineExpose({ refresh });
 
 .folder-icon {
   font-size: 16px;
-  color: #e3b341;
+  color: var(--hn-folder);
   flex-shrink: 0;
 }
 
@@ -480,7 +480,7 @@ defineExpose({ refresh });
   flex: 1;
   font-size: 0.9rem;
   font-weight: 500;
-  color: #e6edf3;
+  color: var(--hn-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -488,8 +488,8 @@ defineExpose({ refresh });
 
 .file-count {
   font-size: 0.7rem;
-  color: #8b949e;
-  background: #21262d;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-elevated);
   padding: 2px 6px;
   border-radius: 8px;
 }
@@ -497,7 +497,7 @@ defineExpose({ refresh });
 /* Project Files */
 .project-files {
   padding-left: 12px;
-  border-left: 1px solid #21262d;
+  border-left: 1px solid var(--hn-border-subtle);
   margin-left: 20px;
 }
 
@@ -508,7 +508,7 @@ defineExpose({ refresh });
 }
 
 .files-loading ion-spinner {
-  --color: #8b949e;
+  --color: var(--hn-text-secondary);
   width: 16px;
   height: 16px;
 }
@@ -516,7 +516,7 @@ defineExpose({ refresh });
 .files-empty {
   padding: 8px 12px;
   font-size: 0.8rem;
-  color: #484f58;
+  color: var(--hn-text-faint);
   font-style: italic;
 }
 
@@ -530,12 +530,12 @@ defineExpose({ refresh });
 }
 
 .tree-content::-webkit-scrollbar-thumb {
-  background: #21262d;
+  background: var(--hn-border-default);
   border-radius: 3px;
 }
 
 .tree-content::-webkit-scrollbar-thumb:hover {
-  background: #30363d;
+  background: var(--hn-border-strong);
 }
 </style>
 

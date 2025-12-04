@@ -476,17 +476,17 @@ function goToProjectChat() {
 
 <style scoped>
 ion-content {
-  --background: #1a1a2e;
+  --background: var(--hn-bg-deepest);
 }
 
 ion-header ion-toolbar {
-  --background: #16162a;
-  --color: #e2e2e8;
-  --border-color: #2d2d44;
+  --background: var(--hn-bg-deep);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-default);
 }
 
 ion-title {
-  color: #e2e2e8;
+  color: var(--hn-text-primary);
 }
 
 .hero-section {
@@ -506,7 +506,7 @@ ion-title {
 .hero-tagline {
   margin: 0;
   font-size: 1rem;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
   font-weight: 400;
 }
 
@@ -517,20 +517,20 @@ ion-title {
   justify-content: center;
   height: 60vh;
   text-align: center;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .empty-icon {
   font-size: 64px;
   margin-bottom: 16px;
   opacity: 0.6;
-  color: #6366f1;
+  color: var(--hn-purple);
 }
 
 .empty-state h2 {
   margin: 0 0 8px;
   font-size: 1.5rem;
-  color: #e2e2e8;
+  color: var(--hn-text-primary);
 }
 
 .empty-state p {
@@ -539,7 +539,7 @@ ion-title {
 }
 
 .empty-state ion-button {
-  --background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   --color: #ffffff;
 }
 
@@ -550,7 +550,7 @@ ion-title {
   justify-content: center;
   height: 60vh;
   gap: 16px;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .project-list {
@@ -558,9 +558,9 @@ ion-title {
 }
 
 .project-list ion-item {
-  --background: #2d2d44;
-  --color: #e2e2e8;
-  --border-color: #3d3d5c;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-subtle);
   margin-bottom: 8px;
   border-radius: 12px;
   --padding-start: 16px;
@@ -568,17 +568,17 @@ ion-title {
 }
 
 .project-list ion-item h2 {
-  color: #e2e2e8;
+  color: var(--hn-text-primary);
   font-weight: 600;
 }
 
 .project-list ion-item p {
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .project-icon {
   font-size: 28px;
-  color: #6366f1;
+  color: var(--hn-purple);
 }
 
 .project-meta {
@@ -590,16 +590,16 @@ ion-title {
 
 .date {
   font-size: 0.75rem;
-  color: #6b6b80;
+  color: var(--hn-text-muted);
 }
 
 ion-modal ion-toolbar {
-  --background: #16162a;
-  --color: #e2e2e8;
+  --background: var(--hn-bg-deep);
+  --color: var(--hn-text-primary);
 }
 
 ion-modal ion-content {
-  --background: #1a1a2e;
+  --background: var(--hn-bg-deepest);
 }
 
 ion-modal ion-list {
@@ -607,29 +607,29 @@ ion-modal ion-list {
 }
 
 ion-modal ion-item {
-  --background: #2d2d44;
-  --color: #e2e2e8;
-  --border-color: #3d3d5c;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-subtle);
 }
 
 ion-modal ion-input,
 ion-modal ion-textarea {
-  --color: #e2e2e8;
-  --placeholder-color: #6b6b80;
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
 }
 
 ion-modal ion-button {
-  --color: #6366f1;
+  --color: var(--hn-purple);
 }
 
 ion-modal ion-button[strong] {
-  --color: #8b5cf6;
+  --color: var(--hn-purple-light);
 }
 
 /* Quick Add Note Button */
 .quick-add-note-btn {
   margin-top: 20px;
-  --background: linear-gradient(135deg, #3fb950, #238636);
+  --background: linear-gradient(135deg, var(--hn-green), var(--hn-green-dark));
   --color: #ffffff;
   --border-radius: 12px;
   --padding-start: 24px;
@@ -651,12 +651,12 @@ ion-modal ion-button[strong] {
 }
 
 .note-result-modal ion-toolbar {
-  --background: #16162a;
-  --border-color: #2d2d44;
+  --background: var(--hn-bg-deep);
+  --border-color: var(--hn-border-default);
 }
 
 .note-result-modal ion-content {
-  --background: #1a1a2e;
+  --background: var(--hn-bg-deepest);
 }
 
 .result-content {
@@ -678,8 +678,8 @@ ion-modal ion-button[strong] {
 }
 
 .result-icon.success {
-  background: rgba(63, 185, 80, 0.15);
-  color: #3fb950;
+  background: var(--hn-green-muted);
+  color: var(--hn-green);
 }
 
 .result-icon ion-icon {
@@ -690,22 +690,22 @@ ion-modal ion-button[strong] {
   margin: 0 0 8px;
   font-size: 1.25rem;
   font-weight: 600;
-  color: #e2e2e8;
+  color: var(--hn-text-primary);
 }
 
 .result-info {
   margin: 0 0 24px;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
   font-size: 0.95rem;
 }
 
 .result-info strong {
-  color: #6366f1;
+  color: var(--hn-purple);
 }
 
 .new-badge {
   display: inline-block;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   color: #ffffff;
   font-size: 0.7rem;
   padding: 2px 8px;
@@ -727,13 +727,13 @@ ion-modal ion-button[strong] {
 }
 
 .result-actions ion-button:first-child {
-  --background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   --color: #ffffff;
 }
 
 .result-actions ion-button[fill="outline"] {
-  --border-color: #3d3d5c;
-  --color: #8b8b9e;
+  --border-color: var(--hn-border-strong);
+  --color: var(--hn-text-secondary);
 }
 </style>
 

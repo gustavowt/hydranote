@@ -268,9 +268,9 @@ async function handleCreateProject() {
 
 <style scoped>
 .workspace-header ion-toolbar {
-  --background: #0d1117;
-  --color: #e6edf3;
-  --border-color: #21262d;
+  --background: var(--hn-bg-deep);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-default);
 }
 
 .header-brand {
@@ -290,7 +290,7 @@ async function handleCreateProject() {
 }
 
 .add-note-btn {
-  --background: #238636;
+  --background: var(--hn-green);
   --color: #ffffff;
   --border-radius: 6px;
   margin-right: 8px;
@@ -298,7 +298,7 @@ async function handleCreateProject() {
 }
 
 .add-note-btn:hover {
-  --background: #2ea043;
+  --background: var(--hn-green-light);
 }
 
 /* Workspace Layout */
@@ -307,18 +307,18 @@ async function handleCreateProject() {
   flex: 1;
   height: calc(100vh - 56px);
   overflow: hidden;
-  background: #010409;
+  background: var(--hn-bg-deepest);
 }
 
 /* Modal Styling */
 ion-modal ion-toolbar {
-  --background: #161b22;
-  --color: #e6edf3;
-  --border-color: #21262d;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-default);
 }
 
 ion-modal ion-content {
-  --background: #0d1117;
+  --background: var(--hn-bg-deep);
 }
 
 ion-modal ion-list {
@@ -326,23 +326,23 @@ ion-modal ion-list {
 }
 
 ion-modal ion-item {
-  --background: #161b22;
-  --color: #e6edf3;
-  --border-color: #21262d;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-subtle);
 }
 
 ion-modal ion-input,
 ion-modal ion-textarea {
-  --color: #e6edf3;
-  --placeholder-color: #484f58;
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
 }
 
 ion-modal ion-button {
-  --color: #58a6ff;
+  --color: var(--hn-purple);
 }
 
 ion-modal ion-button[strong] {
-  --color: #3fb950;
+  --color: var(--hn-green);
 }
 </style>
 

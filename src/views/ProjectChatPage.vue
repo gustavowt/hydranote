@@ -727,7 +727,7 @@ function closeAutocomplete() {
 }
 
 .chat-content {
-  --background: #1a1a2e;
+  --background: var(--hn-bg-deepest);
   flex: 1;
 }
 
@@ -738,7 +738,7 @@ function closeAutocomplete() {
   justify-content: center;
   height: 100%;
   gap: 16px;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .messages-container {
@@ -754,7 +754,7 @@ function closeAutocomplete() {
   justify-content: center;
   text-align: center;
   padding: 48px 24px;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .welcome-logo {
@@ -766,7 +766,7 @@ function closeAutocomplete() {
 .welcome-message h2 {
   margin: 0 0 8px;
   font-size: 1.5rem;
-  color: #e2e2e8;
+  color: var(--hn-text-primary);
 }
 
 .welcome-message p {
@@ -783,8 +783,8 @@ function closeAutocomplete() {
 
 .quick-actions ion-chip {
   cursor: pointer;
-  --background: #2d2d44;
-  --color: #c4c4d4;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
 }
 
 .message {
@@ -808,14 +808,14 @@ function closeAutocomplete() {
 }
 
 .message.user .message-bubble {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   color: #ffffff;
   border-bottom-right-radius: 4px;
 }
 
 .message.assistant .message-bubble {
-  background: #2d2d44;
-  color: #e2e2e8;
+  background: var(--hn-bg-surface);
+  color: var(--hn-text-primary);
   border-bottom-left-radius: 4px;
 }
 
@@ -894,14 +894,14 @@ function closeAutocomplete() {
 }
 
 .markdown-content :deep(blockquote) {
-  border-left: 3px solid #6366f1;
+  border-left: 3px solid var(--hn-teal);
   margin: 0.8em 0;
   padding: 0.4em 0 0.4em 1em;
-  color: #a5a5c0;
+  color: var(--hn-text-secondary);
 }
 
 .markdown-content :deep(a) {
-  color: #818cf8;
+  color: var(--hn-purple);
   text-decoration: none;
 }
 
@@ -915,7 +915,7 @@ function closeAutocomplete() {
 
 .markdown-content :deep(hr) {
   border: none;
-  border-top: 1px solid #3d3d5c;
+  border-top: 1px solid var(--hn-border-default);
   margin: 1em 0;
 }
 
@@ -928,7 +928,7 @@ function closeAutocomplete() {
 
 .markdown-content :deep(th),
 .markdown-content :deep(td) {
-  border: 1px solid #3d3d5c;
+  border: 1px solid var(--hn-border-default);
   padding: 8px 12px;
   text-align: left;
 }
@@ -950,13 +950,13 @@ function closeAutocomplete() {
 
 .sources-label {
   font-size: 0.7rem;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
   margin-right: 4px;
 }
 
 .context-sources ion-chip {
-  --background: #3d3d5c;
-  --color: #a5a5c0;
+  --background: var(--hn-bg-elevated);
+  --color: var(--hn-text-secondary);
   font-size: 0.7rem;
   height: 24px;
 }
@@ -969,7 +969,7 @@ function closeAutocomplete() {
 }
 
 .message.assistant .message-time {
-  color: #6b6b80;
+  color: var(--hn-text-muted);
 }
 
 .typing {
@@ -981,7 +981,7 @@ function closeAutocomplete() {
 .typing .dot {
   width: 8px;
   height: 8px;
-  background: #6366f1;
+  background: var(--hn-purple);
   border-radius: 50%;
   animation: typing 1.4s infinite ease-in-out both;
 }
@@ -995,8 +995,8 @@ function closeAutocomplete() {
 }
 
 .chat-footer {
-  background: #16162a;
-  border-top: 1px solid #2d2d44;
+  background: var(--hn-bg-deep);
+  border-top: 1px solid var(--hn-border-default);
 }
 
 .chat-footer ion-toolbar {
@@ -1011,22 +1011,22 @@ function closeAutocomplete() {
 }
 
 .input-container ion-textarea {
-  --background: #2d2d44;
-  --color: #e2e2e8;
-  --placeholder-color: #6b6b80;
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
   --padding-start: 16px;
   --padding-end: 16px;
   --padding-top: 12px;
   --padding-bottom: 12px;
   border-radius: 24px;
   max-height: 120px;
-  border: 1px solid #3d3d5c;
+  border: 1px solid var(--hn-border-default);
 }
 
 .input-container ion-button {
   --padding-start: 12px;
   --padding-end: 12px;
-  --color: #6366f1;
+  --color: var(--hn-purple);
   margin-bottom: 4px;
 }
 
@@ -1037,14 +1037,14 @@ function closeAutocomplete() {
   justify-content: center;
   padding: 48px 24px;
   text-align: center;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 .empty-files ion-icon {
   font-size: 48px;
   margin-bottom: 16px;
   opacity: 0.5;
-  color: #6366f1;
+  color: var(--hn-purple);
 }
 
 .upload-progress {
@@ -1053,7 +1053,7 @@ function closeAutocomplete() {
   justify-content: center;
   gap: 12px;
   padding: 24px;
-  color: #8b8b9e;
+  color: var(--hn-text-secondary);
 }
 
 /* Execution Log Styles */
@@ -1072,19 +1072,19 @@ function closeAutocomplete() {
   align-items: center;
   gap: 8px;
   font-size: 0.85rem;
-  color: #a5a5c0;
+  color: var(--hn-text-secondary);
 }
 
 .step.running {
-  color: #6366f1;
+  color: var(--hn-purple);
 }
 
 .step.completed {
-  color: #22c55e;
+  color: var(--hn-green);
 }
 
 .step.error {
-  color: #ef4444;
+  color: var(--hn-danger);
 }
 
 .step-icon {
@@ -1097,7 +1097,7 @@ function closeAutocomplete() {
 .step-icon ion-spinner {
   width: 16px;
   height: 16px;
-  --color: #6366f1;
+  --color: var(--hn-purple);
 }
 
 .step-icon ion-icon {
@@ -1109,7 +1109,7 @@ function closeAutocomplete() {
 }
 
 .step-detail {
-  color: #6b6b80;
+  color: var(--hn-text-muted);
   font-size: 0.8rem;
   max-width: 200px;
   overflow: hidden;
