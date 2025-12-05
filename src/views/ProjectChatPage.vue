@@ -27,6 +27,8 @@
         :selected-file-id="selectedFileId"
         @select-file="handleSidebarFileSelect"
         @collapse-change="handleSidebarCollapseChange"
+        @file-created="handleFileCreated"
+        @files-changed="handleFilesChanged"
       />
 
       <!-- Chat Content Area -->
@@ -135,6 +137,7 @@
     <!-- File Reference Autocomplete (Teleported to body) -->
     <FileReferenceAutocomplete
       v-if="project"
+      ref="fileAutocompleteRef"
       :project-id="projectId"
       :search-query="autocompleteQuery"
       :is-visible="showAutocomplete"
@@ -285,6 +288,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
 const inputContainerRef = ref<HTMLElement | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTreeSidebar> | null>(null);
+const fileAutocompleteRef = ref<InstanceType<typeof FileReferenceAutocomplete> | null>(null);
 
 const loading = ref(true);
 const project = ref<Project | null>(null);
@@ -421,6 +425,17 @@ async function sendMessage(text?: string) {
       },
       handleStreamChunk
     );
+
+    // Check if any files were created (write tool) or notes added (addNote tool)
+    // and refresh the file tree
+    const fileCreationResults = result.toolResults.filter(
+      (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
+    );
+    if (fileCreationResults.length > 0) {
+      // Refresh the file list and file tree
+      files.value = await get_project_files(projectId.value);
+      await refreshFileTree();
+    }
 
     // Add the final assistant message(s) properly through addMessage
     if (result.responses && result.responses.length > 1) {
@@ -643,9 +658,34 @@ async function handleSidebarFileSelect(file: { id: string; path: string; type: s
   }
 }
 
-// Refresh file tree when files are uploaded
+async function handleFileCreated(file: ProjectFile) {
+  // Refresh the files list
+  files.value = await get_project_files(projectId.value);
+  
+  // Refresh the autocomplete
+  await fileAutocompleteRef.value?.refresh();
+  
+  // Select the new file
+  selectedFileId.value = file.id;
+  
+  // Open the new file in the markdown editor
+  selectedMarkdownFile.value = file;
+  markdownContent.value = file.content || '';
+  showMarkdownViewer.value = true;
+}
+
+async function handleFilesChanged() {
+  // Refresh the files list
+  files.value = await get_project_files(projectId.value);
+  
+  // Refresh the autocomplete
+  await fileAutocompleteRef.value?.refresh();
+}
+
+// Refresh file tree and autocomplete when files change
 async function refreshFileTree() {
   await fileTreeRef.value?.refresh();
+  await fileAutocompleteRef.value?.refresh();
 }
 
 // ============================================
