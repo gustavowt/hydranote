@@ -403,10 +403,12 @@ export const MARKDOWN_FILE_CONFIG = {
 export interface WriteToolParams {
   /** Output format: pdf, docx, or md */
   format: DocumentFormat;
-  /** Document title */
+  /** Document title/filename */
   title: string;
   /** Document content (markdown or plain text) */
   content: string;
+  /** Optional: Directory path to save the file in (e.g., "docs", "notes/meetings") */
+  path?: string;
   /** Optional: Use project context to enrich content */
   useContext?: boolean;
   /** Optional: File type hint (Phase 8) - defaults to format */
@@ -842,4 +844,34 @@ export interface UpdateFileResult {
   error?: string;
   /** Whether file was re-indexed */
   reIndexed: boolean;
+}
+
+// ============================================
+// File Tree Context Menu Types
+// ============================================
+
+/**
+ * Target type for context menu actions
+ */
+export type ContextMenuTargetType = 'project' | 'directory' | 'file';
+
+/**
+ * Available context menu actions
+ */
+export type ContextMenuAction = 'new-file' | 'delete-project' | 'delete-directory' | 'delete-file';
+
+/**
+ * Context menu event payload
+ */
+export interface ContextMenuEvent {
+  event: MouseEvent;
+  node: FileTreeNode;
+}
+
+/**
+ * Drag and drop event payload
+ */
+export interface DragDropEvent {
+  sourceNode: FileTreeNode;
+  targetNode: FileTreeNode;
 }
