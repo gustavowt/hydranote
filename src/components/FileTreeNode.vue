@@ -6,9 +6,17 @@
       :class="{ 
         selected: isSelected,
         directory: node.type === 'directory',
-        expanded: node.expanded 
+        expanded: node.expanded,
+        'drag-over': isDragOver
       }"
+      :draggable="node.type === 'file'"
       @click="handleClick"
+      @contextmenu.prevent="handleContextMenu"
+      @dragstart="handleDragStart"
+      @dragend="handleDragEnd"
+      @dragover.prevent="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop.prevent="handleDrop"
     >
       <!-- Chevron for directories -->
       <ion-icon 
@@ -38,13 +46,16 @@
         :selected-file-id="selectedFileId"
         @select="$emit('select', $event)"
         @toggle="$emit('toggle', $event)"
+        @context-menu="$emit('context-menu', $event)"
+        @drag-start="$emit('drag-start', $event)"
+        @drop="$emit('drop', $event)"
       />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { ref, computed } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import {
   chevronForwardOutline,
@@ -57,7 +68,7 @@ import {
   codeSlashOutline,
   logoMarkdown,
 } from 'ionicons/icons';
-import type { FileTreeNode as FileTreeNodeType } from '@/types';
+import type { FileTreeNode as FileTreeNodeType, ContextMenuEvent, DragDropEvent } from '@/types';
 
 interface Props {
   node: FileTreeNodeType;
@@ -70,7 +81,12 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   (e: 'select', node: FileTreeNodeType): void;
   (e: 'toggle', node: FileTreeNodeType): void;
+  (e: 'context-menu', payload: ContextMenuEvent): void;
+  (e: 'drag-start', node: FileTreeNodeType): void;
+  (e: 'drop', payload: DragDropEvent): void;
 }>();
+
+const isDragOver = ref(false);
 
 const isSelected = computed(() => {
   return props.node.type === 'file' && props.node.id === props.selectedFileId;
@@ -133,6 +149,58 @@ function handleClick() {
     emit('select', props.node);
   }
 }
+
+function handleContextMenu(event: MouseEvent) {
+  emit('context-menu', { event, node: props.node });
+}
+
+function handleDragStart(event: DragEvent) {
+  if (props.node.type === 'file' && event.dataTransfer) {
+    event.dataTransfer.setData('application/json', JSON.stringify({
+      id: props.node.id,
+      name: props.node.name,
+      path: props.node.path,
+      type: props.node.type,
+      fileType: props.node.fileType,
+    }));
+    event.dataTransfer.effectAllowed = 'move';
+    emit('drag-start', props.node);
+  }
+}
+
+function handleDragEnd() {
+  isDragOver.value = false;
+}
+
+function handleDragOver(event: DragEvent) {
+  // Only allow drop on directories
+  if (props.node.type === 'directory') {
+    isDragOver.value = true;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+}
+
+function handleDragLeave() {
+  isDragOver.value = false;
+}
+
+function handleDrop(event: DragEvent) {
+  isDragOver.value = false;
+  
+  if (props.node.type !== 'directory' || !event.dataTransfer) return;
+  
+  const data = event.dataTransfer.getData('application/json');
+  if (!data) return;
+  
+  try {
+    const sourceNode = JSON.parse(data) as FileTreeNodeType;
+    emit('drop', { sourceNode, targetNode: props.node });
+  } catch {
+    // Invalid data, ignore
+  }
+}
 </script>
 
 <style scoped>
@@ -160,6 +228,12 @@ function handleClick() {
 
 .node-row.selected:hover {
   background: var(--hn-teal-glow);
+}
+
+.node-row.drag-over {
+  background: var(--hn-teal-muted);
+  outline: 2px dashed var(--hn-teal);
+  outline-offset: -2px;
 }
 
 .chevron-icon {
