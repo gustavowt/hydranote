@@ -31,6 +31,8 @@
         @select-project="handleProjectSelect"
         @select-file="handleFileSelect"
         @create-project="showCreateProjectModal = true"
+        @delete-project="handleDeleteProject"
+        @file-created="handleFileCreatedFromSidebar"
       />
 
       <!-- Center: Markdown Editor -->
@@ -261,6 +263,32 @@ async function handleNoteSaved(result: GlobalAddNoteResult) {
 
 function handleContentChange(_content: string) {
   // Could be used for auto-save or draft saving
+}
+
+// Delete project handler
+function handleDeleteProject(projectId: string) {
+  // Remove from local projects list
+  projects.value = projects.value.filter(p => p.id !== projectId);
+  
+  // Clear selection if deleted project was selected
+  if (selectedProjectId.value === projectId) {
+    selectedProjectId.value = undefined;
+    currentProject.value = null;
+    currentFile.value = null;
+    selectedFileId.value = undefined;
+    editorInitialContent.value = '';
+    markdownEditorRef.value?.clearContent();
+  }
+}
+
+// Handle file created from sidebar
+async function handleFileCreatedFromSidebar(projectId: string, file: ProjectFile) {
+  // Select the project and file
+  selectedProjectId.value = projectId;
+  selectedFileId.value = file.id;
+  currentProject.value = await getProject(projectId) || null;
+  currentFile.value = file;
+  editorInitialContent.value = file.content || '';
 }
 
 // Create project handler
