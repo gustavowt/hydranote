@@ -359,6 +359,8 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   height: 100%;
   background: var(--hn-bg-deep);
   flex: 1;
+  min-width: 0; /* Allow flexbox to shrink below content width */
+  overflow: hidden;
 }
 
 /* Editor Header */
@@ -476,12 +478,14 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   overflow: hidden;
   display: flex;
   position: relative;
+  min-width: 0; /* Allow flexbox to shrink */
 }
 
 .editor-pane {
   flex: 1;
   overflow: hidden;
   display: flex;
+  min-width: 0; /* Allow flexbox to shrink */
 }
 
 .editor-pane.full {
@@ -491,7 +495,9 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 .preview-pane {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px 24px;
+  min-width: 0; /* Allow flexbox to shrink */
 }
 
 .preview-pane.full {
@@ -502,6 +508,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   display: flex;
   width: 100%;
   height: 100%;
+  min-width: 0; /* Allow flexbox to shrink */
 }
 
 .split-pane .editor-pane {
@@ -520,6 +527,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   line-height: 1.7;
   resize: none;
   outline: none;
+  overflow-x: auto; /* Scroll horizontally for wide content */
 }
 
 .markdown-textarea::placeholder {

@@ -77,6 +77,15 @@ You have access to the following tools to help answer user requests:
 - User wants to save a note, take notes, or add information to the project
 - Keywords: add note, take note, save note, criar nota, salvar nota, anotar, adicionar anotação, lembrete, remember this
 
+### 6. UPDATE FILE Tool
+**Purpose:** Update or modify a specific section of an existing Markdown or DOCX file.
+**When to use:**
+- User wants to edit, update, modify, or change part of an existing file
+- User wants to replace a section, insert content before/after a section
+- Keywords: update, edit, modify, change, replace, insert, add to, atualizar, editar, modificar
+**Supported files:** Markdown (.md) and DOCX files only
+**Operations:** replace (replace section), insert_before (add before), insert_after (add after)
+
 ## Tool Usage Examples
 
 **READ examples:**
@@ -105,6 +114,13 @@ You have access to the following tools to help answer user requests:
 - "Criar nota sobre a reunião de hoje" → uses ADD NOTE
 - "Take a note: need to review the contract" → uses ADD NOTE
 - "Anotar: verificar requisitos do projeto" → uses ADD NOTE
+
+**UPDATE FILE examples:**
+- "Update the introduction section in document.md" → uses UPDATE FILE with replace operation
+- "Add a conclusion to the report.md" → uses UPDATE FILE with insert_after operation
+- "Change the deadline section in project.docx" → uses UPDATE FILE with replace operation
+- "Insert a new paragraph before the Summary" → uses UPDATE FILE with insert_before operation
+- "Atualizar a seção de metodologia no documento" → uses UPDATE FILE
 
 ## Instructions
 - When answering questions, use the context provided below from the project documents.

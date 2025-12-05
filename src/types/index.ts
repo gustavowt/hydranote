@@ -155,7 +155,7 @@ export interface ChatSession {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile';
 
 /**
  * Tool definition for system prompt
@@ -730,4 +730,102 @@ export interface GlobalAddNoteResult {
     proposedProjectDescription?: string;
     reasoning?: string;
   };
+}
+
+// ============================================
+// UpdateFile Tool Types
+// ============================================
+
+/**
+ * Update operation type
+ */
+export type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
+
+/**
+ * Section identification method
+ */
+export type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
+
+/**
+ * UpdateFile tool input parameters
+ */
+export interface UpdateFileToolParams {
+  /** File ID to update */
+  fileId?: string;
+  /** File name to update */
+  fileName?: string;
+  /** Operation type: replace, insert_before, or insert_after */
+  operation: UpdateOperation;
+  /** Section identifier - can be a header name, exact text, or semantic description */
+  sectionIdentifier: string;
+  /** Method to identify the section */
+  identificationMethod?: SectionIdentificationMethod;
+  /** New content to insert or replace with */
+  newContent: string;
+}
+
+/**
+ * Diff line for preview
+ */
+export interface DiffLine {
+  /** Line type: added, removed, or unchanged */
+  type: 'added' | 'removed' | 'unchanged';
+  /** Line content */
+  content: string;
+  /** Original line number (for removed/unchanged) */
+  oldLineNumber?: number;
+  /** New line number (for added/unchanged) */
+  newLineNumber?: number;
+}
+
+/**
+ * Preview result for file update
+ */
+export interface UpdateFilePreview {
+  /** Unique preview ID for confirmation */
+  previewId: string;
+  /** Target file ID */
+  fileId: string;
+  /** Target file name */
+  fileName: string;
+  /** File type (md or docx) */
+  fileType: 'md' | 'docx';
+  /** Operation performed */
+  operation: UpdateOperation;
+  /** Section that was identified */
+  identifiedSection: string;
+  /** Original content of the affected section */
+  originalContent: string;
+  /** New content after update */
+  newContent: string;
+  /** Full original file content */
+  originalFullContent: string;
+  /** Full new file content after update */
+  newFullContent: string;
+  /** Diff lines for display */
+  diffLines: DiffLine[];
+  /** Whether the section was found */
+  sectionFound: boolean;
+  /** Confidence score for semantic matching (0-1) */
+  confidence?: number;
+  /** Creation timestamp */
+  createdAt: Date;
+}
+
+/**
+ * Result from applying a file update
+ */
+export interface UpdateFileResult {
+  /** Success indicator */
+  success: boolean;
+  /** Updated file ID */
+  fileId: string;
+  /** Updated file name */
+  fileName: string;
+  /** Operation performed */
+  operation: UpdateOperation;
+  /** Error message if failed */
+  error?: string;
+  /** Whether file was re-indexed */
+  reIndexed: boolean;
 }

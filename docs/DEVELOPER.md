@@ -120,6 +120,7 @@ Handles tool routing and execution.
 | `summarize` | Summarize documents | summarize, summary, tl;dr |
 | `write` | Generate documents (PDF/DOCX/MD) | write, create, generate |
 | `addNote` | Create and save notes | add note, save note, criar nota |
+| `updateFile` | Update sections in existing files | update, edit, modify, replace, insert |
 
 #### Router Prompt
 
@@ -225,6 +226,53 @@ interface AddNoteParams {
   };
 }
 ```
+
+### UpdateFile Tool
+
+Updates or modifies specific sections of existing Markdown or DOCX files.
+
+#### Parameters
+
+```typescript
+interface UpdateFileToolParams {
+  fileId?: string;
+  fileName?: string;
+  operation: 'replace' | 'insert_before' | 'insert_after';
+  sectionIdentifier: string;
+  identificationMethod?: 'header' | 'exact_match' | 'semantic';
+  newContent: string;
+}
+```
+
+#### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `replace` | Replace the identified section with new content |
+| `insert_before` | Insert new content before the identified section |
+| `insert_after` | Insert new content after the identified section |
+
+#### Section Identification Methods
+
+| Method | Description |
+|--------|-------------|
+| `header` | Match by markdown header (e.g., `## Section Name`) or DOCX heading |
+| `exact_match` | Find and replace exact text |
+| `semantic` | Use LLM to semantically locate the section |
+
+#### Preview Flow
+
+The tool uses a preview/confirmation flow:
+
+1. `executeUpdateFileTool` identifies the section and generates a preview
+2. Preview includes diff visualization (added/removed lines)
+3. User confirms or cancels the update
+4. On confirm, `applyFileUpdate` commits changes and re-indexes the file
+
+#### Supported File Types
+
+- Markdown (`.md`)
+- DOCX (`.docx`)
 
 ---
 
@@ -428,8 +476,10 @@ When AI suggests creating a new project:
 ```typescript
 type SupportedFileType = 'pdf' | 'txt' | 'docx' | 'md' | 'png' | 'jpg' | 'jpeg' | 'webp';
 type ProjectStatus = 'created' | 'indexing' | 'indexed' | 'error';
-type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote';
+type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile';
 type DocumentFormat = 'pdf' | 'docx' | 'md';
+type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
+type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
 ```
 
 ### Telemetry Types
@@ -491,11 +541,22 @@ const DEFAULT_CONTEXT_CONFIG = {
 ### Adding a New Tool
 
 1. Add tool name to `ToolName` type in `types/index.ts`
-2. Add router keywords in `ROUTER_PROMPT` in `toolService.ts`
-3. Implement `executeYourTool()` function
-4. Add case in `executeTool()` switch statement
-5. Update system prompt in `chatService.ts`
-6. Export from `services/index.ts`
+2. Add parameter/result types in `types/index.ts`
+3. Add router keywords in `ROUTER_PROMPT` in `toolService.ts`
+4. Implement `executeYourTool()` function in `toolService.ts`
+5. Add case in `executeTool()` switch statement
+6. Update system prompt in `chatService.ts`
+7. Export from `services/index.ts`
+8. Update `docs/DEVELOPER.md`
+
+#### Example: updateFile Tool
+
+The `updateFile` tool was added following this pattern:
+- Types: `UpdateFileToolParams`, `UpdateFilePreview`, `UpdateFileResult`, `DiffLine`
+- Router: Added keywords like "update", "edit", "modify", "replace", "insert"
+- Executor: `executeUpdateFileTool()` with section identification and preview generation
+- Helper: `applyFileUpdate()` for committing confirmed changes
+- UI: Preview component in `ChatSidebar.vue` with diff visualization
 
 ### Debugging Telemetry
 

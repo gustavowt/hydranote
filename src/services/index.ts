@@ -68,10 +68,15 @@ export {
   executeSummarizeTool,
   executeWriteTool,
   executeAddNoteTool,
+  executeUpdateFileTool,
   executeTool,
   executeToolCalls,
   formatToolResults,
   orchestrateToolExecution,
+  // UpdateFile tool helpers
+  getPendingPreview,
+  removePendingPreview,
+  applyFileUpdate,
 } from './toolService';
 
 // Export types from toolService

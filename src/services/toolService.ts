@@ -19,6 +19,11 @@ import type {
   GeneratedDocument,
   AddNoteParams,
   NoteContextMetadata,
+  UpdateFileToolParams,
+  UpdateFilePreview,
+  UpdateOperation,
+  DiffLine,
+  UpdateFileResult,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
 import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
@@ -54,6 +59,7 @@ Available tools:
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
 - write: Generate a new document (PDF, DOCX, or Markdown). Use when user wants to create, write, generate, or produce a formatted document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, write a report, create a document, make a summary document.
 - addNote: Create and save a new note in the project. Use when user wants to save a quick note, take notes, or add information to their project. The note will be automatically formatted and organized. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, adicionar anotação, lembrete, remember this, save this.
+- updateFile: Update or modify a specific section of an existing file (Markdown or DOCX only). Use when user wants to edit, update, modify, change, replace, or insert content in an existing file. Keywords: update, edit, modify, change, replace, insert, add to, atualizar, editar, modificar, alterar, substituir, inserir. Supports operations: replace (replace section content), insert_before (add content before section), insert_after (add content after section).
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -86,6 +92,15 @@ Single tool:
 - "Criar nota: reunião com cliente amanhã" → {"tools": [{"name": "addNote", "params": {"content": "reunião com cliente amanhã"}}]}
 - "Take a note about the requirements" → {"tools": [{"name": "addNote", "params": {"content": "Requirements discussion..."}}]}
 - "Anotar: precisamos revisar o contrato" → {"tools": [{"name": "addNote", "params": {"content": "precisamos revisar o contrato"}}]}
+
+UpdateFile tool (editing existing files - Markdown/DOCX only):
+- "Update the introduction section in document.md" → {"tools": [{"name": "updateFile", "params": {"file": "document.md", "section": "introduction", "operation": "replace", "newContent": "..."}}]}
+- "Add a conclusion to the report.md" → {"tools": [{"name": "updateFile", "params": {"file": "report.md", "section": "end", "operation": "insert_after", "newContent": "..."}}]}
+- "Replace the 'Requirements' section with new text" → {"tools": [{"name": "updateFile", "params": {"file": "...", "section": "Requirements", "operation": "replace"}}]}
+- "Insert a new paragraph before the Summary in notes.md" → {"tools": [{"name": "updateFile", "params": {"file": "notes.md", "section": "Summary", "operation": "insert_before"}}]}
+- "Atualizar a seção de metodologia no documento" → {"tools": [{"name": "updateFile", "params": {"file": "documento.md", "section": "metodologia", "operation": "replace"}}]}
+- "Modificar o parágrafo sobre prazos" → {"tools": [{"name": "updateFile", "params": {"file": "...", "section": "prazos", "operation": "replace"}}]}
+- "Change the deadline information in project.docx" → {"tools": [{"name": "updateFile", "params": {"file": "project.docx", "section": "deadline", "operation": "replace"}}]}
 
 Multiple tools (complex queries):
 - "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
@@ -856,6 +871,617 @@ export async function executeAddNoteTool(
 }
 
 // ============================================
+// UpdateFile Tool Implementation
+// ============================================
+
+// Store for pending file update previews
+const pendingPreviews = new Map<string, UpdateFilePreview>();
+
+/**
+ * Section identification prompt for LLM
+ */
+const SECTION_IDENTIFICATION_PROMPT = `You are a document section identifier. Given a document and a section description, identify the exact section to modify.
+
+Your task:
+1. Analyze the document structure (headings, paragraphs, sections)
+2. Find the section that best matches the user's description
+3. Return the exact text boundaries of that section
+
+Response format (JSON only):
+{
+  "found": true/false,
+  "sectionStart": "exact text where section starts (first 50 chars)",
+  "sectionEnd": "exact text where section ends (last 50 chars)", 
+  "sectionContent": "the full content of the identified section",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation of why this section was chosen"
+}
+
+If the section is not found, return:
+{
+  "found": false,
+  "confidence": 0,
+  "reasoning": "explanation of why section was not found"
+}`;
+
+/**
+ * Generate diff lines between original and new content
+ */
+function generateDiffLines(original: string, updated: string): DiffLine[] {
+  const originalLines = original.split('\n');
+  const updatedLines = updated.split('\n');
+  const diffLines: DiffLine[] = [];
+
+  // Simple line-by-line diff
+  const maxLines = Math.max(originalLines.length, updatedLines.length);
+  let oldLineNum = 1;
+  let newLineNum = 1;
+
+  // Find common prefix
+  let commonPrefixEnd = 0;
+  while (
+    commonPrefixEnd < originalLines.length &&
+    commonPrefixEnd < updatedLines.length &&
+    originalLines[commonPrefixEnd] === updatedLines[commonPrefixEnd]
+  ) {
+    diffLines.push({
+      type: 'unchanged',
+      content: originalLines[commonPrefixEnd],
+      oldLineNumber: oldLineNum++,
+      newLineNumber: newLineNum++,
+    });
+    commonPrefixEnd++;
+  }
+
+  // Find common suffix
+  let commonSuffixStart = 0;
+  while (
+    commonSuffixStart < originalLines.length - commonPrefixEnd &&
+    commonSuffixStart < updatedLines.length - commonPrefixEnd &&
+    originalLines[originalLines.length - 1 - commonSuffixStart] ===
+      updatedLines[updatedLines.length - 1 - commonSuffixStart]
+  ) {
+    commonSuffixStart++;
+  }
+
+  // Add removed lines
+  for (let i = commonPrefixEnd; i < originalLines.length - commonSuffixStart; i++) {
+    diffLines.push({
+      type: 'removed',
+      content: originalLines[i],
+      oldLineNumber: oldLineNum++,
+    });
+  }
+
+  // Add added lines
+  for (let i = commonPrefixEnd; i < updatedLines.length - commonSuffixStart; i++) {
+    diffLines.push({
+      type: 'added',
+      content: updatedLines[i],
+      newLineNumber: newLineNum++,
+    });
+  }
+
+  // Add common suffix
+  for (let i = originalLines.length - commonSuffixStart; i < originalLines.length; i++) {
+    diffLines.push({
+      type: 'unchanged',
+      content: originalLines[i],
+      oldLineNumber: oldLineNum++,
+      newLineNumber: newLineNum++,
+    });
+  }
+
+  return diffLines;
+}
+
+/**
+ * Identify section in document using LLM
+ */
+async function identifySection(
+  content: string,
+  sectionIdentifier: string,
+  identificationMethod?: string
+): Promise<{
+  found: boolean;
+  sectionContent: string;
+  sectionStart: number;
+  sectionEnd: number;
+  confidence: number;
+  reasoning?: string;
+}> {
+  // Try header-based identification first for markdown
+  if (!identificationMethod || identificationMethod === 'header') {
+    const headerPattern = new RegExp(
+      `^(#{1,6})\\s*${escapeRegex(sectionIdentifier)}\\s*$`,
+      'im'
+    );
+    const headerMatch = content.match(headerPattern);
+
+    if (headerMatch) {
+      const headerLevel = headerMatch[1].length;
+      const startIndex = headerMatch.index!;
+      
+      // Find the end of this section (next header of same or higher level, or end of file)
+      const afterHeader = content.slice(startIndex + headerMatch[0].length);
+      const nextHeaderPattern = new RegExp(`^#{1,${headerLevel}}\\s+`, 'm');
+      const nextHeaderMatch = afterHeader.match(nextHeaderPattern);
+      
+      const endIndex = nextHeaderMatch
+        ? startIndex + headerMatch[0].length + nextHeaderMatch.index!
+        : content.length;
+
+      return {
+        found: true,
+        sectionContent: content.slice(startIndex, endIndex).trim(),
+        sectionStart: startIndex,
+        sectionEnd: endIndex,
+        confidence: 1.0,
+        reasoning: `Found header matching "${sectionIdentifier}"`,
+      };
+    }
+  }
+
+  // Try exact match
+  if (!identificationMethod || identificationMethod === 'exact_match') {
+    const exactIndex = content.indexOf(sectionIdentifier);
+    if (exactIndex !== -1) {
+      return {
+        found: true,
+        sectionContent: sectionIdentifier,
+        sectionStart: exactIndex,
+        sectionEnd: exactIndex + sectionIdentifier.length,
+        confidence: 1.0,
+        reasoning: 'Exact text match found',
+      };
+    }
+  }
+
+  // Fall back to semantic identification using LLM
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: SECTION_IDENTIFICATION_PROMPT },
+      {
+        role: 'user',
+        content: `Document:\n\n${content}\n\n---\n\nSection to find: "${sectionIdentifier}"`,
+      },
+    ],
+    temperature: 0,
+    maxTokens: 1000,
+  });
+
+  try {
+    let jsonStr = response.content.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+
+    const result = JSON.parse(jsonStr);
+
+    if (!result.found) {
+      return {
+        found: false,
+        sectionContent: '',
+        sectionStart: -1,
+        sectionEnd: -1,
+        confidence: 0,
+        reasoning: result.reasoning,
+      };
+    }
+
+    // Find the section in the original content
+    const sectionIndex = content.indexOf(result.sectionContent);
+    if (sectionIndex === -1) {
+      // Try to find by start marker
+      const startIndex = content.indexOf(result.sectionStart);
+      if (startIndex !== -1) {
+        const endIndex = content.indexOf(result.sectionEnd, startIndex);
+        if (endIndex !== -1) {
+          return {
+            found: true,
+            sectionContent: content.slice(startIndex, endIndex + result.sectionEnd.length),
+            sectionStart: startIndex,
+            sectionEnd: endIndex + result.sectionEnd.length,
+            confidence: result.confidence || 0.8,
+            reasoning: result.reasoning,
+          };
+        }
+      }
+
+      return {
+        found: false,
+        sectionContent: '',
+        sectionStart: -1,
+        sectionEnd: -1,
+        confidence: 0,
+        reasoning: 'Could not locate section boundaries in document',
+      };
+    }
+
+    return {
+      found: true,
+      sectionContent: result.sectionContent,
+      sectionStart: sectionIndex,
+      sectionEnd: sectionIndex + result.sectionContent.length,
+      confidence: result.confidence || 0.8,
+      reasoning: result.reasoning,
+    };
+  } catch {
+    return {
+      found: false,
+      sectionContent: '',
+      sectionStart: -1,
+      sectionEnd: -1,
+      confidence: 0,
+      reasoning: 'Failed to parse section identification response',
+    };
+  }
+}
+
+/**
+ * Escape special regex characters
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Apply update operation to content
+ */
+function applyUpdateOperation(
+  originalContent: string,
+  sectionStart: number,
+  sectionEnd: number,
+  newContent: string,
+  operation: UpdateOperation
+): string {
+  switch (operation) {
+    case 'replace':
+      return (
+        originalContent.slice(0, sectionStart) +
+        newContent +
+        originalContent.slice(sectionEnd)
+      );
+
+    case 'insert_before':
+      return (
+        originalContent.slice(0, sectionStart) +
+        newContent +
+        '\n\n' +
+        originalContent.slice(sectionStart)
+      );
+
+    case 'insert_after':
+      return (
+        originalContent.slice(0, sectionEnd) +
+        '\n\n' +
+        newContent +
+        originalContent.slice(sectionEnd)
+      );
+
+    default:
+      return originalContent;
+  }
+}
+
+/**
+ * Execute the updateFile tool
+ * Creates a preview of changes without applying them
+ */
+export async function executeUpdateFileTool(
+  projectId: string,
+  params: UpdateFileToolParams,
+  userMessage?: string
+): Promise<ToolResult & { preview?: UpdateFilePreview }> {
+  try {
+    // Find the file
+    const file = await findFile(projectId, {
+      fileId: params.fileId,
+      fileName: params.fileName,
+    });
+
+    if (!file) {
+      return {
+        success: false,
+        tool: 'updateFile',
+        error: `File not found: ${params.fileName || params.fileId || 'No file specified'}`,
+      };
+    }
+
+    // Validate file type (only MD and DOCX supported)
+    if (file.type !== 'md' && file.type !== 'docx') {
+      return {
+        success: false,
+        tool: 'updateFile',
+        error: `UpdateFile only supports Markdown (.md) and DOCX files. "${file.name}" is a ${file.type} file.`,
+      };
+    }
+
+    // Get file content
+    let content = file.content || '';
+    if (!content) {
+      const chunks = await get_file_chunks(file.id);
+      if (chunks.length === 0) {
+        return {
+          success: false,
+          tool: 'updateFile',
+          error: `File "${file.name}" has no content indexed yet.`,
+        };
+      }
+      content = stitchChunks(chunks);
+    }
+
+    // Identify the section to update
+    const sectionResult = await identifySection(
+      content,
+      params.sectionIdentifier,
+      params.identificationMethod
+    );
+
+    if (!sectionResult.found) {
+      return {
+        success: false,
+        tool: 'updateFile',
+        error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ''}`,
+      };
+    }
+
+    // Generate new content if not provided (use LLM to generate based on user message)
+    let newContent = params.newContent;
+    if (!newContent && userMessage) {
+      // Get surrounding context from the document
+      const contextStart = Math.max(0, sectionResult.sectionStart - 500);
+      const contextEnd = Math.min(content.length, sectionResult.sectionEnd + 500);
+      const surroundingContext = content.slice(contextStart, contextEnd);
+      
+      const operationDescription = params.operation === 'replace' 
+        ? 'replace the following section with improved/updated content'
+        : params.operation === 'insert_before' 
+          ? 'create new content to insert BEFORE the following section'
+          : 'create new content to insert AFTER the following section';
+      
+      const generateResponse = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: `You are a professional content writer. Your task is to ${operationDescription} in a document.
+
+DOCUMENT: "${file.name}"
+
+SURROUNDING CONTEXT (for reference):
+---
+${surroundingContext}
+---
+
+SECTION TO ${params.operation.toUpperCase()}:
+---
+${sectionResult.sectionContent}
+---
+
+IMPORTANT INSTRUCTIONS:
+1. Generate ACTUAL, SUBSTANTIVE content - not placeholders or descriptions
+2. Match the style and tone of the existing document
+3. If asked for "more detail" or "expanded" content, write real detailed paragraphs with specific information
+4. Keep the same markdown formatting style (headers, lists, etc.)
+5. Output ONLY the new content - no explanations, no "Here is..." prefix
+6. The content should be ready to insert directly into the document`,
+          },
+          { role: 'user', content: `User request: ${userMessage}` },
+        ],
+        temperature: 0.7,
+        maxTokens: 3000,
+      });
+      newContent = generateResponse.content;
+    }
+
+    if (!newContent) {
+      return {
+        success: false,
+        tool: 'updateFile',
+        error: 'No new content provided for the update operation.',
+      };
+    }
+
+    // Apply the update operation to generate preview
+    const newFullContent = applyUpdateOperation(
+      content,
+      sectionResult.sectionStart,
+      sectionResult.sectionEnd,
+      newContent,
+      params.operation
+    );
+
+    // Generate diff
+    const diffLines = generateDiffLines(content, newFullContent);
+
+    // Create preview
+    const previewId = crypto.randomUUID();
+    const preview: UpdateFilePreview = {
+      previewId,
+      fileId: file.id,
+      fileName: file.name,
+      fileType: file.type as 'md' | 'docx',
+      operation: params.operation,
+      identifiedSection: sectionResult.sectionContent,
+      originalContent: sectionResult.sectionContent,
+      newContent,
+      originalFullContent: content,
+      newFullContent,
+      diffLines,
+      sectionFound: true,
+      confidence: sectionResult.confidence,
+      createdAt: new Date(),
+    };
+
+    // Store preview for later confirmation
+    pendingPreviews.set(previewId, preview);
+
+    // Format diff for display
+    const diffDisplay = diffLines
+      .filter((line) => line.type !== 'unchanged')
+      .slice(0, 20) // Limit display
+      .map((line) => {
+        const prefix = line.type === 'added' ? '+' : '-';
+        return `${prefix} ${line.content}`;
+      })
+      .join('\n');
+
+    const truncatedNote =
+      diffLines.filter((l) => l.type !== 'unchanged').length > 20
+        ? '\n\n_[Diff truncated - showing first 20 changes]_'
+        : '';
+
+    return {
+      success: true,
+      tool: 'updateFile',
+      data: `**Preview of changes to "${file.name}"**
+
+**Operation:** ${params.operation}
+**Section:** ${params.sectionIdentifier}
+**Confidence:** ${(sectionResult.confidence * 100).toFixed(0)}%
+
+\`\`\`diff
+${diffDisplay}
+\`\`\`${truncatedNote}
+
+To apply these changes, confirm the update. To cancel, dismiss this preview.`,
+      metadata: {
+        fileName: file.name,
+        fileId: file.id,
+        truncated: false,
+      },
+      preview,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'updateFile',
+      error: error instanceof Error ? error.message : 'Failed to prepare file update',
+    };
+  }
+}
+
+/**
+ * Get a pending preview by ID
+ */
+export function getPendingPreview(previewId: string): UpdateFilePreview | undefined {
+  return pendingPreviews.get(previewId);
+}
+
+/**
+ * Remove a pending preview (after apply or cancel)
+ */
+export function removePendingPreview(previewId: string): void {
+  pendingPreviews.delete(previewId);
+}
+
+/**
+ * Apply a file update from a confirmed preview
+ * Commits changes to the database and re-indexes the file
+ */
+export async function applyFileUpdate(previewId: string): Promise<UpdateFileResult> {
+  const preview = pendingPreviews.get(previewId);
+
+  if (!preview) {
+    return {
+      success: false,
+      fileId: '',
+      fileName: '',
+      operation: 'replace',
+      error: 'Preview not found or expired. Please try the update again.',
+      reIndexed: false,
+    };
+  }
+
+  try {
+    const { getConnection, flushDatabase } = await import('./database');
+    const { chunkText, chunkMarkdownText } = await import('./documentProcessor');
+    const { generateEmbeddingsForChunks } = await import('./embeddingService');
+
+    const conn = getConnection();
+
+    // Get the file to retrieve projectId
+    const file = await getFile(preview.fileId);
+    if (!file) {
+      return {
+        success: false,
+        fileId: preview.fileId,
+        fileName: preview.fileName,
+        operation: preview.operation,
+        error: 'File no longer exists.',
+        reIndexed: false,
+      };
+    }
+
+    // Update file content in database
+    const escapedContent = preview.newFullContent.replace(/'/g, "''");
+    await conn.query(`
+      UPDATE files 
+      SET content = '${escapedContent}', 
+          size = ${preview.newFullContent.length},
+          updated_at = CURRENT_TIMESTAMP 
+      WHERE id = '${preview.fileId}'
+    `);
+
+    // Delete old chunks and embeddings
+    await conn.query(`
+      DELETE FROM embeddings WHERE file_id = '${preview.fileId}'
+    `);
+    await conn.query(`
+      DELETE FROM chunks WHERE file_id = '${preview.fileId}'
+    `);
+
+    // Re-chunk the document
+    const chunks = preview.fileType === 'md'
+      ? chunkMarkdownText(preview.newFullContent, preview.fileId, file.projectId)
+      : chunkText(preview.newFullContent, preview.fileId, file.projectId);
+
+    // Store new chunks
+    for (const chunk of chunks) {
+      const escapedText = chunk.text.replace(/'/g, "''");
+      await conn.query(`
+        INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
+        VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
+      `);
+    }
+
+    // Generate and store new embeddings
+    const embeddings = await generateEmbeddingsForChunks(chunks);
+    for (const embedding of embeddings) {
+      const vectorStr = `[${embedding.vector.join(', ')}]`;
+      await conn.query(`
+        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
+        VALUES ('${embedding.id}', '${embedding.chunkId}', '${embedding.fileId}', '${embedding.projectId}', ${vectorStr}::DOUBLE[], '${embedding.createdAt.toISOString()}')
+      `);
+    }
+
+    // Flush to persist changes
+    await flushDatabase();
+
+    // Clean up the preview
+    pendingPreviews.delete(previewId);
+
+    return {
+      success: true,
+      fileId: preview.fileId,
+      fileName: preview.fileName,
+      operation: preview.operation,
+      reIndexed: true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      fileId: preview.fileId,
+      fileName: preview.fileName,
+      operation: preview.operation,
+      error: error instanceof Error ? error.message : 'Failed to apply file update',
+      reIndexed: false,
+    };
+  }
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -901,6 +1527,15 @@ export async function executeTool(
         topic: call.params.topic,
         tags: call.params.tags,
       });
+
+    case 'updateFile':
+      return executeUpdateFileTool(projectId, {
+        fileId: call.params.fileId || call.params.file_id,
+        fileName: call.params.fileName || call.params.file || call.params.name,
+        operation: (call.params.operation as UpdateOperation) || 'replace',
+        sectionIdentifier: call.params.section || call.params.sectionIdentifier || '',
+        newContent: call.params.newContent || call.params.content || '',
+      }, userMessage);
 
     default:
       return {

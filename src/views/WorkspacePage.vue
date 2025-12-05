@@ -50,6 +50,7 @@
         :projects="projects"
         :initial-project-id="selectedProjectId"
         @project-change="handleChatProjectChange"
+        @file-updated="handleFileUpdated"
       />
     </div>
 
@@ -191,6 +192,32 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
 
 function handleChatProjectChange(projectId: string) {
   selectedProjectId.value = projectId;
+}
+
+// Handle file updated from chat (updateFile tool)
+async function handleFileUpdated(fileId: string, _fileName: string) {
+  // If the updated file is currently open in the editor, refresh it
+  if (currentFile.value && currentFile.value.id === fileId && selectedProjectId.value) {
+    const files = await get_project_files(selectedProjectId.value);
+    const updatedFile = files.find(f => f.id === fileId);
+    
+    if (updatedFile) {
+      currentFile.value = updatedFile;
+      editorInitialContent.value = updatedFile.content || '';
+      markdownEditorRef.value?.setContent(updatedFile.content || '');
+      
+      const toast = await toastController.create({
+        message: 'File refreshed with latest changes',
+        duration: 2000,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  }
+  
+  // Also refresh the file tree to update any metadata
+  await projectsTreeRef.value?.refresh();
 }
 
 // New Note handler

@@ -99,6 +99,65 @@
               </div>
             </div>
           </div>
+
+          <!-- Update File Preview -->
+          <div v-if="activePreview" class="update-preview">
+            <div class="preview-header">
+              <ion-icon :icon="createOutline" class="preview-icon" />
+              <div class="preview-title">
+                <span class="preview-label">File Update Preview</span>
+                <span class="preview-filename">{{ activePreview.fileName }}</span>
+              </div>
+            </div>
+            
+            <div class="preview-info">
+              <span class="info-item">
+                <strong>Operation:</strong> {{ activePreview.operation }}
+              </span>
+              <span v-if="activePreview.confidence" class="info-item">
+                <strong>Confidence:</strong> {{ Math.round(activePreview.confidence * 100) }}%
+              </span>
+            </div>
+
+            <div class="diff-container">
+              <div class="diff-header">Changes</div>
+              <div class="diff-content">
+                <div 
+                  v-for="(line, index) in activePreview.diffLines.slice(0, 30)" 
+                  :key="index"
+                  :class="['diff-line', getDiffLineClass(line.type)]"
+                >
+                  <span class="diff-prefix">{{ getDiffLinePrefix(line.type) }}</span>
+                  <span class="diff-text">{{ line.content || ' ' }}</span>
+                </div>
+                <div v-if="activePreview.diffLines.length > 30" class="diff-truncated">
+                  ... {{ activePreview.diffLines.length - 30 }} more lines
+                </div>
+              </div>
+            </div>
+
+            <div class="preview-actions">
+              <ion-button
+                fill="outline"
+                size="small"
+                color="medium"
+                :disabled="isApplyingUpdate"
+                @click="handleCancelUpdate"
+              >
+                <ion-icon slot="start" :icon="closeOutline" />
+                Cancel
+              </ion-button>
+              <ion-button
+                size="small"
+                color="success"
+                :disabled="isApplyingUpdate"
+                @click="handleApplyUpdate"
+              >
+                <ion-icon slot="start" :icon="checkmarkOutline" />
+                {{ isApplyingUpdate ? 'Applying...' : 'Apply Changes' }}
+              </ion-button>
+            </div>
+          </div>
         </template>
       </div>
 
@@ -161,8 +220,11 @@ import {
   searchOutline,
   bookOutline,
   documentTextOutline,
+  checkmarkOutline,
+  closeOutline,
+  createOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, SupportedFileType } from '@/types';
+import type { Project, ChatMessage, SupportedFileType, UpdateFilePreview, DiffLine } from '@/types';
 import {
   getOrCreateSession,
   addMessage,
@@ -171,6 +233,8 @@ import {
   isConfigured,
   orchestrateToolExecution,
   get_project_files,
+  applyFileUpdate,
+  removePendingPreview,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
 
@@ -184,6 +248,7 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   (e: 'project-change', projectId: string): void;
   (e: 'collapse-change', collapsed: boolean): void;
+  (e: 'file-updated', fileId: string, fileName: string): void;
 }>();
 
 // Configure marked with highlight.js
@@ -222,6 +287,10 @@ const showAutocomplete = ref(false);
 const autocompleteQuery = ref('');
 const autocompleteStartIndex = ref(-1);
 const autocompleteAnchorRect = ref<DOMRect | null>(null);
+
+// Update file preview state
+const activePreview = ref<UpdateFilePreview | null>(null);
+const isApplyingUpdate = ref(false);
 
 const quickActions = [
   { text: 'What documents do I have?', label: 'List files', icon: documentTextOutline },
@@ -295,6 +364,17 @@ async function sendMessage(text?: string) {
       projectFileNames,
       () => {} // Skip execution step updates for sidebar
     );
+
+    // Check if there's an updateFile preview in the results
+    const updateFileResult = result.toolResults.find(
+      (r) => r.tool === 'updateFile' && r.success && (r as { preview?: UpdateFilePreview }).preview
+    );
+    if (updateFileResult) {
+      const preview = (updateFileResult as { preview?: UpdateFilePreview }).preview;
+      if (preview) {
+        activePreview.value = preview;
+      }
+    }
 
     if (result.responses && result.responses.length > 1) {
       for (const response of result.responses) {
@@ -400,6 +480,87 @@ function closeAutocomplete() {
   autocompleteQuery.value = '';
   autocompleteStartIndex.value = -1;
   autocompleteAnchorRect.value = null;
+}
+
+// Update file preview handlers
+async function handleApplyUpdate() {
+  if (!activePreview.value) return;
+  
+  const previewFileId = activePreview.value.fileId;
+  const previewFileName = activePreview.value.fileName;
+  
+  isApplyingUpdate.value = true;
+  
+  try {
+    const result = await applyFileUpdate(activePreview.value.previewId);
+    
+    if (result.success) {
+      const successMessage = addMessage(
+        sessionId.value,
+        'assistant',
+        `File "${result.fileName}" has been updated successfully. The file has been re-indexed.`
+      );
+      messages.value = [...messages.value, successMessage];
+      
+      // Emit event to refresh the file in the editor if it's currently open
+      emit('file-updated', previewFileId, previewFileName);
+    } else {
+      const errorMessage = addMessage(
+        sessionId.value,
+        'assistant',
+        `Failed to update file: ${result.error}`
+      );
+      messages.value = [...messages.value, errorMessage];
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = addMessage(
+      sessionId.value,
+      'assistant',
+      `Failed to apply update: ${errorMsg}`
+    );
+    messages.value = [...messages.value, errorMessage];
+  } finally {
+    activePreview.value = null;
+    isApplyingUpdate.value = false;
+    await scrollToBottom();
+  }
+}
+
+function handleCancelUpdate() {
+  if (activePreview.value) {
+    removePendingPreview(activePreview.value.previewId);
+    const cancelMessage = addMessage(
+      sessionId.value,
+      'assistant',
+      'Update cancelled. No changes were made to the file.'
+    );
+    messages.value = [...messages.value, cancelMessage];
+  }
+  activePreview.value = null;
+  scrollToBottom();
+}
+
+function getDiffLineClass(type: DiffLine['type']): string {
+  switch (type) {
+    case 'added':
+      return 'diff-added';
+    case 'removed':
+      return 'diff-removed';
+    default:
+      return 'diff-unchanged';
+  }
+}
+
+function getDiffLinePrefix(type: DiffLine['type']): string {
+  switch (type) {
+    case 'added':
+      return '+';
+    case 'removed':
+      return '-';
+    default:
+      return ' ';
+  }
 }
 
 async function scrollToBottom() {
@@ -833,5 +994,157 @@ defineExpose({ selectProject });
 
 .chat-content::-webkit-scrollbar-thumb:hover {
   background: var(--hn-border-strong);
+}
+
+/* Update Preview Styles */
+.update-preview {
+  margin: 12px 0;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-strong);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--hn-purple), var(--hn-green));
+  color: #ffffff;
+}
+
+.preview-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.preview-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preview-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.9;
+}
+
+.preview-filename {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.preview-info {
+  display: flex;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-default);
+  font-size: 0.8rem;
+  color: var(--hn-text-secondary);
+}
+
+.info-item strong {
+  color: var(--hn-text-primary);
+}
+
+.diff-container {
+  max-height: 250px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-header {
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-deep);
+  border-bottom: 1px solid var(--hn-border-default);
+}
+
+.diff-content {
+  overflow-y: auto;
+  max-height: 200px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: flex;
+  padding: 2px 14px;
+  border-left: 3px solid transparent;
+}
+
+.diff-line.diff-added {
+  background: rgba(0, 200, 83, 0.15);
+  border-left-color: var(--hn-green);
+  color: #66d9a0;
+}
+
+.diff-line.diff-removed {
+  background: rgba(255, 82, 82, 0.15);
+  border-left-color: #ff5252;
+  color: #ff8a8a;
+}
+
+.diff-line.diff-unchanged {
+  color: var(--hn-text-secondary);
+}
+
+.diff-prefix {
+  width: 14px;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.diff-text {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-truncated {
+  padding: 8px 14px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--hn-text-muted);
+  font-style: italic;
+  background: var(--hn-bg-deep);
+}
+
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--hn-bg-surface);
+  border-top: 1px solid var(--hn-border-default);
+}
+
+.preview-actions ion-button {
+  --border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* Diff scrollbar */
+.diff-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.diff-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.diff-content::-webkit-scrollbar-thumb {
+  background: var(--hn-border-default);
+  border-radius: 3px;
 }
 </style>
