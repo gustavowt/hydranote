@@ -1,5 +1,10 @@
 <template>
-  <div class="file-tree-sidebar" :class="{ collapsed: isCollapsed }">
+  <div 
+    class="file-tree-sidebar" 
+    :class="{ collapsed: isCollapsed }"
+    @dragover.prevent="handleRootDragOver"
+    @drop.prevent="handleRootDrop"
+  >
     <!-- Collapsed Vertical Tab -->
     <div v-if="isCollapsed" class="collapsed-tab" @click="toggleCollapse">
       <ion-icon :icon="folderOutline" />
@@ -49,25 +54,41 @@
             :selected-file-id="selectedFileId"
             @select="handleNodeSelect"
             @toggle="handleNodeToggle"
+            @context-menu="handleContextMenu"
+            @drag-start="handleDragStart"
+            @drop="handleNodeDrop"
           />
         </div>
       </div>
     </template>
+
+    <!-- Context Menu -->
+    <FileTreeContextMenu
+      :is-open="contextMenu.isOpen"
+      :event="contextMenu.event"
+      :target-type="contextMenu.targetType"
+      :target-id="contextMenu.targetId"
+      :target-name="contextMenu.targetName"
+      :project-id="projectId"
+      @close="closeContextMenu"
+      @action="handleContextMenuAction"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
-import { IonIcon, IonButton, IonSpinner } from '@ionic/vue';
+import { ref, watch, onMounted, reactive } from 'vue';
+import { IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
 import {
   folderOutline,
   documentOutline,
   chevronForwardOutline,
   chevronBackOutline,
 } from 'ionicons/icons';
-import type { ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile } from '@/types';
-import { getProjectFileTree } from '@/services';
+import type { ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
+import { getProjectFileTree, deleteFile, moveFile, createEmptyMarkdownFile } from '@/services';
 import FileTreeNode from './FileTreeNode.vue';
+import FileTreeContextMenu from './FileTreeContextMenu.vue';
 
 interface Props {
   projectId: string;
@@ -79,11 +100,23 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   (e: 'select-file', file: { id: string; path: string; type: string }): void;
   (e: 'collapse-change', collapsed: boolean): void;
+  (e: 'file-created', file: ProjectFile): void;
+  (e: 'files-changed'): void;
 }>();
 
 const loading = ref(true);
 const fileTree = ref<ProjectFileTree | null>(null);
 const isCollapsed = ref(false);
+const draggingNode = ref<FileTreeNodeType | null>(null);
+
+// Context menu state
+const contextMenu = reactive({
+  isOpen: false,
+  event: null as MouseEvent | null,
+  targetType: 'file' as ContextMenuTargetType,
+  targetId: '',
+  targetName: '',
+});
 
 onMounted(async () => {
   await loadFileTree();
@@ -141,6 +174,218 @@ function toggleNodeExpanded(nodes: FileTreeNodeType[], targetId: string): boolea
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value;
   emit('collapse-change', isCollapsed.value);
+}
+
+// ============================================
+// Context Menu Handlers
+// ============================================
+
+function handleContextMenu(payload: ContextMenuEvent) {
+  contextMenu.isOpen = true;
+  contextMenu.event = payload.event;
+  contextMenu.targetType = payload.node.type === 'directory' ? 'directory' : 'file';
+  contextMenu.targetId = payload.node.id;
+  contextMenu.targetName = payload.node.name;
+}
+
+function closeContextMenu() {
+  contextMenu.isOpen = false;
+  contextMenu.event = null;
+}
+
+async function handleContextMenuAction(action: ContextMenuAction, targetId: string, targetName: string) {
+  switch (action) {
+    case 'new-file':
+      await promptCreateFile(targetId, targetName);
+      break;
+    case 'delete-file':
+      await confirmDeleteFile(targetId, targetName);
+      break;
+    case 'delete-directory':
+      await confirmDeleteDirectory(targetId, targetName);
+      break;
+  }
+}
+
+async function promptCreateFile(directoryId: string, directoryName: string) {
+  const alert = await alertController.create({
+    header: 'New File',
+    message: `Create a new markdown file${directoryName ? ` in ${directoryName}` : ''}`,
+    inputs: [
+      {
+        name: 'fileName',
+        type: 'text',
+        placeholder: 'File name (e.g., my-note)',
+      },
+    ],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Create',
+        handler: async (data) => {
+          if (data.fileName?.trim()) {
+            await createFile(data.fileName.trim(), directoryId.startsWith('dir:') ? directoryId.replace('dir:', '') : undefined);
+          }
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function createFile(fileName: string, directory?: string) {
+  try {
+    const file = await createEmptyMarkdownFile(props.projectId, fileName, directory);
+    await loadFileTree();
+    emit('file-created', file);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to create file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+async function confirmDeleteFile(fileId: string, fileName: string) {
+  const alert = await alertController.create({
+    header: 'Delete File',
+    message: `Are you sure you want to delete "${fileName}"? This action cannot be undone.`,
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete',
+        role: 'destructive',
+        handler: async () => {
+          await performDeleteFile(fileId);
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function performDeleteFile(fileId: string) {
+  try {
+    await deleteFile(fileId);
+    await loadFileTree();
+    emit('files-changed');
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+async function confirmDeleteDirectory(directoryId: string, directoryName: string) {
+  // Get all files in this directory
+  const directoryPath = directoryId.replace('dir:', '');
+  const filesInDirectory = findFilesInDirectory(fileTree.value?.nodes || [], directoryPath);
+  
+  if (filesInDirectory.length === 0) {
+    const alert = await alertController.create({
+      header: 'Empty Directory',
+      message: `"${directoryName}" is empty. Nothing to delete.`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+    return;
+  }
+  
+  const alert = await alertController.create({
+    header: 'Delete Directory',
+    message: `Are you sure you want to delete "${directoryName}" and all ${filesInDirectory.length} file(s) inside? This action cannot be undone.`,
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete All',
+        role: 'destructive',
+        handler: async () => {
+          for (const fileId of filesInDirectory) {
+            await deleteFile(fileId);
+          }
+          await loadFileTree();
+          emit('files-changed');
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+function findFilesInDirectory(nodes: FileTreeNodeType[], directoryPath: string): string[] {
+  const fileIds: string[] = [];
+  
+  for (const node of nodes) {
+    if (node.type === 'file' && node.path.startsWith(directoryPath + '/')) {
+      fileIds.push(node.id);
+    }
+    if (node.children) {
+      fileIds.push(...findFilesInDirectory(node.children, directoryPath));
+    }
+  }
+  
+  return fileIds;
+}
+
+// ============================================
+// Drag and Drop Handlers
+// ============================================
+
+function handleDragStart(node: FileTreeNodeType) {
+  draggingNode.value = node;
+}
+
+async function handleNodeDrop(payload: DragDropEvent) {
+  if (!payload.sourceNode || payload.sourceNode.type !== 'file') return;
+  
+  const targetDirectory = payload.targetNode.path;
+  
+  try {
+    await moveFile(payload.sourceNode.id, props.projectId, targetDirectory);
+    await loadFileTree();
+    emit('files-changed');
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+  
+  draggingNode.value = null;
+}
+
+function handleRootDragOver(event: DragEvent) {
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+}
+
+async function handleRootDrop(event: DragEvent) {
+  if (!event.dataTransfer) return;
+  
+  const data = event.dataTransfer.getData('application/json');
+  if (!data) return;
+  
+  try {
+    const sourceNode = JSON.parse(data) as FileTreeNodeType;
+    if (sourceNode.type !== 'file') return;
+    
+    // Move to root (no directory)
+    await moveFile(sourceNode.id, props.projectId, undefined);
+    await loadFileTree();
+    emit('files-changed');
+  } catch {
+    // Invalid data or move failed, ignore
+  }
+  
+  draggingNode.value = null;
 }
 
 // Expose refresh method
