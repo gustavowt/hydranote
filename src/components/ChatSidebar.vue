@@ -420,6 +420,17 @@ async function sendMessage(text?: string) {
       }
     }
 
+    // Check if any files were created (write tool) or notes added (addNote tool)
+    // and emit event to refresh the file tree
+    const fileCreationResults = result.toolResults.filter(
+      (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
+    );
+    for (const fileResult of fileCreationResults) {
+      if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
+        emit('file-updated', fileResult.metadata.fileId, fileResult.metadata.fileName);
+      }
+    }
+
     // Add the final assistant message(s) properly through addMessage
     if (result.responses && result.responses.length > 1) {
       for (const response of result.responses) {
