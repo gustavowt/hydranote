@@ -19,6 +19,10 @@ import {
   createEmbeddings as dbCreateEmbeddings,
   vectorSearch as dbVectorSearch,
   getConnection,
+  deleteProject as dbDeleteProject,
+  deleteFile as dbDeleteFile,
+  updateFileProject as dbUpdateFileProject,
+  flushDatabase,
 } from './database';
 import { processDocument, isFileTypeSupported } from './documentProcessor';
 import { generateEmbeddingsForChunks, generateEmbedding } from './embeddingService';
@@ -80,6 +84,14 @@ export async function getProject(projectId: string): Promise<Project | null> {
 export async function getAllProjects(): Promise<Project[]> {
   await ensureInitialized();
   return dbGetAllProjects();
+}
+
+/**
+ * Delete a project and all its files, chunks, and embeddings
+ */
+export async function deleteProject(projectId: string): Promise<void> {
+  await ensureInitialized();
+  await dbDeleteProject(projectId);
 }
 
 // ============================================
@@ -295,6 +307,92 @@ export async function getFileWithChunks(fileId: string): Promise<{ file: Project
   
   const chunks = await get_file_chunks(fileId);
   return { file, chunks };
+}
+
+/**
+ * Delete a file and its chunks and embeddings
+ */
+export async function deleteFile(fileId: string): Promise<void> {
+  await ensureInitialized();
+  await dbDeleteFile(fileId);
+}
+
+/**
+ * Move a file to a different project and/or directory
+ */
+export async function moveFile(
+  fileId: string,
+  targetProjectId: string,
+  targetDirectory?: string
+): Promise<ProjectFile> {
+  await ensureInitialized();
+  
+  const file = await dbGetFile(fileId);
+  if (!file) {
+    throw new Error(`File not found: ${fileId}`);
+  }
+  
+  // Get the file name (without path)
+  const fileName = file.name.split('/').pop() || file.name;
+  
+  // Build new path
+  const newName = targetDirectory 
+    ? `${targetDirectory}/${fileName}`
+    : fileName;
+  
+  await dbUpdateFileProject(fileId, targetProjectId, newName);
+  
+  // Return updated file
+  return {
+    ...file,
+    projectId: targetProjectId,
+    name: newName,
+    updatedAt: new Date(),
+  };
+}
+
+/**
+ * Create an empty markdown file in a project
+ */
+export async function createEmptyMarkdownFile(
+  projectId: string,
+  fileName: string,
+  directory?: string
+): Promise<ProjectFile> {
+  await ensureInitialized();
+  
+  // Validate project exists
+  const project = await dbGetProject(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  
+  // Ensure filename has .md extension
+  const name = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
+  
+  // Build full path
+  const fullPath = directory ? `${directory}/${name}` : name;
+  
+  // Create empty markdown content
+  const content = `# ${fileName.replace(/\.md$/, '')}\n\n`;
+  
+  // Create file record
+  const projectFile: ProjectFile = {
+    id: crypto.randomUUID(),
+    projectId,
+    name: fullPath,
+    type: 'md',
+    size: content.length,
+    status: 'indexed',
+    content,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  
+  await dbCreateFile(projectFile);
+  await flushDatabase();
+  
+  return projectFile;
 }
 
 // ============================================

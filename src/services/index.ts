@@ -12,6 +12,7 @@ export {
   createProject,
   getProject,
   getAllProjects,
+  deleteProject,
   ingestDocument,
   get_project_files,
   get_file_chunks,
@@ -21,6 +22,9 @@ export {
   getFile,
   getFileWithChunks,
   getProjectStats,
+  deleteFile,
+  moveFile,
+  createEmptyMarkdownFile,
   // Phase 11: File tree API
   getProjectFileTree,
   getProjectFilesForAutocomplete,
@@ -73,6 +77,8 @@ export {
   executeToolCalls,
   formatToolResults,
   orchestrateToolExecution,
+  // Inline tool call parser
+  parseToolCallsFromResponse,
   // UpdateFile tool helpers
   getPendingPreview,
   removePendingPreview,
@@ -80,7 +86,7 @@ export {
 } from './toolService';
 
 // Export types from toolService
-export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult } from './toolService';
+export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult, ParsedToolCalls } from './toolService';
 
 // Document Generator Service
 export {
