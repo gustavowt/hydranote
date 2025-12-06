@@ -58,9 +58,9 @@ Available tools:
 - read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
 - search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
 - summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
-- write: Generate a new document (PDF, DOCX, or Markdown). Use when user wants to create, write, generate, or produce a formatted document. Keywords: write, create, generate, produce, make, escreva, crie, gerar, criar documento, gerar pdf, gerar docx, write a report, create a document, make a summary document.
-- addNote: Create and save a new note in the project. Use when user wants to save a quick note, take notes, or add information to their project. The note will be automatically formatted and organized. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, adicionar anotação, lembrete, remember this, save this.
-- updateFile: Update or modify a specific section of an existing file (Markdown or DOCX only). Use when user wants to edit, update, modify, change, replace, or insert content in an existing file. Keywords: update, edit, modify, change, replace, insert, add to, atualizar, editar, modificar, alterar, substituir, inserir. Supports operations: replace (replace section content), insert_before (add content before section), insert_after (add content after section).
+- write: **CREATE A NEW FILE** in PDF, DOCX, or Markdown format. Use when user wants to CREATE, WRITE, GENERATE, or PRODUCE a new file/document. This tool CREATES and SAVES files to the project. Keywords: create file, write file, generate file, make file, create document, generate PDF, write report, save as file, escreva, crie, gerar, criar arquivo, criar documento, gerar pdf, gerar docx, make a new file.
+- addNote: Create and save a quick note in the project. Use when user wants to save a quick note, take notes, or add information. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, lembrete, remember this.
+- updateFile: Update or modify a specific section of an EXISTING file (Markdown or DOCX only). Use when user wants to edit, update, modify, or change an EXISTING file. Keywords: update, edit, modify, change, replace, insert, atualizar, editar, modificar.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -84,10 +84,20 @@ Single tool:
 - "Buscar informações sobre contrato" → {"tools": [{"name": "search", "params": {"query": "contrato"}}]}
 - "O que diz sobre garantias?" → {"tools": [{"name": "search", "params": {"query": "garantias"}}]}
 - "What does it say about deadlines?" → {"tools": [{"name": "search", "params": {"query": "deadlines"}}]}
-- "Write a report about the project" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Project Report"}}]}
-- "Crie um documento PDF com o resumo" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Resumo"}}]}
-- "Generate a DOCX summary" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Summary Document"}}]}
-- "Gerar PDF do relatório" → {"tools": [{"name": "write", "params": {"format": "pdf", "title": "Relatório"}}]}
+
+File creation (write tool - CREATES files in the project):
+- "Create a new file called notes.md" → {"tools": [{"name": "write", "params": {"format": "md", "title": "notes"}}]}
+- "Create a table of contents at the root" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Table of Contents", "path": ""}}]}
+- "Create a file in the docs folder" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Document", "path": "docs"}}]}
+- "Write a report in docs/reports" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Report", "path": "docs/reports"}}]}
+- "Create a markdown file with the summary" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Summary"}}]}
+- "Generate a DOCX document" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Document"}}]}
+- "Crie um arquivo na raiz do projeto" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Documento", "path": ""}}]}
+- "Gerar um arquivo na pasta documentos" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Arquivo", "path": "documentos"}}]}
+- "Make a new file with this content" → {"tools": [{"name": "write", "params": {"format": "md", "title": "New File"}}]}
+- "Save this as a file" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Saved Content"}}]}
+
+Notes:
 - "Add a note about the meeting" → {"tools": [{"name": "addNote", "params": {"content": "Meeting notes about the project..."}}]}
 - "Save this note: The deadline is next Friday" → {"tools": [{"name": "addNote", "params": {"content": "The deadline is next Friday"}}]}
 - "Criar nota: reunião com cliente amanhã" → {"tools": [{"name": "addNote", "params": {"content": "reunião com cliente amanhã"}}]}
@@ -691,7 +701,7 @@ export async function executeSummarizeTool(
  */
 const DEFAULT_WRITE_CONFIG = {
   maxContentTokens: 4000,
-  defaultFormat: 'pdf' as DocumentFormat,
+  defaultFormat: 'md' as DocumentFormat,
   supportedFormats: ['pdf', 'docx', 'md'] as DocumentFormat[],
 };
 
@@ -740,8 +750,143 @@ Guidelines:
 }
 
 /**
+ * Convert title to a safe filename
+ */
+function titleToFileName(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
+    .replace(/\s+/g, '-') // Replace spaces with hyphens
+    .replace(/-+/g, '-') // Replace multiple hyphens with single
+    .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
+    .substring(0, 50); // Limit length
+}
+
+/**
+ * Persist a file directly to the project database
+ */
+async function persistFileToProject(
+  projectId: string,
+  fileName: string,
+  directory: string,
+  content: string,
+  fileType: 'md' | 'txt'
+): Promise<{ fileId: string; fullPath: string; size: number }> {
+  const { getConnection, flushDatabase } = await import('./database');
+  const conn = getConnection();
+  const now = new Date();
+  const fileId = crypto.randomUUID();
+  
+  // Build full path
+  const fullPath = directory ? `${directory}/${fileName}` : fileName;
+  
+  // Escape content for SQL
+  const escapedContent = content.replace(/'/g, "''");
+  const escapedName = fullPath.replace(/'/g, "''");
+  
+  // Calculate size in bytes
+  const size = new Blob([content]).size;
+  
+  // Insert file record
+  await conn.query(`
+    INSERT INTO files (id, project_id, name, type, size, status, content, created_at, updated_at)
+    VALUES ('${fileId}', '${projectId}', '${escapedName}', '${fileType}', ${size}, 'indexed', '${escapedContent}', '${now.toISOString()}', '${now.toISOString()}')
+  `);
+  
+  // Flush to persist immediately
+  await flushDatabase();
+  
+  return { fileId, fullPath, size };
+}
+
+/**
+ * Index a file for semantic search (create chunks and embeddings)
+ */
+async function indexFileForSearch(
+  projectId: string,
+  fileId: string,
+  content: string
+): Promise<void> {
+  const { getConnection, flushDatabase } = await import('./database');
+  const { generateEmbedding } = await import('./embeddingService');
+  const conn = getConnection();
+  
+  // Simple chunking for the file
+  const maxChunkSize = 800;
+  const chunks: Array<{ id: string; text: string; index: number; startOffset: number; endOffset: number }> = [];
+  
+  let currentOffset = 0;
+  let chunkIndex = 0;
+  
+  // Split by paragraphs first
+  const paragraphs = content.split(/\n\n+/);
+  let currentChunk = '';
+  let chunkStartOffset = 0;
+  
+  for (const para of paragraphs) {
+    if (currentChunk.length + para.length > maxChunkSize && currentChunk.length > 0) {
+      // Save current chunk
+      chunks.push({
+        id: crypto.randomUUID(),
+        text: currentChunk.trim(),
+        index: chunkIndex++,
+        startOffset: chunkStartOffset,
+        endOffset: currentOffset,
+      });
+      currentChunk = para;
+      chunkStartOffset = currentOffset;
+    } else {
+      currentChunk += (currentChunk ? '\n\n' : '') + para;
+    }
+    currentOffset += para.length + 2; // +2 for \n\n
+  }
+  
+  // Save final chunk
+  if (currentChunk.trim().length > 0) {
+    chunks.push({
+      id: crypto.randomUUID(),
+      text: currentChunk.trim(),
+      index: chunkIndex,
+      startOffset: chunkStartOffset,
+      endOffset: content.length,
+    });
+  }
+  
+  const now = new Date().toISOString();
+  
+  // Store chunks and generate embeddings
+  for (const chunk of chunks) {
+    const escapedText = chunk.text.replace(/'/g, "''");
+    
+    // Insert chunk
+    await conn.query(`
+      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
+      VALUES ('${chunk.id}', '${fileId}', '${projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${now}')
+    `);
+    
+    // Generate and store embedding
+    try {
+      const vector = await generateEmbedding(chunk.text);
+      const embeddingId = crypto.randomUUID();
+      const vectorStr = `[${vector.join(', ')}]`;
+      
+      await conn.query(`
+        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
+        VALUES ('${embeddingId}', '${chunk.id}', '${fileId}', '${projectId}', ${vectorStr}::DOUBLE[], '${now}')
+      `);
+    } catch {
+      // Embedding generation failed, continue without it
+      console.warn(`Failed to generate embedding for chunk ${chunk.id}`);
+    }
+  }
+  
+  await flushDatabase();
+}
+
+/**
  * Execute the write tool
- * Generates a new document (PDF or DOCX) based on user request
+ * Creates a new file in the project. For Markdown files, saves directly to project.
+ * For PDF/DOCX, generates and stores in project with optional download.
  */
 export async function executeWriteTool(
   projectId: string,
@@ -750,7 +895,8 @@ export async function executeWriteTool(
 ): Promise<ToolResult> {
   try {
     const format = params.format || DEFAULT_WRITE_CONFIG.defaultFormat;
-    const title = params.title || 'Generated Document';
+    const title = params.title || 'New Document';
+    const directory = params.path || ''; // Root of project by default
 
     // Validate format
     if (!DEFAULT_WRITE_CONFIG.supportedFormats.includes(format)) {
@@ -771,13 +917,47 @@ export async function executeWriteTool(
       );
     }
 
-    // Generate the document
+    // For Markdown files: Save directly to project
+    if (format === 'md') {
+      const fileName = titleToFileName(title) + '.md';
+      
+      // Add title as H1 if content doesn't start with a heading
+      const finalContent = content.trim().startsWith('#') 
+        ? content 
+        : `# ${title}\n\n${content}`;
+      
+      // Persist to project
+      const { fileId, fullPath, size } = await persistFileToProject(
+        projectId,
+        fileName,
+        directory,
+        finalContent,
+        'md'
+      );
+      
+      // Index for search
+      await indexFileForSearch(projectId, fileId, finalContent);
+      
+      return {
+        success: true,
+        tool: 'write',
+        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(size)}\n**Location:** ${directory || 'project root'}`,
+        metadata: {
+          fileName: fullPath,
+          fileId: fileId,
+          fileSize: size,
+          truncated: false,
+        },
+      };
+    }
+    
+    // For PDF/DOCX: Generate document and store in project
     const result = await generateDocument(projectId, title, content, format);
-
+    
     return {
       success: true,
       tool: 'write',
-      data: `Document "${result.fileName}" has been generated and downloaded.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}`,
+      data: `Document "${result.fileName}" has been created.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}`,
       metadata: {
         fileName: result.fileName,
         fileId: result.fileId,
@@ -790,7 +970,7 @@ export async function executeWriteTool(
     return {
       success: false,
       tool: 'write',
-      error: error instanceof Error ? error.message : 'Failed to generate document',
+      error: error instanceof Error ? error.message : 'Failed to create file',
     };
   }
 }
@@ -1516,9 +1696,10 @@ export async function executeTool(
 
     case 'write':
       return executeWriteTool(projectId, {
-        format: (call.params.format as DocumentFormat) || 'pdf',
-        title: call.params.title || 'Generated Document',
+        format: (call.params.format as DocumentFormat) || 'md',
+        title: call.params.title || 'New Document',
         content: call.params.content || '',
+        path: call.params.path || call.params.directory || '',
       }, userMessage);
 
     case 'addNote':
@@ -1582,6 +1763,62 @@ export function formatToolResults(results: ToolResult[]): string {
 }
 
 // ============================================
+// Inline Tool Call Parser
+// ============================================
+
+/**
+ * Result from parsing tool calls in LLM response
+ */
+export interface ParsedToolCalls {
+  /** Text content with tool call blocks removed */
+  textContent: string;
+  /** Extracted tool calls */
+  toolCalls: ToolCall[];
+  /** Whether any tool calls were found */
+  hasToolCalls: boolean;
+}
+
+/**
+ * Parse tool calls from LLM response content
+ * Looks for ```tool_call blocks and extracts the JSON
+ */
+export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
+  const toolCalls: ToolCall[] = [];
+  
+  // Pattern to match ```tool_call ... ``` blocks
+  const toolCallPattern = /```tool_call\s*\n?([\s\S]*?)```/g;
+  
+  let match;
+  while ((match = toolCallPattern.exec(content)) !== null) {
+    const jsonStr = match[1].trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.tool && typeof parsed.tool === 'string') {
+        toolCalls.push({
+          tool: parsed.tool as ToolName,
+          params: parsed.params || {},
+        });
+      }
+    } catch {
+      // Invalid JSON in tool call block, skip it
+      console.warn('Failed to parse tool call JSON:', jsonStr);
+    }
+  }
+  
+  // Remove tool call blocks from content to get clean text
+  const textContent = content
+    .replace(toolCallPattern, '')
+    .replace(/\n{3,}/g, '\n\n') // Clean up excessive newlines
+    .trim();
+  
+  return {
+    textContent,
+    toolCalls,
+    hasToolCalls: toolCalls.length > 0,
+  };
+}
+
+// ============================================
 // Orchestrated Execution
 // ============================================
 
@@ -1631,8 +1868,8 @@ async function isRequestComplete(
 
 /**
  * Execute the full tool-assisted chat flow with logging
- * Uses iterative routing - keeps calling the router until the request is complete
- * @param onStreamChunk - Optional callback for streaming response chunks (only called for final response)
+ * Supports both router-based tool detection AND inline tool calls from LLM response
+ * @param onStreamChunk - Optional callback for streaming response chunks
  */
 export async function orchestrateToolExecution(
   projectId: string,
@@ -1675,71 +1912,67 @@ export async function orchestrateToolExecution(
     iteration++;
     const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : '';
 
-    // Step 1: Router
-    const routingStep: ExecutionStep = {
-      id: `routing-${iteration}`,
-      type: 'routing',
-      status: 'running',
-      label: `Analyzing request${iterationSuffix}...`,
-      startTime: new Date(),
-    };
-    updateStep(routingStep);
-
-    let toolCalls: ToolCall[] = [];
-    let clarificationMessage: string | undefined;
+    // Step 1: Router-based tool detection (first iteration only, as a hint)
+    let routerToolCalls: ToolCall[] = [];
     
-    try {
-      // For subsequent iterations, include context about what's been done
-      const routerInput = iteration === 1 
-        ? userMessage 
-        : `Original request: "${userMessage}"\n\nAlready completed: ${allToolCalls.map(t => t.tool).join(', ')}\n\nWhat tools are needed next to complete the request?`;
-      
-      // Build conversation context from recent messages (last 4 exchanges)
-      const recentHistory = conversationHistory.slice(-4).map(m => 
-        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`
-      ).join('\n');
-      
-      const routingResult = await routeMessage(routerInput, projectFiles, recentHistory);
-      
-      // Check if clarification is needed (only on first iteration)
-      if (iteration === 1 && routingResult.clarification) {
-        clarificationMessage = routingResult.clarification;
+    if (iteration === 1) {
+      const routingStep: ExecutionStep = {
+        id: `routing-${iteration}`,
+        type: 'routing',
+        status: 'running',
+        label: `Analyzing request${iterationSuffix}...`,
+        startTime: new Date(),
+      };
+      updateStep(routingStep);
+
+      try {
+        // Build conversation context from recent messages (last 4 exchanges)
+        const recentHistory = conversationHistory.slice(-4).map(m => 
+          `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`
+        ).join('\n');
+        
+        const routingResult = await routeMessage(userMessage, projectFiles, recentHistory);
+        
+        // Check if clarification is needed
+        if (routingResult.clarification) {
+          routingStep.status = 'completed';
+          routingStep.endTime = new Date();
+          routingStep.detail = 'Clarification needed';
+          updateStep(routingStep);
+          
+          return {
+            responses: [routingResult.clarification],
+            response: routingResult.clarification,
+            toolsUsed: [],
+            toolResults: [],
+            clarificationRequested: true,
+          };
+        }
+        
+        routerToolCalls = routingResult.tools;
+
         routingStep.status = 'completed';
         routingStep.endTime = new Date();
-        routingStep.detail = 'Clarification needed';
+        routingStep.detail = routerToolCalls.length > 0 
+          ? `Router detected: ${routerToolCalls.map(t => t.tool).join(', ')}`
+          : 'Proceeding to LLM';
         updateStep(routingStep);
-        
-        // Return early with clarification response
-        return {
-          responses: [clarificationMessage],
-          response: clarificationMessage,
-          toolsUsed: [],
-          toolResults: [],
-          clarificationRequested: true,
-        };
+      } catch {
+        routingStep.status = 'completed';
+        routingStep.detail = 'Proceeding to LLM';
+        routingStep.endTime = new Date();
+        updateStep(routingStep);
       }
-      
-      toolCalls = routingResult.tools;
-      
-      // Filter out already executed tools (by tool+params combination)
-      const executedKeys = new Set(allToolCalls.map(t => `${t.tool}-${JSON.stringify(t.params)}`));
-      toolCalls = toolCalls.filter(c => !executedKeys.has(`${c.tool}-${JSON.stringify(c.params)}`));
-
-      routingStep.status = 'completed';
-      routingStep.endTime = new Date();
-      routingStep.detail = toolCalls.length > 0 
-        ? `Tools: ${toolCalls.map(t => t.tool).join(', ')}`
-        : 'No tools needed';
-      updateStep(routingStep);
-    } catch {
-      routingStep.status = 'completed';
-      routingStep.detail = 'Using context';
-      routingStep.endTime = new Date();
-      updateStep(routingStep);
     }
 
-    // Step 2: Execute tools
-    for (const call of toolCalls) {
+    // Step 2: Execute router-detected tools (if any)
+    for (const call of routerToolCalls) {
+      // Skip if already executed
+      const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
+      if (allToolCalls.some(t => `${t.tool}-${JSON.stringify(t.params)}` === callKey)) {
+        continue;
+      }
+
       const toolStep: ExecutionStep = {
         id: `tool-${call.tool}-${Date.now()}`,
         type: 'tool',
@@ -1762,17 +1995,19 @@ export async function orchestrateToolExecution(
       updateStep(toolStep);
     }
 
-    // Step 3: Add tool results to messages if any
-    const successResults = allToolResults.filter(r => r.success);
-    if (toolCalls.length > 0 && successResults.length > 0) {
-      const toolContext = formatToolResults(successResults.slice(-toolCalls.length)); // Only latest results
-      messages.push({ 
-        role: 'user', 
-        content: `[System: Tool results]\n\n${toolContext}` 
-      });
+    // Step 3: Add tool results to messages if any router tools were executed
+    if (routerToolCalls.length > 0) {
+      const successResults = allToolResults.filter(r => r.success);
+      if (successResults.length > 0) {
+        const toolContext = formatToolResults(successResults);
+        messages.push({ 
+          role: 'user', 
+          content: `[System: Tool results]\n\n${toolContext}` 
+        });
+      }
     }
 
-    // Step 4: Generate response (with streaming if callback provided)
+    // Step 4: Generate LLM response (without streaming initially to parse tool calls)
     const responseStep: ExecutionStep = {
       id: `response-${iteration}`,
       type: 'response',
@@ -1782,54 +2017,138 @@ export async function orchestrateToolExecution(
     };
     updateStep(responseStep);
 
-    let llmResponse;
-    if (onStreamChunk) {
-      // Use streaming - call onStreamChunk with each text chunk
-      llmResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
-    } else {
-      // Non-streaming fallback
-      llmResponse = await chatCompletion({ messages });
-    }
-    allResponses.push(llmResponse.content);
+    // Generate response without streaming first to check for tool calls
+    const llmResponse = await chatCompletion({ messages });
     
-    // Add assistant response to conversation
-    messages.push({ role: 'assistant', content: llmResponse.content });
-
+    // Step 5: Parse response for inline tool calls
+    const parsed = parseToolCallsFromResponse(llmResponse.content);
+    
     responseStep.status = 'completed';
     responseStep.endTime = new Date();
-    responseStep.label = iteration === 1 ? 'Response ready' : `Step ${iteration} complete`;
-    updateStep(responseStep);
+    
+    if (parsed.hasToolCalls) {
+      responseStep.label = `Found ${parsed.toolCalls.length} tool call(s)`;
+      updateStep(responseStep);
 
-    // Step 5: Check if request is complete
-    if (iteration < MAX_ITERATIONS) {
-      const checkStep: ExecutionStep = {
-        id: `check-${iteration}`,
-        type: 'routing',
-        status: 'running',
-        label: 'Checking completion...',
-        startTime: new Date(),
-      };
-      updateStep(checkStep);
+      // Stream the text content if callback provided
+      if (onStreamChunk && parsed.textContent) {
+        onStreamChunk(parsed.textContent, false);
+      }
 
-      const complete = await isRequestComplete(
-        userMessage,
-        messages.slice(1), // Exclude system prompt
-        allToolResults
-      );
+      // Step 6: Execute inline tool calls from LLM response
+      const inlineResults: ToolResult[] = [];
+      
+      for (const call of parsed.toolCalls) {
+        // Skip if already executed
+        const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
+        if (allToolCalls.some(t => `${t.tool}-${JSON.stringify(t.params)}` === callKey)) {
+          continue;
+        }
 
-      checkStep.status = 'completed';
-      checkStep.endTime = new Date();
-      checkStep.detail = complete ? 'Request complete' : 'More steps needed';
-      updateStep(checkStep);
+        const toolStep: ExecutionStep = {
+          id: `inline-tool-${call.tool}-${Date.now()}`,
+          type: 'tool',
+          status: 'running',
+          label: `Executing ${call.tool}`,
+          detail: call.params.file || call.params.fileName || call.params.query || call.params.title || call.params.content?.substring(0, 30),
+          startTime: new Date(),
+        };
+        updateStep(toolStep);
 
-      if (complete) break;
+        const result = await executeTool(projectId, call, userMessage);
+        inlineResults.push(result);
+        allToolResults.push(result);
+        allToolCalls.push(call);
+
+        toolStep.status = result.success ? 'completed' : 'error';
+        toolStep.endTime = new Date();
+        toolStep.detail = result.success 
+          ? (result.metadata?.fileName || 'Done')
+          : result.error;
+        updateStep(toolStep);
+      }
+
+      // Step 7: Add inline tool results and get final response
+      if (inlineResults.length > 0) {
+        // Add assistant's partial response
+        messages.push({ role: 'assistant', content: parsed.textContent || 'Executing tools...' });
+        
+        // Add tool results
+        const toolContext = formatToolResults(inlineResults);
+        messages.push({ 
+          role: 'user', 
+          content: `[System: Tool execution results]\n\n${toolContext}\n\nPlease summarize the results for the user.` 
+        });
+
+        // Generate final response with results
+        const finalStep: ExecutionStep = {
+          id: `final-response-${iteration}`,
+          type: 'response',
+          status: 'running',
+          label: 'Summarizing results...',
+          startTime: new Date(),
+        };
+        updateStep(finalStep);
+
+        let finalResponse;
+        if (onStreamChunk) {
+          finalResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
+        } else {
+          finalResponse = await chatCompletion({ messages });
+        }
+        
+        finalStep.status = 'completed';
+        finalStep.endTime = new Date();
+        finalStep.label = 'Response ready';
+        updateStep(finalStep);
+
+        // Build combined response
+        const combinedResponse = parsed.textContent 
+          ? `${parsed.textContent}\n\n${finalResponse.content}`
+          : finalResponse.content;
+        
+        allResponses.push(combinedResponse);
+        messages.push({ role: 'assistant', content: finalResponse.content });
+      } else {
+        // No tools actually executed (maybe all were duplicates)
+        allResponses.push(parsed.textContent || llmResponse.content);
+        messages.push({ role: 'assistant', content: llmResponse.content });
+      }
+    } else {
+      // No tool calls in response - just use the response as-is
+      responseStep.label = 'Response ready';
+      updateStep(responseStep);
+      
+      // Stream the response if callback provided
+      if (onStreamChunk) {
+        onStreamChunk(llmResponse.content, false);
+        onStreamChunk('', true); // Signal completion
+      }
+      
+      allResponses.push(llmResponse.content);
+      messages.push({ role: 'assistant', content: llmResponse.content });
+    }
+
+    // Step 8: Check if more iterations needed (only if we had tool calls)
+    if (parsed.hasToolCalls && iteration < MAX_ITERATIONS) {
+      // Check if the response still contains unfulfilled requests
+      const lastResponse = allResponses[allResponses.length - 1];
+      const stillHasToolCalls = parseToolCallsFromResponse(lastResponse).hasToolCalls;
+      
+      if (!stillHasToolCalls) {
+        // No more tool calls, we're done
+        break;
+      }
+    } else {
+      // No tool calls in this iteration, we're done
+      break;
     }
   }
 
   // Combine all responses
   const finalResponse = allResponses.length === 1 
     ? allResponses[0]
-    : allResponses.join('\n\n---\n\n');
+    : allResponses[allResponses.length - 1]; // Use the last (most complete) response
 
   return {
     responses: allResponses,
