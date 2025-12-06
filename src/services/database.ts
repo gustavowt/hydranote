@@ -191,6 +191,27 @@ export async function getAllProjects(): Promise<Project[]> {
   }));
 }
 
+/**
+ * Delete a project and cascade delete all files, chunks, and embeddings
+ */
+export async function deleteProject(projectId: string): Promise<void> {
+  const conn = getConnection();
+  
+  // Delete embeddings for this project
+  await conn.query(`DELETE FROM embeddings WHERE project_id = '${projectId}'`);
+  
+  // Delete chunks for this project
+  await conn.query(`DELETE FROM chunks WHERE project_id = '${projectId}'`);
+  
+  // Delete files for this project
+  await conn.query(`DELETE FROM files WHERE project_id = '${projectId}'`);
+  
+  // Delete the project
+  await conn.query(`DELETE FROM projects WHERE id = '${projectId}'`);
+  
+  await flushDatabase();
+}
+
 // ============================================
 // File Operations
 // ============================================
@@ -237,6 +258,51 @@ export async function updateFileContent(fileId: string, content: string): Promis
   await conn.query(`
     UPDATE files SET content = '${escapedContent}', updated_at = CURRENT_TIMESTAMP WHERE id = '${fileId}'
   `);
+}
+
+/**
+ * Delete a file and cascade delete its chunks and embeddings
+ */
+export async function deleteFile(fileId: string): Promise<void> {
+  const conn = getConnection();
+  
+  // Delete embeddings for this file
+  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
+  
+  // Delete chunks for this file
+  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
+  
+  // Delete the file
+  await conn.query(`DELETE FROM files WHERE id = '${fileId}'`);
+  
+  await flushDatabase();
+}
+
+/**
+ * Update file's project and/or name (for moving files)
+ */
+export async function updateFileProject(fileId: string, newProjectId: string, newName: string): Promise<void> {
+  const conn = getConnection();
+  const escapedName = newName.replace(/'/g, "''");
+  
+  // Update file's project_id and name
+  await conn.query(`
+    UPDATE files 
+    SET project_id = '${newProjectId}', name = '${escapedName}', updated_at = CURRENT_TIMESTAMP 
+    WHERE id = '${fileId}'
+  `);
+  
+  // Update chunks' project_id
+  await conn.query(`
+    UPDATE chunks SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
+  `);
+  
+  // Update embeddings' project_id
+  await conn.query(`
+    UPDATE embeddings SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
+  `);
+  
+  await flushDatabase();
 }
 
 // ============================================
