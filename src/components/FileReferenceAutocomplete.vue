@@ -113,9 +113,11 @@ watch(() => props.searchQuery, () => {
   selectedIndex.value = 0;
 });
 
-watch(() => props.isVisible, (visible) => {
+watch(() => props.isVisible, async (visible) => {
   if (visible) {
     selectedIndex.value = 0;
+    // Reload files every time the autocomplete opens to ensure fresh data
+    await loadFiles();
   }
 });
 
