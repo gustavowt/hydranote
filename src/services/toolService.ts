@@ -24,10 +24,11 @@ import type {
   UpdateOperation,
   DiffLine,
   UpdateFileResult,
+  LLMStreamCallback,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
 import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
-import { chatCompletion } from './llmService';
+import { chatCompletion, chatCompletionStreaming } from './llmService';
 import { generateDocument } from './documentGeneratorService';
 import { addNote, addNoteWithTitle } from './noteService';
 
@@ -1631,6 +1632,7 @@ async function isRequestComplete(
 /**
  * Execute the full tool-assisted chat flow with logging
  * Uses iterative routing - keeps calling the router until the request is complete
+ * @param onStreamChunk - Optional callback for streaming response chunks (only called for final response)
  */
 export async function orchestrateToolExecution(
   projectId: string,
@@ -1638,7 +1640,8 @@ export async function orchestrateToolExecution(
   systemPrompt: string,
   conversationHistory: Array<{ role: string; content: string }>,
   projectFiles: string[],
-  onStepUpdate?: ExecutionLogCallback
+  onStepUpdate?: ExecutionLogCallback,
+  onStreamChunk?: LLMStreamCallback
 ): Promise<OrchestratedResult> {
   const steps: ExecutionStep[] = [];
   const allResponses: string[] = [];
@@ -1769,7 +1772,7 @@ export async function orchestrateToolExecution(
       });
     }
 
-    // Step 4: Generate response
+    // Step 4: Generate response (with streaming if callback provided)
     const responseStep: ExecutionStep = {
       id: `response-${iteration}`,
       type: 'response',
@@ -1779,7 +1782,14 @@ export async function orchestrateToolExecution(
     };
     updateStep(responseStep);
 
-    const llmResponse = await chatCompletion({ messages });
+    let llmResponse;
+    if (onStreamChunk) {
+      // Use streaming - call onStreamChunk with each text chunk
+      llmResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
+    } else {
+      // Non-streaming fallback
+      llmResponse = await chatCompletion({ messages });
+    }
     allResponses.push(llmResponse.content);
     
     // Add assistant response to conversation

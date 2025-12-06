@@ -89,10 +89,26 @@
             </div>
           </div>
 
-          <!-- Typing Indicator -->
-          <div v-if="isTyping" class="message assistant">
+          <!-- Typing Indicator + Streaming -->
+          <div v-if="isTyping || streamingContent" class="message assistant">
             <div class="message-bubble">
-              <div class="typing">
+              <!-- Current Step Indicator (single line) -->
+              <div v-if="currentStep && !streamingContent" class="current-step-indicator">
+                <ion-spinner v-if="currentStep.status === 'running'" name="dots" class="step-spinner" />
+                <ion-icon v-else-if="currentStep.status === 'completed'" :icon="checkmarkCircle" class="step-icon-done" />
+                <ion-icon v-else-if="currentStep.status === 'error'" :icon="closeCircle" class="step-icon-error" />
+                <span class="step-label">{{ currentStep.label }}</span>
+              </div>
+              
+              <!-- Streaming Content -->
+              <div 
+                v-if="streamingContent" 
+                class="message-content markdown-content"
+                v-html="renderMarkdown(streamingContent)"
+              ></div>
+              
+              <!-- Typing dots when no steps and no streaming -->
+              <div v-else-if="!currentStep" class="typing">
                 <span class="dot"></span>
                 <span class="dot"></span>
                 <span class="dot"></span>
@@ -199,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from 'vue';
+import { ref, watch, onMounted, nextTick, computed } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
@@ -223,8 +239,11 @@ import {
   checkmarkOutline,
   closeOutline,
   createOutline,
+  checkmarkCircle,
+  closeCircle,
 } from 'ionicons/icons';
 import type { Project, ChatMessage, SupportedFileType, UpdateFilePreview, DiffLine } from '@/types';
+import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
   addMessage,
@@ -292,6 +311,18 @@ const autocompleteAnchorRect = ref<DOMRect | null>(null);
 const activePreview = ref<UpdateFilePreview | null>(null);
 const isApplyingUpdate = ref(false);
 
+// Streaming state
+const executionSteps = ref<ExecutionStep[]>([]);
+const streamingContent = ref('');
+
+// Get the current/last step to display (prioritize running, then last completed)
+const currentStep = computed(() => {
+  if (executionSteps.value.length === 0) return null;
+  const running = executionSteps.value.find(s => s.status === 'running');
+  if (running) return running;
+  return executionSteps.value[executionSteps.value.length - 1];
+});
+
 const quickActions = [
   { text: 'What documents do I have?', label: 'List files', icon: documentTextOutline },
   { text: 'Search for key topics', label: 'Search', icon: searchOutline },
@@ -345,6 +376,8 @@ async function sendMessage(text?: string) {
   
   await scrollToBottom();
   isTyping.value = true;
+  executionSteps.value = [];
+  streamingContent.value = '';
 
   try {
     const systemPrompt = await buildSystemPrompt(selectedProjectId.value);
@@ -356,13 +389,24 @@ async function sendMessage(text?: string) {
     const files = await get_project_files(selectedProjectId.value);
     const projectFileNames = files.map(f => f.name);
 
+    // Streaming callback - updates streamingContent as chunks arrive
+    const handleStreamChunk = (chunk: string, done: boolean) => {
+      if (done) return;
+      streamingContent.value += chunk;
+      scrollToBottom();
+    };
+
     const result = await orchestrateToolExecution(
       selectedProjectId.value,
       messageText,
       systemPrompt,
       conversationHistory,
       projectFileNames,
-      () => {} // Skip execution step updates for sidebar
+      (steps) => {
+        executionSteps.value = [...steps];
+        scrollToBottom();
+      },
+      handleStreamChunk
     );
 
     // Check if there's an updateFile preview in the results
@@ -376,6 +420,7 @@ async function sendMessage(text?: string) {
       }
     }
 
+    // Add the final assistant message(s) properly through addMessage
     if (result.responses && result.responses.length > 1) {
       for (const response of result.responses) {
         const assistantMessage = addMessage(sessionId.value, 'assistant', response);
@@ -391,6 +436,8 @@ async function sendMessage(text?: string) {
     messages.value = [...messages.value, assistantMessage];
   } finally {
     isTyping.value = false;
+    executionSteps.value = [];
+    streamingContent.value = '';
     await scrollToBottom();
   }
 }
@@ -943,6 +990,36 @@ defineExpose({ selectProject });
 @keyframes typing {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
   40% { transform: scale(1); opacity: 1; }
+}
+
+/* Current Step Indicator - Single Line */
+.current-step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--hn-text-secondary);
+  padding: 2px 0;
+}
+
+.current-step-indicator .step-spinner {
+  width: 12px;
+  height: 12px;
+  --color: var(--hn-purple-light);
+}
+
+.current-step-indicator .step-icon-done {
+  font-size: 12px;
+  color: var(--hn-green);
+}
+
+.current-step-indicator .step-icon-error {
+  font-size: 12px;
+  color: var(--hn-danger);
+}
+
+.current-step-indicator .step-label {
+  color: var(--hn-text-secondary);
 }
 
 /* Chat Input */

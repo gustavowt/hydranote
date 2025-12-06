@@ -76,26 +76,27 @@
           </div>
         </div>
 
-        <!-- Execution Log / Typing indicator -->
-        <div v-if="isTyping" class="message assistant">
-          <div class="message-bubble execution-log">
-            <div v-if="executionSteps.length > 0" class="steps-container">
-              <div 
-                v-for="step in executionSteps" 
-                :key="step.id" 
-                :class="['step', step.status]"
-              >
-                <span class="step-icon">
-                  <ion-spinner v-if="step.status === 'running'" name="dots" />
-                  <ion-icon v-else-if="step.status === 'completed'" :icon="checkmarkCircle" />
-                  <ion-icon v-else-if="step.status === 'error'" :icon="closeCircle" />
-                  <ion-icon v-else :icon="ellipseOutline" />
-                </span>
-                <span class="step-label">{{ step.label }}</span>
-                <span v-if="step.detail" class="step-detail">{{ step.detail }}</span>
-              </div>
+        <!-- Execution Log + Streaming Response -->
+        <div v-if="isTyping || streamingContent" class="message assistant">
+          <div class="message-bubble">
+            <!-- Current Step Indicator (single line) -->
+            <div v-if="currentStep && !streamingContent" class="current-step-indicator">
+              <ion-spinner v-if="currentStep.status === 'running'" name="dots" class="step-spinner" />
+              <ion-icon v-else-if="currentStep.status === 'completed'" :icon="checkmarkCircle" class="step-icon-done" />
+              <ion-icon v-else-if="currentStep.status === 'error'" :icon="closeCircle" class="step-icon-error" />
+              <span class="step-label">{{ currentStep.label }}</span>
+              <span v-if="currentStep.detail" class="step-detail">{{ currentStep.detail }}</span>
             </div>
-            <div v-else class="typing">
+            
+            <!-- Streaming Content -->
+            <div 
+              v-if="streamingContent" 
+              class="message-content markdown-content"
+              v-html="renderMarkdown(streamingContent)"
+            ></div>
+            
+            <!-- Typing dots when no steps and no streaming yet -->
+            <div v-else-if="!currentStep" class="typing">
               <span class="dot"></span>
               <span class="dot"></span>
               <span class="dot"></span>
@@ -296,6 +297,7 @@ const uploading = ref(false);
 const uploadFileName = ref('');
 const sessionId = ref('');
 const executionSteps = ref<ExecutionStep[]>([]);
+const streamingContent = ref('');
 
 // Markdown viewer/editor state
 const showMarkdownViewer = ref(false);
@@ -313,6 +315,16 @@ const autocompleteStartIndex = ref(-1);
 const autocompleteAnchorRect = ref<DOMRect | null>(null);
 
 const projectId = computed(() => route.params.id as string);
+
+// Get the current/last step to display (prioritize running, then last completed)
+const currentStep = computed(() => {
+  if (executionSteps.value.length === 0) return null;
+  // Find running step first
+  const running = executionSteps.value.find(s => s.status === 'running');
+  if (running) return running;
+  // Otherwise return the last step
+  return executionSteps.value[executionSteps.value.length - 1];
+});
 
 const quickActions = [
   { text: 'What documents do I have?', label: 'List files', icon: documentTextOutline },
@@ -378,6 +390,7 @@ async function sendMessage(text?: string) {
   await scrollToBottom();
   isTyping.value = true;
   executionSteps.value = [];
+  streamingContent.value = '';
 
   try {
     // Get system prompt and conversation history
@@ -388,7 +401,14 @@ async function sendMessage(text?: string) {
     }));
     const projectFileNames = files.value.map(f => f.name);
 
-    // Orchestrate tool execution with live status updates
+    // Streaming callback - updates streamingContent as chunks arrive
+    const handleStreamChunk = (chunk: string, done: boolean) => {
+      if (done) return;
+      streamingContent.value += chunk;
+      scrollToBottom();
+    };
+
+    // Orchestrate tool execution with live status updates and streaming
     const result = await orchestrateToolExecution(
       projectId.value,
       messageText,
@@ -397,10 +417,12 @@ async function sendMessage(text?: string) {
       projectFileNames,
       (steps) => {
         executionSteps.value = [...steps];
-      }
+        scrollToBottom();
+      },
+      handleStreamChunk
     );
 
-    // Add assistant responses (may be multiple for multi-step requests)
+    // Add the final assistant message(s) properly through addMessage
     if (result.responses && result.responses.length > 1) {
       // Multiple responses - add each as separate message
       for (const response of result.responses) {
@@ -434,6 +456,7 @@ async function sendMessage(text?: string) {
   } finally {
     isTyping.value = false;
     executionSteps.value = [];
+    streamingContent.value = '';
     await scrollToBottom();
   }
 }
@@ -1056,62 +1079,40 @@ function closeAutocomplete() {
   color: var(--hn-text-secondary);
 }
 
-/* Execution Log Styles */
-.execution-log {
-  min-width: 200px;
-}
-
-.steps-container {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.step {
+/* Current Step Indicator - Single Line */
+.current-step-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--hn-text-secondary);
+  padding: 4px 0;
 }
 
-.step.running {
-  color: var(--hn-purple);
+.current-step-indicator .step-spinner {
+  width: 14px;
+  height: 14px;
+  --color: var(--hn-purple-light);
 }
 
-.step.completed {
+.current-step-indicator .step-icon-done {
+  font-size: 14px;
   color: var(--hn-green);
 }
 
-.step.error {
+.current-step-indicator .step-icon-error {
+  font-size: 14px;
   color: var(--hn-danger);
 }
 
-.step-icon {
-  display: flex;
-  align-items: center;
-  width: 18px;
-  height: 18px;
+.current-step-indicator .step-label {
+  color: var(--hn-text-secondary);
 }
 
-.step-icon ion-spinner {
-  width: 16px;
-  height: 16px;
-  --color: var(--hn-purple);
-}
-
-.step-icon ion-icon {
-  font-size: 16px;
-}
-
-.step-label {
-  font-weight: 500;
-}
-
-.step-detail {
+.current-step-indicator .step-detail {
   color: var(--hn-text-muted);
-  font-size: 0.8rem;
-  max-width: 200px;
+  font-size: 0.75rem;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

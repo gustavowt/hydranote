@@ -290,6 +290,20 @@ export interface LLMCompletionResponse {
   };
 }
 
+/**
+ * Callback for streaming LLM responses
+ * @param chunk - The text chunk received
+ * @param done - Whether the stream is complete
+ */
+export type LLMStreamCallback = (chunk: string, done: boolean) => void;
+
+/**
+ * Streaming completion request options
+ */
+export interface LLMStreamingRequest extends LLMCompletionRequest {
+  onChunk: LLMStreamCallback;
+}
+
 // ============================================
 // Tool Types (Phase 3+)
 // ============================================
