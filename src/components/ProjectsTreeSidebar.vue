@@ -53,15 +53,20 @@
             v-for="project in projects" 
             :key="project.id" 
             class="project-node"
+            @dragover.prevent="handleProjectDragOver($event, project.id)"
+            @dragleave="handleProjectDragLeave(project.id)"
+            @drop.prevent="handleProjectDrop($event, project.id)"
           >
             <!-- Project Header -->
             <div 
               class="project-header"
               :class="{ 
                 selected: selectedProjectId === project.id,
-                expanded: expandedProjects.has(project.id)
+                expanded: expandedProjects.has(project.id),
+                'drag-over': dragOverProjectId === project.id
               }"
               @click="toggleProject(project)"
+              @contextmenu.prevent="handleProjectContextMenu($event, project)"
             >
               <ion-icon 
                 :icon="expandedProjects.has(project.id) ? chevronDownOutline : chevronForwardOutline" 
@@ -102,6 +107,9 @@
                   :selected-file-id="selectedFileId"
                   @select="(n) => handleFileSelect(project.id, n)"
                   @toggle="(n) => handleNodeToggle(project.id, n)"
+                  @context-menu="(payload) => handleNodeContextMenu(project.id, payload)"
+                  @drag-start="handleDragStart"
+                  @drop="(payload) => handleNodeDrop(project.id, payload)"
                 />
               </template>
             </div>
@@ -109,12 +117,24 @@
         </div>
       </div>
     </template>
+
+    <!-- Context Menu -->
+    <FileTreeContextMenu
+      :is-open="contextMenu.isOpen"
+      :event="contextMenu.event"
+      :target-type="contextMenu.targetType"
+      :target-id="contextMenu.targetId"
+      :target-name="contextMenu.targetName"
+      :project-id="contextMenu.projectId"
+      @close="closeContextMenu"
+      @action="handleContextMenuAction"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
-import { IonIcon, IonButton, IonSpinner } from '@ionic/vue';
+import { ref, watch, computed, reactive } from 'vue';
+import { IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
 import {
   layersOutline,
   folderOutline,
@@ -124,9 +144,10 @@ import {
   chevronDownOutline,
   addOutline,
 } from 'ionicons/icons';
-import type { Project, ProjectFileTree, FileTreeNode as FileTreeNodeType } from '@/types';
-import { getProjectFileTree } from '@/services';
+import type { Project, ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
+import { getProjectFileTree, deleteProject, deleteFile, moveFile, createEmptyMarkdownFile } from '@/services';
 import FileTreeNode from './FileTreeNode.vue';
+import FileTreeContextMenu from './FileTreeContextMenu.vue';
 
 interface Props {
   projects: Project[];
@@ -141,12 +162,26 @@ const emit = defineEmits<{
   (e: 'select-file', projectId: string, file: { id: string; path: string; type: string }): void;
   (e: 'create-project'): void;
   (e: 'collapse-change', collapsed: boolean): void;
+  (e: 'delete-project', projectId: string): void;
+  (e: 'file-created', projectId: string, file: ProjectFile): void;
 }>();
 
 const isCollapsed = ref(false);
 const expandedProjects = ref<Set<string>>(new Set());
 const loadingFiles = ref<Set<string>>(new Set());
 const projectFileTrees = ref<Record<string, ProjectFileTree>>({});
+const draggingNode = ref<FileTreeNodeType | null>(null);
+const dragOverProjectId = ref<string | null>(null);
+
+// Context menu state
+const contextMenu = reactive({
+  isOpen: false,
+  event: null as MouseEvent | null,
+  targetType: 'project' as ContextMenuTargetType,
+  targetId: '',
+  targetName: '',
+  projectId: '',
+});
 
 // Compute file counts for each project
 const projectFileCounts = computed(() => {
@@ -221,6 +256,318 @@ function toggleNodeExpanded(nodes: FileTreeNodeType[], targetId: string): boolea
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value;
   emit('collapse-change', isCollapsed.value);
+}
+
+// ============================================
+// Context Menu Handlers
+// ============================================
+
+function handleProjectContextMenu(event: MouseEvent, project: Project) {
+  contextMenu.isOpen = true;
+  contextMenu.event = event;
+  contextMenu.targetType = 'project';
+  contextMenu.targetId = project.id;
+  contextMenu.targetName = project.name;
+  contextMenu.projectId = project.id;
+}
+
+function handleNodeContextMenu(projectId: string, payload: ContextMenuEvent) {
+  contextMenu.isOpen = true;
+  contextMenu.event = payload.event;
+  contextMenu.targetType = payload.node.type === 'directory' ? 'directory' : 'file';
+  contextMenu.targetId = payload.node.id;
+  contextMenu.targetName = payload.node.name;
+  contextMenu.projectId = projectId;
+}
+
+function closeContextMenu() {
+  contextMenu.isOpen = false;
+  contextMenu.event = null;
+}
+
+async function handleContextMenuAction(action: ContextMenuAction, targetId: string, targetName: string, projectId?: string) {
+  switch (action) {
+    case 'new-file':
+      await promptCreateFile(projectId || '', targetId, targetName);
+      break;
+    case 'delete-project':
+      await confirmDeleteProject(targetId, targetName);
+      break;
+    case 'delete-file':
+      await confirmDeleteFile(projectId || '', targetId, targetName);
+      break;
+    case 'delete-directory':
+      await confirmDeleteDirectory(projectId || '', targetId, targetName);
+      break;
+  }
+}
+
+async function promptCreateFile(projectId: string, targetId: string, targetName: string) {
+  const isProject = contextMenu.targetType === 'project';
+  const directoryPath = isProject ? undefined : targetId.replace('dir:', '');
+  
+  const alert = await alertController.create({
+    header: 'New File',
+    message: `Create a new markdown file${isProject ? ` in ${targetName}` : ` in ${targetName}`}`,
+    inputs: [
+      {
+        name: 'fileName',
+        type: 'text',
+        placeholder: 'File name (e.g., my-note)',
+      },
+    ],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Create',
+        handler: async (data) => {
+          if (data.fileName?.trim()) {
+            await createFile(projectId, data.fileName.trim(), directoryPath);
+          }
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function createFile(projectId: string, fileName: string, directory?: string) {
+  try {
+    const file = await createEmptyMarkdownFile(projectId, fileName, directory);
+    // Refresh the file tree for this project
+    delete projectFileTrees.value[projectId];
+    await loadProjectFiles(projectId);
+    emit('file-created', projectId, file);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to create file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+async function confirmDeleteProject(projectId: string, projectName: string) {
+  const fileCount = projectFileCounts.value[projectId] || 0;
+  
+  const alert = await alertController.create({
+    header: 'Delete Project',
+    message: `Are you sure you want to delete "${projectName}"${fileCount > 0 ? ` and all ${fileCount} file(s)` : ''}? This action cannot be undone.`,
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete',
+        role: 'destructive',
+        handler: async () => {
+          await performDeleteProject(projectId);
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function performDeleteProject(projectId: string) {
+  try {
+    await deleteProject(projectId);
+    // Remove from local state
+    expandedProjects.value.delete(projectId);
+    delete projectFileTrees.value[projectId];
+    emit('delete-project', projectId);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+async function confirmDeleteFile(projectId: string, fileId: string, fileName: string) {
+  const alert = await alertController.create({
+    header: 'Delete File',
+    message: `Are you sure you want to delete "${fileName}"? This action cannot be undone.`,
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete',
+        role: 'destructive',
+        handler: async () => {
+          await performDeleteFile(projectId, fileId);
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function performDeleteFile(projectId: string, fileId: string) {
+  try {
+    await deleteFile(fileId);
+    // Refresh the file tree for this project
+    delete projectFileTrees.value[projectId];
+    await loadProjectFiles(projectId);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+async function confirmDeleteDirectory(projectId: string, directoryId: string, directoryName: string) {
+  const directoryPath = directoryId.replace('dir:', '');
+  const filesInDirectory = findFilesInDirectory(projectFileTrees.value[projectId]?.nodes || [], directoryPath);
+  
+  if (filesInDirectory.length === 0) {
+    const alert = await alertController.create({
+      header: 'Empty Directory',
+      message: `"${directoryName}" is empty. Nothing to delete.`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+    return;
+  }
+  
+  const alert = await alertController.create({
+    header: 'Delete Directory',
+    message: `Are you sure you want to delete "${directoryName}" and all ${filesInDirectory.length} file(s) inside? This action cannot be undone.`,
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete All',
+        role: 'destructive',
+        handler: async () => {
+          for (const fileId of filesInDirectory) {
+            await deleteFile(fileId);
+          }
+          // Refresh the file tree for this project
+          delete projectFileTrees.value[projectId];
+          await loadProjectFiles(projectId);
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+function findFilesInDirectory(nodes: FileTreeNodeType[], directoryPath: string): string[] {
+  const fileIds: string[] = [];
+  
+  for (const node of nodes) {
+    if (node.type === 'file' && node.path.startsWith(directoryPath + '/')) {
+      fileIds.push(node.id);
+    }
+    if (node.children) {
+      fileIds.push(...findFilesInDirectory(node.children, directoryPath));
+    }
+  }
+  
+  return fileIds;
+}
+
+// ============================================
+// Drag and Drop Handlers
+// ============================================
+
+function handleDragStart(node: FileTreeNodeType) {
+  draggingNode.value = node;
+}
+
+function handleProjectDragOver(event: DragEvent, projectId: string) {
+  dragOverProjectId.value = projectId;
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+}
+
+function handleProjectDragLeave(projectId: string) {
+  if (dragOverProjectId.value === projectId) {
+    dragOverProjectId.value = null;
+  }
+}
+
+async function handleProjectDrop(event: DragEvent, targetProjectId: string) {
+  dragOverProjectId.value = null;
+  
+  if (!event.dataTransfer) return;
+  
+  const data = event.dataTransfer.getData('application/json');
+  if (!data) return;
+  
+  try {
+    const sourceNode = JSON.parse(data) as FileTreeNodeType;
+    if (sourceNode.type !== 'file') return;
+    
+    // Find the source project
+    const sourceProjectId = findProjectContainingFile(sourceNode.id);
+    if (!sourceProjectId || sourceProjectId === targetProjectId) return;
+    
+    // Move to target project root
+    await moveFile(sourceNode.id, targetProjectId, undefined);
+    
+    // Refresh both file trees
+    delete projectFileTrees.value[sourceProjectId];
+    delete projectFileTrees.value[targetProjectId];
+    await loadProjectFiles(sourceProjectId);
+    await loadProjectFiles(targetProjectId);
+  } catch {
+    // Invalid data or move failed, ignore
+  }
+  
+  draggingNode.value = null;
+}
+
+async function handleNodeDrop(projectId: string, payload: DragDropEvent) {
+  if (!payload.sourceNode || payload.sourceNode.type !== 'file') return;
+  
+  const targetDirectory = payload.targetNode.path;
+  
+  // Find the source project
+  const sourceProjectId = findProjectContainingFile(payload.sourceNode.id);
+  if (!sourceProjectId) return;
+  
+  try {
+    await moveFile(payload.sourceNode.id, projectId, targetDirectory);
+    
+    // Refresh file trees
+    delete projectFileTrees.value[sourceProjectId];
+    if (sourceProjectId !== projectId) {
+      delete projectFileTrees.value[projectId];
+      await loadProjectFiles(projectId);
+    }
+    await loadProjectFiles(sourceProjectId);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+  
+  draggingNode.value = null;
+}
+
+function findProjectContainingFile(fileId: string): string | null {
+  for (const [projectId, tree] of Object.entries(projectFileTrees.value)) {
+    if (findFileInNodes(tree.nodes, fileId)) {
+      return projectId;
+    }
+  }
+  return null;
+}
+
+function findFileInNodes(nodes: FileTreeNodeType[], fileId: string): boolean {
+  for (const node of nodes) {
+    if (node.id === fileId) return true;
+    if (node.children && findFileInNodes(node.children, fileId)) return true;
+  }
+  return false;
 }
 
 // Expose refresh method (only refreshes file trees, projects come from parent)
@@ -439,6 +786,12 @@ defineExpose({ refresh });
 
 .project-header.selected .project-name {
   color: var(--hn-teal);
+}
+
+.project-header.drag-over {
+  background: var(--hn-teal-muted);
+  outline: 2px dashed var(--hn-teal);
+  outline-offset: -2px;
 }
 
 .expand-icon {
