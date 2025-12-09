@@ -53,6 +53,7 @@
         :initial-project-id="selectedProjectId"
         @project-change="handleChatProjectChange"
         @file-updated="handleFileUpdated"
+        @projects-changed="handleProjectsChanged"
       />
     </div>
 
@@ -194,6 +195,12 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
 
 function handleChatProjectChange(projectId: string) {
   selectedProjectId.value = projectId;
+}
+
+// Handle project list changes from chat (create, delete, move operations)
+async function handleProjectsChanged() {
+  await loadProjects();
+  await projectsTreeRef.value?.refresh();
 }
 
 // Handle file updated from chat (updateFile tool)

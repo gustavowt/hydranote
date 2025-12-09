@@ -27,14 +27,17 @@
 
       <!-- Project Selector -->
       <div class="project-selector-container">
-        <div class="project-selector" v-if="projects.length > 0">
+        <div class="project-selector">
           <ion-select 
-            v-model="selectedProjectId"
+            v-model="selectedScope"
             interface="popover"
-            placeholder="Select a project"
+            placeholder="Select scope"
             class="project-select"
-            @ionChange="handleProjectChange"
+            @ionChange="handleScopeChange"
           >
+            <ion-select-option value="__all__">
+              🌐 All Projects
+            </ion-select-option>
             <ion-select-option 
               v-for="project in projects" 
               :key="project.id" 
@@ -44,28 +47,19 @@
             </ion-select-option>
           </ion-select>
         </div>
-        <div v-else class="no-projects">
-          <span>No projects available</span>
-        </div>
       </div>
 
       <!-- Chat Content -->
       <div class="chat-content" ref="chatContentRef">
-        <!-- No Project Selected -->
-        <div v-if="!selectedProjectId" class="empty-state">
-          <ion-icon :icon="chatbubblesOutline" />
-          <p>Select a project to start chatting</p>
-        </div>
-
         <!-- Messages -->
-        <template v-else>
+        <template v-if="sessionReady">
           <!-- Welcome message when no messages -->
           <div v-if="messages.length === 0" class="welcome-message">
             <ion-icon :icon="sparklesOutline" class="welcome-icon" />
-            <p>Ask questions about your documents</p>
+            <p>{{ isGlobalMode ? 'Ask questions across all projects' : 'Ask questions about your documents' }}</p>
             <div class="quick-actions">
               <button 
-                v-for="action in quickActions" 
+                v-for="action in currentQuickActions" 
                 :key="action.text" 
                 class="quick-action-btn"
                 @click="sendMessage(action.text)"
@@ -98,6 +92,7 @@
                 <ion-icon v-else-if="currentStep.status === 'completed'" :icon="checkmarkCircle" class="step-icon-done" />
                 <ion-icon v-else-if="currentStep.status === 'error'" :icon="closeCircle" class="step-icon-error" />
                 <span class="step-label">{{ currentStep.label }}</span>
+                <span v-if="currentStep.detail" class="step-detail">{{ currentStep.detail }}</span>
               </div>
               
               <!-- Streaming Content -->
@@ -178,14 +173,14 @@
       </div>
 
       <!-- Chat Input -->
-      <div class="chat-input" v-if="selectedProjectId" ref="inputContainerRef">
+      <div class="chat-input" v-if="sessionReady" ref="inputContainerRef">
         <div class="input-container">
           <ion-textarea
             ref="textareaRef"
             v-model="inputMessage"
             :rows="1"
             :auto-grow="true"
-            placeholder="Ask about your documents... (@ to reference files)"
+            :placeholder="isGlobalMode ? 'Ask across all projects... (@ to reference files)' : 'Ask about your documents... (@ to reference files)'"
             :disabled="isTyping"
             @keydown="handleKeydown"
             @ionInput="handleInputChange"
@@ -202,7 +197,7 @@
 
       <!-- File Reference Autocomplete -->
       <FileReferenceAutocomplete
-        v-if="selectedProjectId"
+        v-if="sessionReady"
         :project-id="selectedProjectId"
         :search-query="autocompleteQuery"
         :is-visible="showAutocomplete"
@@ -249,13 +244,20 @@ import {
   addMessage,
   getMessages,
   buildSystemPrompt,
+  buildGlobalSystemPrompt,
   isConfigured,
   orchestrateToolExecution,
   get_project_files,
   applyFileUpdate,
   removePendingPreview,
+  getAllProjects,
+  getAllFilesForAutocomplete,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
+import { folderOutline, addOutline } from 'ionicons/icons';
+
+// Special value for "All Projects" scope
+const ALL_PROJECTS_SCOPE = '__all__';
 
 interface Props {
   projects: Project[];
@@ -268,6 +270,7 @@ const emit = defineEmits<{
   (e: 'project-change', projectId: string): void;
   (e: 'collapse-change', collapsed: boolean): void;
   (e: 'file-updated', fileId: string, fileName: string): void;
+  (e: 'projects-changed'): void;
 }>();
 
 // Configure marked with highlight.js
@@ -292,14 +295,19 @@ const marked = new Marked(
 );
 
 const isCollapsed = ref(false);
-const selectedProjectId = ref<string | undefined>(undefined);
+const selectedScope = ref<string>(ALL_PROJECTS_SCOPE); // Can be project ID or '__all__'
+const selectedProjectId = ref<string | undefined>(undefined); // Actual project ID or undefined for global
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
 const isTyping = ref(false);
 const sessionId = ref('');
+const sessionReady = ref(false); // Whether a session is loaded
 const chatContentRef = ref<HTMLElement | null>(null);
 const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
 const inputContainerRef = ref<HTMLElement | null>(null);
+
+// Computed properties for mode detection
+const isGlobalMode = computed(() => selectedScope.value === ALL_PROJECTS_SCOPE);
 
 // Autocomplete state
 const showAutocomplete = ref(false);
@@ -323,45 +331,67 @@ const currentStep = computed(() => {
   return executionSteps.value[executionSteps.value.length - 1];
 });
 
-const quickActions = [
+const projectQuickActions = [
   { text: 'What documents do I have?', label: 'List files', icon: documentTextOutline },
   { text: 'Search for key topics', label: 'Search', icon: searchOutline },
   { text: 'Summarize all documents', label: 'Summarize', icon: bookOutline },
 ];
 
+const globalQuickActions = [
+  { text: 'What projects do I have?', label: 'List projects', icon: folderOutline },
+  { text: 'Search across all projects', label: 'Search all', icon: searchOutline },
+  { text: 'Create a new project', label: 'New project', icon: addOutline },
+];
+
+const currentQuickActions = computed(() => 
+  isGlobalMode.value ? globalQuickActions : projectQuickActions
+);
+
 onMounted(async () => {
   if (props.initialProjectId) {
+    selectedScope.value = props.initialProjectId;
     selectedProjectId.value = props.initialProjectId;
-    await loadSession();
   }
+  await loadSession();
 });
 
 watch(() => props.initialProjectId, async (newId) => {
   if (newId && newId !== selectedProjectId.value) {
+    selectedScope.value = newId;
     selectedProjectId.value = newId;
     await loadSession();
   }
 });
 
 async function loadSession() {
-  if (!selectedProjectId.value) return;
+  // Set projectId based on scope
+  if (selectedScope.value === ALL_PROJECTS_SCOPE) {
+    selectedProjectId.value = undefined;
+  } else {
+    selectedProjectId.value = selectedScope.value;
+  }
   
+  // Get or create session (undefined for global, projectId for project-specific)
   const session = await getOrCreateSession(selectedProjectId.value);
   sessionId.value = session.id;
   messages.value = getMessages(session.id);
+  sessionReady.value = true;
 }
 
-function handleProjectChange(event: CustomEvent) {
-  const projectId = event.detail.value;
-  if (projectId) {
-    emit('project-change', projectId);
-    loadSession();
+function handleScopeChange(event: CustomEvent) {
+  const scope = event.detail.value;
+  selectedScope.value = scope;
+  
+  if (scope !== ALL_PROJECTS_SCOPE) {
+    emit('project-change', scope);
   }
+  
+  loadSession();
 }
 
 async function sendMessage(text?: string) {
   const messageText = text || inputMessage.value.trim();
-  if (!messageText || !selectedProjectId.value) return;
+  if (!messageText || !sessionReady.value) return;
 
   if (!isConfigured()) {
     // Could emit an event to show settings
@@ -380,14 +410,25 @@ async function sendMessage(text?: string) {
   streamingContent.value = '';
 
   try {
-    const systemPrompt = await buildSystemPrompt(selectedProjectId.value);
+    // Build system prompt based on mode
+    const systemPrompt = isGlobalMode.value
+      ? await buildGlobalSystemPrompt()
+      : await buildSystemPrompt(selectedProjectId.value!);
+    
     const conversationHistory = messages.value.slice(0, -1).map(m => ({
       role: m.role,
       content: m.content,
     }));
     
-    const files = await get_project_files(selectedProjectId.value);
-    const projectFileNames = files.map(f => f.name);
+    // Get file names based on mode
+    let projectFileNames: string[];
+    if (isGlobalMode.value) {
+      const allFiles = await getAllFilesForAutocomplete();
+      projectFileNames = allFiles.map(f => `${f.projectName}/${f.path}`);
+    } else {
+      const files = await get_project_files(selectedProjectId.value!);
+      projectFileNames = files.map(f => f.name);
+    }
 
     // Streaming callback - updates streamingContent as chunks arrive
     const handleStreamChunk = (chunk: string, done: boolean) => {
@@ -397,7 +438,7 @@ async function sendMessage(text?: string) {
     };
 
     const result = await orchestrateToolExecution(
-      selectedProjectId.value,
+      selectedProjectId.value, // undefined for global mode
       messageText,
       systemPrompt,
       conversationHistory,
@@ -429,6 +470,16 @@ async function sendMessage(text?: string) {
       if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
         emit('file-updated', fileResult.metadata.fileId, fileResult.metadata.fileName);
       }
+    }
+
+    // Check if any project-level or file-level changes occurred
+    // and emit event to refresh the project list and file tree
+    const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
+    const hasChanges = result.toolResults.some(
+      (r) => changeTools.includes(r.tool) && r.success
+    );
+    if (hasChanges) {
+      emit('projects-changed');
     }
 
     // Add the final assistant message(s) properly through addMessage
@@ -513,14 +564,24 @@ function updateAutocompletePosition() {
   autocompleteAnchorRect.value = rect;
 }
 
-function handleAutocompleteSelect(file: { id: string; name: string; path: string; type: SupportedFileType }) {
-  // Replace from the @ symbol to current position with the file reference
+function handleAutocompleteSelect(item: { id: string; name: string; path: string; type: SupportedFileType | 'project'; itemType?: 'file' | 'project'; projectName?: string }) {
+  // Replace from the @ symbol to current position with the reference
   const start = autocompleteStartIndex.value;
   const before = inputMessage.value.substring(0, start);
   
-  // Insert the file reference
-  const fileRef = `@file:${file.path} `;
-  inputMessage.value = before + fileRef;
+  let reference: string;
+  
+  if (item.itemType === 'project' || item.type === 'project') {
+    // Project reference
+    reference = `@project:${item.name} `;
+  } else {
+    // File reference - include project name in global mode
+    reference = item.projectName 
+      ? `@file:${item.projectName}/${item.path} `
+      : `@file:${item.path} `;
+  }
+  
+  inputMessage.value = before + reference;
   
   closeAutocomplete();
   
@@ -646,11 +707,18 @@ function formatTime(date: Date): string {
 
 // Expose methods
 async function selectProject(projectId: string) {
+  selectedScope.value = projectId;
   selectedProjectId.value = projectId;
   await loadSession();
 }
 
-defineExpose({ selectProject });
+async function selectGlobalMode() {
+  selectedScope.value = ALL_PROJECTS_SCOPE;
+  selectedProjectId.value = undefined;
+  await loadSession();
+}
+
+defineExpose({ selectProject, selectGlobalMode });
 </script>
 
 <style scoped>
@@ -1031,6 +1099,15 @@ defineExpose({ selectProject });
 
 .current-step-indicator .step-label {
   color: var(--hn-text-secondary);
+}
+
+.current-step-indicator .step-detail {
+  color: var(--hn-text-muted);
+  font-size: 0.7rem;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Chat Input */
