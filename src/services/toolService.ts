@@ -27,7 +27,21 @@ import type {
   LLMStreamCallback,
 } from '../types';
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
-import { get_project_files, get_file_chunks, getFile, searchProject } from './projectService';
+import { 
+  get_project_files, 
+  get_file_chunks, 
+  getFile, 
+  searchProject, 
+  createProject, 
+  deleteProject, 
+  deleteFile, 
+  moveFile,
+  getAllProjects,
+  getProject,
+  findFileByPath,
+  findFileGlobal,
+  searchAllProjects,
+} from './projectService';
 import { chatCompletion, chatCompletionStreaming } from './llmService';
 import { generateDocument } from './documentGeneratorService';
 import { addNote, addNoteWithTitle } from './noteService';
@@ -61,6 +75,10 @@ Available tools:
 - write: **CREATE A NEW FILE** in PDF, DOCX, or Markdown format. Use when user wants to CREATE, WRITE, GENERATE, or PRODUCE a new file/document. This tool CREATES and SAVES files to the project. Keywords: create file, write file, generate file, make file, create document, generate PDF, write report, save as file, escreva, crie, gerar, criar arquivo, criar documento, gerar pdf, gerar docx, make a new file.
 - addNote: Create and save a quick note in the project. Use when user wants to save a quick note, take notes, or add information. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, lembrete, remember this.
 - updateFile: Update or modify a specific section of an EXISTING file (Markdown or DOCX only). Use when user wants to edit, update, modify, or change an EXISTING file. Keywords: update, edit, modify, change, replace, insert, atualizar, editar, modificar.
+- createProject: Create a new project. Use when user wants to create, start, or set up a new project. Keywords: create project, new project, criar projeto, novo projeto.
+- moveFile: Move a file from one project to another. Use when user wants to move, transfer, or relocate a file between projects. Keywords: move file, transfer file, mover arquivo.
+- deleteFile: Delete a file from a project. Use when user wants to delete, remove, or discard a file. Keywords: delete file, remove file, apagar arquivo, deletar arquivo, excluir arquivo.
+- deleteProject: Delete an entire project and all its files. Use when user wants to delete, remove, or discard a project. Keywords: delete project, remove project, apagar projeto, deletar projeto, excluir projeto.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -123,6 +141,24 @@ Chained read + write operations:
 - "Read the last 2 files and create a summary PDF" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Summary"}}]}
 - "Summarize document and save as DOCX" → {"tools": [{"name": "summarize", "params": {"file": "document"}}, {"name": "write", "params": {"format": "docx", "title": "Document Summary"}}]}
 
+Project management (global mode):
+- "Create a new project called Research" → {"tools": [{"name": "createProject", "params": {"name": "Research"}}]}
+- "Create project 'Work Notes' with description 'Daily work notes'" → {"tools": [{"name": "createProject", "params": {"name": "Work Notes", "description": "Daily work notes"}}]}
+- "Criar um novo projeto chamado Estudos" → {"tools": [{"name": "createProject", "params": {"name": "Estudos"}}]}
+
+File operations:
+- "Move notes.md from Personal to Work" → {"tools": [{"name": "moveFile", "params": {"file": "notes.md", "fromProject": "Personal", "toProject": "Work"}}]}
+- "Delete old-notes.md" → {"tools": [{"name": "deleteFile", "params": {"file": "old-notes.md"}}]}
+- "Remove the file report.pdf from Project X" → {"tools": [{"name": "deleteFile", "params": {"file": "report.pdf", "project": "Project X"}}]}
+- "Apagar arquivo teste.md" → {"tools": [{"name": "deleteFile", "params": {"file": "teste.md"}}]}
+
+Project deletion (ALWAYS include confirm: "yes" when user explicitly asks to delete):
+- "Delete the project Old Stuff" → {"tools": [{"name": "deleteProject", "params": {"project": "Old Stuff", "confirm": "yes"}}]}
+- "Remove project called Temp" → {"tools": [{"name": "deleteProject", "params": {"project": "Temp", "confirm": "yes"}}]}
+- "Yes, delete project X" → {"tools": [{"name": "deleteProject", "params": {"project": "X", "confirm": "yes"}}]}
+- "Deletar projeto Teste" → {"tools": [{"name": "deleteProject", "params": {"project": "Teste", "confirm": "yes"}}]}
+- "Sim, apagar o projeto" → {"tools": [{"name": "deleteProject", "params": {"project": "...", "confirm": "yes"}}]}
+
 No tools (use existing context or conversation flow):
 - "Explain the previous answer" → {"tools": []}
 - "Thanks" → {"tools": []}
@@ -142,6 +178,130 @@ Clarification needed (FALLBACK - only when truly ambiguous):
 - "Find something" (completely vague) → {"tools": [], "clarification": "What would you like me to search for in the documents?"}
 - "Do something with the files" → {"tools": [], "clarification": "I can read, search, summarize, or generate documents. What would you like me to do?"}
 - "Faça algo" (unclear) → {"tools": [], "clarification": "O que você gostaria que eu fizesse? Posso ler, buscar, resumir ou criar documentos."}`;
+
+// ============================================
+// Continuation Router (Sequential Message Handler)
+// ============================================
+
+/**
+ * Prompt for analyzing if tools should be executed after an assistant response
+ * Called after the main LLM responds to check if the response implies pending tool execution
+ */
+const CONTINUATION_ROUTER_PROMPT = `You are a tool execution analyzer. Your job is to analyze the assistant's latest response and determine if any tools should NOW be executed.
+
+Context: The assistant has access to tools but sometimes it describes what it WILL do instead of actually executing the tool. Your job is to detect when the assistant has committed to an action and extract the tool call that should be executed.
+
+Available tools:
+- read: Read a file's content. Params: {file: "filename"}
+- search: Search documents. Params: {query: "search query"}
+- summarize: Summarize a document. Params: {file: "filename"}
+- write: Create a new file. Params: {format: "md"|"pdf"|"docx", title: "title", content: "content", path: "optional/path"}
+- addNote: Create a quick note. Params: {content: "note content", title: "optional title"}
+- updateFile: Update an existing file. Params: {file: "filename", section: "section name", operation: "replace"|"insert_before"|"insert_after", newContent: "content"}
+
+Analyze the assistant's response and respond with JSON:
+{
+  "shouldExecuteTool": boolean,
+  "tools": [{"name": "toolName", "params": {"key": "value"}}],
+  "reasoning": "brief explanation"
+}
+
+Rules:
+1. If assistant says "I will now...", "Let me...", "I'll add...", "I'll create...", "Proceeding to...", "Now, I will..." → Extract the tool and params
+2. If assistant already showed tool results or said "Done", "Created", "Added", "has been updated" → No tools needed
+3. If assistant is just explaining or asking a question → No tools needed
+4. For updateFile: Extract the file name, section identifier, operation, and the NEW CONTENT the assistant wrote/composed
+5. For write: Extract format, title, and the FULL CONTENT the assistant composed
+
+IMPORTANT: 
+- Extract the ACTUAL content from the assistant's message
+- If they wrote out new content to add to a file, include ALL of it in newContent
+- Look for markdown content blocks that the assistant composed
+
+Example 1 - Assistant committing to update a file:
+Assistant: "Now, I will add a new section at the end of the file to explain its contents.\n\n## About This File\n\nThis file contains instructions for..."
+→ {"shouldExecuteTool": true, "tools": [{"name": "updateFile", "params": {"file": "document.md", "section": "end", "operation": "insert_after", "newContent": "## About This File\n\nThis file contains instructions for..."}}], "reasoning": "Assistant committed to adding section with specific content"}
+
+Example 2 - Assistant already completed:
+Assistant: "I've added the new section to the file. The file has been updated successfully."
+→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Action already completed"}
+
+Example 3 - Assistant asking for confirmation:
+Assistant: "Here's what I'll add:\n\n## Summary\n...\n\nShould I proceed?"
+→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Assistant is asking for confirmation, not committing to action"}
+
+Example 4 - Assistant just explaining:
+Assistant: "The file contains documentation about server monitoring and database management."
+→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Informational response only"}`;
+
+/**
+ * Result from continuation analysis
+ */
+export interface ContinuationResult {
+  shouldExecuteTool: boolean;
+  tools: ToolCall[];
+  reasoning: string;
+}
+
+/**
+ * Analyze assistant response to determine if tools should be executed
+ * Called after LLM generates a response to check for uncommitted tool actions
+ */
+export async function analyzeAssistantResponse(
+  assistantResponse: string,
+  conversationHistory: Array<{ role: string; content: string }>,
+  projectFiles: string[]
+): Promise<ContinuationResult> {
+  const filesContext = projectFiles.length > 0
+    ? `\n\nAvailable files in project: ${projectFiles.join(', ')}`
+    : '\n\nNo files in project yet.';
+
+  // Get last few messages for context
+  const recentContext = conversationHistory.slice(-4)
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 500)}`)
+    .join('\n\n');
+
+  const response = await chatCompletion({
+    messages: [
+      { role: 'system', content: CONTINUATION_ROUTER_PROMPT + filesContext },
+      { 
+        role: 'user', 
+        content: `Recent conversation:\n${recentContext}\n\n---\n\nLatest assistant response to analyze:\n${assistantResponse}` 
+      },
+    ],
+    temperature: 0,
+    maxTokens: 1000, // Higher limit to capture content
+  });
+
+  try {
+    let jsonStr = response.content.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+
+    const parsed = JSON.parse(jsonStr);
+
+    const tools: ToolCall[] = (parsed.tools || []).map(
+      (t: { name: string; params?: Record<string, string> }) => ({
+        tool: t.name as ToolName,
+        params: t.params || {},
+      })
+    );
+
+    return {
+      shouldExecuteTool: parsed.shouldExecuteTool || false,
+      tools,
+      reasoning: parsed.reasoning || '',
+    };
+  } catch {
+    return {
+      shouldExecuteTool: false,
+      tools: [],
+      reasoning: 'Failed to parse continuation analysis',
+    };
+  }
+}
 
 /**
  * Result from routing a message
@@ -1052,6 +1212,309 @@ export async function executeAddNoteTool(
 }
 
 // ============================================
+// CreateProject Tool Implementation
+// ============================================
+
+/**
+ * Execute the createProject tool
+ * Creates a new project
+ */
+export async function executeCreateProjectTool(
+  params: { name: string; description?: string }
+): Promise<ToolResult> {
+  try {
+    const name = params.name?.trim();
+    
+    if (!name) {
+      return {
+        success: false,
+        tool: 'createProject',
+        error: 'Project name is required',
+      };
+    }
+
+    // Check if project with same name already exists
+    const existingProjects = await getAllProjects();
+    const existingProject = existingProjects.find(
+      p => p.name.toLowerCase() === name.toLowerCase()
+    );
+    
+    if (existingProject) {
+      return {
+        success: false,
+        tool: 'createProject',
+        error: `A project named "${name}" already exists.`,
+      };
+    }
+
+    const project = await createProject(name, params.description);
+
+    return {
+      success: true,
+      tool: 'createProject',
+      data: `Project "${project.name}" has been created successfully.${params.description ? `\n\n**Description:** ${params.description}` : ''}`,
+      metadata: {
+        fileId: project.id,
+        fileName: project.name,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'createProject',
+      error: error instanceof Error ? error.message : 'Failed to create project',
+    };
+  }
+}
+
+// ============================================
+// MoveFile Tool Implementation
+// ============================================
+
+/**
+ * Resolve project by name or ID
+ */
+async function resolveProject(nameOrId: string): Promise<{ id: string; name: string } | null> {
+  // Try as ID first
+  const projectById = await getProject(nameOrId);
+  if (projectById) {
+    return { id: projectById.id, name: projectById.name };
+  }
+  
+  // Try by name (case-insensitive)
+  const allProjects = await getAllProjects();
+  const projectByName = allProjects.find(
+    p => p.name.toLowerCase() === nameOrId.toLowerCase()
+  );
+  
+  if (projectByName) {
+    return { id: projectByName.id, name: projectByName.name };
+  }
+  
+  return null;
+}
+
+/**
+ * Execute the moveFile tool
+ * Moves a file from one project to another
+ */
+export async function executeMoveFileTool(
+  params: { file: string; fromProject: string; toProject: string; directory?: string }
+): Promise<ToolResult> {
+  try {
+    const { file, fromProject, toProject, directory } = params;
+    
+    if (!file || !fromProject || !toProject) {
+      return {
+        success: false,
+        tool: 'moveFile',
+        error: 'File name, source project, and destination project are all required.',
+      };
+    }
+
+    // Resolve source project
+    const sourceProject = await resolveProject(fromProject);
+    if (!sourceProject) {
+      return {
+        success: false,
+        tool: 'moveFile',
+        error: `Source project "${fromProject}" not found.`,
+      };
+    }
+
+    // Resolve destination project
+    const destProject = await resolveProject(toProject);
+    if (!destProject) {
+      return {
+        success: false,
+        tool: 'moveFile',
+        error: `Destination project "${toProject}" not found.`,
+      };
+    }
+
+    // Find the file in source project
+    const sourceFile = await findFileByPath(sourceProject.id, file);
+    if (!sourceFile) {
+      return {
+        success: false,
+        tool: 'moveFile',
+        error: `File "${file}" not found in project "${sourceProject.name}".`,
+      };
+    }
+
+    // Move the file
+    const movedFile = await moveFile(sourceFile.id, destProject.id, directory);
+
+    return {
+      success: true,
+      tool: 'moveFile',
+      data: `File "${file}" has been moved from "${sourceProject.name}" to "${destProject.name}".${directory ? `\n\n**New location:** ${directory}/${movedFile.name.split('/').pop()}` : ''}`,
+      metadata: {
+        fileId: movedFile.id,
+        fileName: movedFile.name,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'moveFile',
+      error: error instanceof Error ? error.message : 'Failed to move file',
+    };
+  }
+}
+
+// ============================================
+// DeleteFile Tool Implementation
+// ============================================
+
+/**
+ * Execute the deleteFile tool
+ * Deletes a file from a project
+ */
+export async function executeDeleteFileTool(
+  projectId: string | undefined,
+  params: { file: string; project?: string }
+): Promise<ToolResult> {
+  try {
+    const { file, project } = params;
+    
+    if (!file) {
+      return {
+        success: false,
+        tool: 'deleteFile',
+        error: 'File name is required.',
+      };
+    }
+
+    let targetProjectId: string | undefined = projectId;
+    let targetProjectName: string | undefined;
+    let fileToDelete: { id: string; name: string } | null = null;
+
+    // If project is specified in params, use that
+    if (project) {
+      const resolvedProject = await resolveProject(project);
+      if (!resolvedProject) {
+        return {
+          success: false,
+          tool: 'deleteFile',
+          error: `Project "${project}" not found.`,
+        };
+      }
+      targetProjectId = resolvedProject.id;
+      targetProjectName = resolvedProject.name;
+    }
+
+    // If we have a specific project, search in it
+    if (targetProjectId) {
+      const foundFile = await findFileByPath(targetProjectId, file);
+      if (foundFile) {
+        fileToDelete = { id: foundFile.id, name: foundFile.name };
+        if (!targetProjectName) {
+          const proj = await getProject(targetProjectId);
+          targetProjectName = proj?.name;
+        }
+      }
+    } else {
+      // Global mode - search across all projects
+      const result = await findFileGlobal(file);
+      if (result) {
+        fileToDelete = { id: result.file.id, name: result.file.name };
+        targetProjectName = result.projectName;
+      }
+    }
+
+    if (!fileToDelete) {
+      return {
+        success: false,
+        tool: 'deleteFile',
+        error: `File "${file}" not found.${!targetProjectId ? ' Please specify which project the file is in.' : ''}`,
+      };
+    }
+
+    // Delete the file
+    await deleteFile(fileToDelete.id);
+
+    return {
+      success: true,
+      tool: 'deleteFile',
+      data: `File "${fileToDelete.name}" has been deleted from project "${targetProjectName}".`,
+      metadata: {
+        fileId: fileToDelete.id,
+        fileName: fileToDelete.name,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'deleteFile',
+      error: error instanceof Error ? error.message : 'Failed to delete file',
+    };
+  }
+}
+
+// ============================================
+// DeleteProject Tool Implementation
+// ============================================
+
+/**
+ * Execute the deleteProject tool
+ * Deletes an entire project and all its files
+ */
+export async function executeDeleteProjectTool(
+  params: { project: string; confirm?: string }
+): Promise<ToolResult> {
+  try {
+    const { project, confirm } = params;
+    
+    if (!project) {
+      return {
+        success: false,
+        tool: 'deleteProject',
+        error: 'Project name or ID is required.',
+      };
+    }
+
+    // Resolve the project first to show it exists
+    const resolvedProject = await resolveProject(project);
+    if (!resolvedProject) {
+      return {
+        success: false,
+        tool: 'deleteProject',
+        error: `Project "${project}" not found.`,
+      };
+    }
+
+    // Require explicit confirmation
+    if (confirm?.toLowerCase() !== 'yes') {
+      return {
+        success: false,
+        tool: 'deleteProject',
+        error: `⚠️ **Confirmation required** to delete project "${resolvedProject.name}".\n\nThis will permanently delete the project and all its files. To confirm, please say "Yes, delete the project ${resolvedProject.name}" or ask me again with explicit confirmation.`,
+      };
+    }
+
+    // Delete the project
+    await deleteProject(resolvedProject.id);
+
+    return {
+      success: true,
+      tool: 'deleteProject',
+      data: `Project "${resolvedProject.name}" and all its files have been permanently deleted.`,
+      metadata: {
+        fileId: resolvedProject.id,
+        fileName: resolvedProject.name,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'deleteProject',
+      error: error instanceof Error ? error.message : 'Failed to delete project',
+    };
+  }
+}
+
+// ============================================
 // UpdateFile Tool Implementation
 // ============================================
 
@@ -1318,13 +1781,6 @@ function applyUpdateOperation(
   operation: UpdateOperation
 ): string {
   switch (operation) {
-    case 'replace':
-      return (
-        originalContent.slice(0, sectionStart) +
-        newContent +
-        originalContent.slice(sectionEnd)
-      );
-
     case 'insert_before':
       return (
         originalContent.slice(0, sectionStart) +
@@ -1341,8 +1797,14 @@ function applyUpdateOperation(
         originalContent.slice(sectionEnd)
       );
 
+    case 'replace':
     default:
-      return originalContent;
+      // Default to 'replace' operation for any unrecognized operation
+      return (
+        originalContent.slice(0, sectionStart) +
+        newContent +
+        originalContent.slice(sectionEnd)
+      );
   }
 }
 
@@ -1667,57 +2129,232 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
 // ============================================
 
 /**
+ * Resolve project ID from params or use default
+ * In global mode, some tools need to specify the project
+ */
+async function resolveProjectForTool(
+  defaultProjectId: string | undefined,
+  projectParam?: string
+): Promise<string | null> {
+  // If project is specified in params, try to resolve it
+  if (projectParam) {
+    const resolved = await resolveProject(projectParam);
+    return resolved?.id || null;
+  }
+  
+  // Otherwise use the default
+  return defaultProjectId || null;
+}
+
+/**
  * Execute a tool call
+ * @param projectId - Project ID, or undefined for global mode
  */
 export async function executeTool(
-  projectId: string,
+  projectId: string | undefined,
   call: ToolCall,
   userMessage?: string
 ): Promise<ToolResult> {
   switch (call.tool) {
-    case 'read':
-      return executeReadTool(projectId, {
+    case 'read': {
+      // In global mode, need to resolve project from params or find file globally
+      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      if (!targetProjectId) {
+        // Try to find the file globally
+        const fileName = call.params.fileName || call.params.file || call.params.name;
+        if (fileName) {
+          const globalResult = await findFileGlobal(fileName);
+          if (globalResult) {
+            targetProjectId = globalResult.projectId;
+          }
+        }
+      }
+      
+      if (!targetProjectId) {
+        return {
+          success: false,
+          tool: 'read',
+          error: 'Could not determine which project the file belongs to. Please specify the project.',
+        };
+      }
+      
+      return executeReadTool(targetProjectId, {
         fileId: call.params.fileId || call.params.file_id,
         fileName: call.params.fileName || call.params.file || call.params.name,
         maxChunks: call.params.maxChunks ? parseInt(call.params.maxChunks) : undefined,
       });
+    }
 
-    case 'search':
-      return executeSearchTool(projectId, {
+    case 'search': {
+      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      // Search can work globally if no project specified
+      if (!targetProjectId) {
+        // Global search
+        const results = await searchAllProjects(
+          call.params.query || call.params.q || call.params.search,
+          call.params.maxResults ? parseInt(call.params.maxResults) : 5
+        );
+        
+        if (results.length === 0) {
+          return {
+            success: true,
+            tool: 'search',
+            data: 'No relevant results found for your query across all projects.',
+            metadata: { truncated: false },
+          };
+        }
+        
+        const formattedResults = results.map((result, index) => {
+          const scorePercent = (result.score * 100).toFixed(1);
+          return `[Result ${index + 1}] (Project: ${result.projectName}, Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
+        }).join('\n\n---\n\n');
+        
+        return {
+          success: true,
+          tool: 'search',
+          data: formattedResults,
+          metadata: { truncated: false },
+        };
+      }
+      
+      return executeSearchTool(targetProjectId, {
         query: call.params.query || call.params.q || call.params.search,
         maxResults: call.params.maxResults ? parseInt(call.params.maxResults) : undefined,
       });
+    }
 
-    case 'summarize':
-      return executeSummarizeTool(projectId, {
+    case 'summarize': {
+      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      if (!targetProjectId) {
+        // Try to find the file globally
+        const fileName = call.params.fileName || call.params.file || call.params.name;
+        if (fileName) {
+          const globalResult = await findFileGlobal(fileName);
+          if (globalResult) {
+            targetProjectId = globalResult.projectId;
+          }
+        }
+      }
+      
+      if (!targetProjectId) {
+        return {
+          success: false,
+          tool: 'summarize',
+          error: 'Could not determine which project the file belongs to. Please specify the project.',
+        };
+      }
+      
+      return executeSummarizeTool(targetProjectId, {
         fileId: call.params.fileId || call.params.file_id,
         fileName: call.params.fileName || call.params.file || call.params.name,
       });
+    }
 
-    case 'write':
-      return executeWriteTool(projectId, {
+    case 'write': {
+      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      if (!targetProjectId) {
+        return {
+          success: false,
+          tool: 'write',
+          error: 'Project is required. Please specify which project to create the file in.',
+        };
+      }
+      
+      return executeWriteTool(targetProjectId, {
         format: (call.params.format as DocumentFormat) || 'md',
         title: call.params.title || 'New Document',
         content: call.params.content || '',
         path: call.params.path || call.params.directory || '',
       }, userMessage);
+    }
 
-    case 'addNote':
-      return executeAddNoteTool(projectId, {
+    case 'addNote': {
+      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      if (!targetProjectId) {
+        return {
+          success: false,
+          tool: 'addNote',
+          error: 'Project is required. Please specify which project to add the note to.',
+        };
+      }
+      
+      return executeAddNoteTool(targetProjectId, {
         content: call.params.content || call.params.text || call.params.note || userMessage || '',
         title: call.params.title,
         topic: call.params.topic,
         tags: call.params.tags,
       });
+    }
 
-    case 'updateFile':
-      return executeUpdateFileTool(projectId, {
+    case 'updateFile': {
+      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
+      
+      if (!targetProjectId) {
+        // Try to find the file globally
+        const fileName = call.params.fileName || call.params.file || call.params.name;
+        if (fileName) {
+          const globalResult = await findFileGlobal(fileName);
+          if (globalResult) {
+            targetProjectId = globalResult.projectId;
+          }
+        }
+      }
+      
+      if (!targetProjectId) {
+        return {
+          success: false,
+          tool: 'updateFile',
+          error: 'Could not determine which project the file belongs to. Please specify the project.',
+        };
+      }
+      
+      // Validate operation - must be one of the valid values, default to 'replace'
+      const validOperations: UpdateOperation[] = ['replace', 'insert_before', 'insert_after'];
+      const rawOperation = call.params.operation?.toLowerCase?.() || '';
+      const operation: UpdateOperation = validOperations.includes(rawOperation as UpdateOperation)
+        ? (rawOperation as UpdateOperation)
+        : 'replace';
+      
+      return executeUpdateFileTool(targetProjectId, {
         fileId: call.params.fileId || call.params.file_id,
         fileName: call.params.fileName || call.params.file || call.params.name,
-        operation: (call.params.operation as UpdateOperation) || 'replace',
+        operation,
         sectionIdentifier: call.params.section || call.params.sectionIdentifier || '',
         newContent: call.params.newContent || call.params.content || '',
       }, userMessage);
+    }
+
+    // Global tools (work without projectId)
+    case 'createProject':
+      return executeCreateProjectTool({
+        name: call.params.name,
+        description: call.params.description,
+      });
+
+    case 'moveFile':
+      return executeMoveFileTool({
+        file: call.params.file || call.params.fileName,
+        fromProject: call.params.fromProject || call.params.from,
+        toProject: call.params.toProject || call.params.to,
+        directory: call.params.directory || call.params.path,
+      });
+
+    case 'deleteFile':
+      return executeDeleteFileTool(projectId, {
+        file: call.params.file || call.params.fileName,
+        project: call.params.project,
+      });
+
+    case 'deleteProject':
+      return executeDeleteProjectTool({
+        project: call.params.project || call.params.name,
+        confirm: call.params.confirm,
+      });
 
     default:
       return {
@@ -1730,9 +2367,10 @@ export async function executeTool(
 
 /**
  * Execute all tool calls in a response
+ * @param projectId - Project ID, or undefined for global mode
  */
 export async function executeToolCalls(
-  projectId: string,
+  projectId: string | undefined,
   calls: ToolCall[],
   userMessage?: string
 ): Promise<ToolResult[]> {
@@ -1869,10 +2507,12 @@ async function isRequestComplete(
 /**
  * Execute the full tool-assisted chat flow with logging
  * Supports both router-based tool detection AND inline tool calls from LLM response
+ * Also includes checkpoint analysis for sequential message handling (confirmations)
+ * @param projectId - Project ID, or undefined for global mode
  * @param onStreamChunk - Optional callback for streaming response chunks
  */
 export async function orchestrateToolExecution(
-  projectId: string,
+  projectId: string | undefined,
   userMessage: string,
   systemPrompt: string,
   conversationHistory: Array<{ role: string; content: string }>,
@@ -1954,7 +2594,7 @@ export async function orchestrateToolExecution(
         routingStep.status = 'completed';
         routingStep.endTime = new Date();
         routingStep.detail = routerToolCalls.length > 0 
-          ? `Router detected: ${routerToolCalls.map(t => t.tool).join(', ')}`
+          ? `Tools to execute: ${routerToolCalls.map(t => t.tool).join(', ')}`
           : 'Proceeding to LLM';
         updateStep(routingStep);
       } catch {
@@ -2115,22 +2755,117 @@ export async function orchestrateToolExecution(
         messages.push({ role: 'assistant', content: llmResponse.content });
       }
     } else {
-      // No tool calls in response - just use the response as-is
-      responseStep.label = 'Response ready';
+      // No inline tool calls in response - check if assistant committed to an action
+      responseStep.label = 'Analyzing response...';
       updateStep(responseStep);
-      
-      // Stream the response if callback provided
-      if (onStreamChunk) {
-        onStreamChunk(llmResponse.content, false);
-        onStreamChunk('', true); // Signal completion
+
+      // Run continuation analysis to check if assistant said "I will now..." without executing
+      const continuationResult = await analyzeAssistantResponse(
+        llmResponse.content,
+        [...conversationHistory, { role: 'user', content: userMessage }],
+        projectFiles
+      );
+
+      if (continuationResult.shouldExecuteTool && continuationResult.tools.length > 0) {
+        // Assistant committed to action - execute the tools
+        responseStep.label = `Executing: ${continuationResult.reasoning}`;
+        updateStep(responseStep);
+
+        // Stream the assistant's response first
+        if (onStreamChunk) {
+          onStreamChunk(llmResponse.content, false);
+        }
+
+        const continuationResults: ToolResult[] = [];
+        
+        for (const call of continuationResult.tools) {
+          const toolStep: ExecutionStep = {
+            id: `continuation-tool-${call.tool}-${Date.now()}`,
+            type: 'tool',
+            status: 'running',
+            label: `Executing ${call.tool}`,
+            detail: call.params.file || call.params.fileName || call.params.title || 'Processing...',
+            startTime: new Date(),
+          };
+          updateStep(toolStep);
+
+          const result = await executeTool(projectId, call, userMessage);
+          continuationResults.push(result);
+          allToolResults.push(result);
+          allToolCalls.push(call);
+
+          toolStep.status = result.success ? 'completed' : 'error';
+          toolStep.endTime = new Date();
+          toolStep.detail = result.success 
+            ? (result.metadata?.fileName || 'Done')
+            : result.error;
+          updateStep(toolStep);
+        }
+
+        // Add tool results and generate final response
+        if (continuationResults.some(r => r.success)) {
+          messages.push({ role: 'assistant', content: llmResponse.content });
+          
+          const toolContext = formatToolResults(continuationResults);
+          messages.push({ 
+            role: 'user', 
+            content: `[System: Tool execution completed]\n\n${toolContext}\n\nBriefly confirm the action was completed.` 
+          });
+
+          const confirmStep: ExecutionStep = {
+            id: `confirm-response-${iteration}`,
+            type: 'response',
+            status: 'running',
+            label: 'Confirming completion...',
+            startTime: new Date(),
+          };
+          updateStep(confirmStep);
+
+          let confirmResponse;
+          if (onStreamChunk) {
+            onStreamChunk('\n\n', false); // Add separator
+            confirmResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
+          } else {
+            confirmResponse = await chatCompletion({ messages });
+          }
+
+          confirmStep.status = 'completed';
+          confirmStep.endTime = new Date();
+          confirmStep.label = 'Complete';
+          updateStep(confirmStep);
+
+          const combinedResponse = `${llmResponse.content}\n\n${confirmResponse.content}`;
+          allResponses.push(combinedResponse);
+          messages.push({ role: 'assistant', content: confirmResponse.content });
+        } else {
+          // Tools failed
+          allResponses.push(llmResponse.content);
+          messages.push({ role: 'assistant', content: llmResponse.content });
+        }
+
+        responseStep.status = 'completed';
+        responseStep.endTime = new Date();
+        updateStep(responseStep);
+      } else {
+        // No continuation needed - just use the response as-is
+        responseStep.label = 'Response ready';
+        responseStep.status = 'completed';
+        responseStep.endTime = new Date();
+        updateStep(responseStep);
+        
+        // Stream the response if callback provided
+        if (onStreamChunk) {
+          onStreamChunk(llmResponse.content, false);
+          onStreamChunk('', true); // Signal completion
+        }
+        
+        allResponses.push(llmResponse.content);
+        messages.push({ role: 'assistant', content: llmResponse.content });
       }
-      
-      allResponses.push(llmResponse.content);
-      messages.push({ role: 'assistant', content: llmResponse.content });
     }
 
     // Step 8: Check if more iterations needed (only if we had tool calls)
-    if (parsed.hasToolCalls && iteration < MAX_ITERATIONS) {
+    if ((parsed.hasToolCalls || allToolCalls.length > 0) && iteration < MAX_ITERATIONS) {
       // Check if the response still contains unfulfilled requests
       const lastResponse = allResponses[allResponses.length - 1];
       const stillHasToolCalls = parseToolCallsFromResponse(lastResponse).hasToolCalls;
