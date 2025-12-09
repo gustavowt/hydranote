@@ -142,11 +142,12 @@ export interface ChatMessage {
 }
 
 /**
- * Chat session for a project
+ * Chat session for a project (or global if projectId is undefined)
  */
 export interface ChatSession {
   id: string;
-  projectId: string;
+  /** Project ID - undefined means global session with access to all projects */
+  projectId?: string;
   messages: ChatMessage[];
   createdAt: Date;
   updatedAt: Date;
@@ -155,7 +156,7 @@ export interface ChatSession {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject';
 
 /**
  * Tool definition for system prompt
@@ -875,3 +876,57 @@ export interface DragDropEvent {
   sourceNode: FileTreeNode;
   targetNode: FileTreeNode;
 }
+
+// ============================================
+// Conversation Checkpoint Types (Sequential Messages)
+// ============================================
+
+/**
+ * Represents the state of a conversation at a checkpoint
+ */
+export interface ConversationCheckpoint {
+  /** Whether there are pending actions awaiting execution */
+  hasPendingActions: boolean;
+  /** Tools that should be executed based on conversation state */
+  toolsToExecute: ToolCall[];
+  /** Whether the user has confirmed a pending action */
+  userConfirmed: boolean;
+  /** Whether the user has rejected/cancelled a pending action */
+  userRejected: boolean;
+  /** Whether the conversation turn is complete (no more actions needed) */
+  turnComplete: boolean;
+  /** Reasoning for the decision */
+  reasoning: string;
+}
+
+/**
+ * Represents a pending tool action proposed by the assistant
+ */
+export interface PendingToolAction {
+  /** Unique ID for this pending action */
+  id: string;
+  /** The tool call to execute */
+  toolCall: ToolCall;
+  /** Project ID where the tool will execute */
+  projectId: string;
+  /** Session ID for the chat session */
+  sessionId: string;
+  /** Description shown to user */
+  description: string;
+  /** Content preview (e.g., file content for write tool) */
+  contentPreview?: string;
+  /** Original user message that initiated this action */
+  originalUserMessage: string;
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Expiration timestamp (pending actions expire after some time) */
+  expiresAt: Date;
+}
+
+/**
+ * Constants for pending actions
+ */
+export const PENDING_ACTION_CONFIG = {
+  /** How long pending actions remain valid (in milliseconds) - 10 minutes */
+  expirationMs: 10 * 60 * 1000,
+} as const;
