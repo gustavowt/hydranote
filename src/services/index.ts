@@ -29,11 +29,16 @@ export {
   getProjectFileTree,
   getProjectFilesForAutocomplete,
   findFileByPath,
+  // Global/Cross-project functions
+  getAllFilesForAutocomplete,
+  searchAllProjects,
+  findFileGlobal,
 } from './projectService';
 
 // Chat Service
 export {
   buildSystemPrompt,
+  buildGlobalSystemPrompt,
   estimateTokens,
   manageContext,
   formatContextForPrompt,
@@ -73,6 +78,10 @@ export {
   executeWriteTool,
   executeAddNoteTool,
   executeUpdateFileTool,
+  executeCreateProjectTool,
+  executeMoveFileTool,
+  executeDeleteFileTool,
+  executeDeleteProjectTool,
   executeTool,
   executeToolCalls,
   formatToolResults,
@@ -83,10 +92,12 @@ export {
   getPendingPreview,
   removePendingPreview,
   applyFileUpdate,
+  // Continuation analyzer for sequential messages
+  analyzeAssistantResponse,
 } from './toolService';
 
 // Export types from toolService
-export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult, ParsedToolCalls } from './toolService';
+export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult, ParsedToolCalls, ContinuationResult } from './toolService';
 
 // Document Generator Service
 export {
