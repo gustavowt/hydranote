@@ -622,3 +622,114 @@ export async function findFileByPath(
   return file || null;
 }
 
+// ============================================
+// Global/Cross-Project Functions
+// ============================================
+
+/**
+ * Get flat list of files from ALL projects for autocomplete
+ * Returns files sorted by project name, then file name
+ * Each file includes the project name for disambiguation
+ */
+export async function getAllFilesForAutocomplete(): Promise<Array<{
+  id: string;
+  name: string;
+  path: string;
+  type: SupportedFileType;
+  projectId: string;
+  projectName: string;
+}>> {
+  await ensureInitialized();
+  
+  const projects = await dbGetAllProjects();
+  const allFiles: Array<{
+    id: string;
+    name: string;
+    path: string;
+    type: SupportedFileType;
+    projectId: string;
+    projectName: string;
+  }> = [];
+  
+  for (const project of projects) {
+    const files = await get_project_files(project.id);
+    
+    for (const f of files) {
+      allFiles.push({
+        id: f.id,
+        name: f.name.split('/').pop() || f.name,
+        path: f.name,
+        type: f.type,
+        projectId: project.id,
+        projectName: project.name,
+      });
+    }
+  }
+  
+  // Sort by project name, then file name
+  return allFiles.sort((a, b) => {
+    const projectCompare = a.projectName.localeCompare(b.projectName);
+    if (projectCompare !== 0) return projectCompare;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/**
+ * Search across ALL projects
+ * Returns results from all projects with project info
+ */
+export async function searchAllProjects(
+  query: string,
+  k: number = 5
+): Promise<Array<SearchResult & { projectId: string; projectName: string }>> {
+  await ensureInitialized();
+  
+  const projects = await dbGetAllProjects();
+  const allResults: Array<SearchResult & { projectId: string; projectName: string }> = [];
+  
+  // Generate query embedding once
+  const queryEmbedding = await generateEmbedding(query);
+  
+  for (const project of projects) {
+    const results = await vector_search(project.id, queryEmbedding, k);
+    
+    for (const result of results) {
+      allResults.push({
+        ...result,
+        projectId: project.id,
+        projectName: project.name,
+      });
+    }
+  }
+  
+  // Sort by score (highest first) and limit to k results
+  return allResults
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+}
+
+/**
+ * Find file by path or name across ALL projects
+ * Used for resolving @file: references in global mode
+ */
+export async function findFileGlobal(
+  pathOrName: string
+): Promise<{ file: ProjectFile; projectId: string; projectName: string } | null> {
+  await ensureInitialized();
+  
+  const projects = await dbGetAllProjects();
+  
+  for (const project of projects) {
+    const file = await findFileByPath(project.id, pathOrName);
+    if (file) {
+      return {
+        file,
+        projectId: project.id,
+        projectName: project.name,
+      };
+    }
+  }
+  
+  return null;
+}
+
