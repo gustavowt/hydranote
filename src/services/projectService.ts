@@ -26,6 +26,12 @@ import {
 } from './database';
 import { processDocument, isFileTypeSupported } from './documentProcessor';
 import { generateEmbeddingsForChunks, generateEmbedding } from './embeddingService';
+import {
+  syncFileToFileSystem,
+  syncFileDelete,
+  syncProjectCreate,
+  syncProjectDelete,
+} from './syncService';
 
 let initialized = false;
 
@@ -53,8 +59,9 @@ async function ensureInitialized(): Promise<void> {
 
 /**
  * Create a new project
+ * Returns the project and an optional sync error if file system sync failed
  */
-export async function createProject(name: string, description?: string): Promise<Project> {
+export async function createProject(name: string, description?: string): Promise<Project & { syncError?: string }> {
   await ensureInitialized();
   
   const project: Project = {
@@ -67,6 +74,14 @@ export async function createProject(name: string, description?: string): Promise
   };
   
   await dbCreateProject(project);
+  
+  // Sync to file system (creates project directory)
+  const syncResult = await syncProjectCreate(name);
+  
+  if (!syncResult.success) {
+    return { ...project, syncError: syncResult.error };
+  }
+  
   return project;
 }
 
@@ -91,7 +106,17 @@ export async function getAllProjects(): Promise<Project[]> {
  */
 export async function deleteProject(projectId: string): Promise<void> {
   await ensureInitialized();
+  
+  // Get project name before deletion for file system sync
+  const project = await dbGetProject(projectId);
+  const projectName = project?.name;
+  
   await dbDeleteProject(projectId);
+  
+  // Sync to file system (deletes project directory)
+  if (projectName) {
+    await syncProjectDelete(projectName);
+  }
 }
 
 // ============================================
@@ -155,6 +180,11 @@ export async function ingestDocument(
     
     projectFile.status = 'indexed';
     projectFile.content = text;
+    
+    // Sync to file system (for markdown files)
+    if (projectFile.type === 'md' && text) {
+      await syncFileToFileSystem(project.name, projectFile.name, text);
+    }
     
     return projectFile;
   } catch (error) {
@@ -285,7 +315,7 @@ export async function searchProject(
 }
 
 // ============================================
-// File Operations
+// File Operations (Centralized - Single Source of Truth)
 // ============================================
 
 /**
@@ -294,6 +324,107 @@ export async function searchProject(
 export async function getFile(fileId: string): Promise<ProjectFile | null> {
   await ensureInitialized();
   return dbGetFile(fileId);
+}
+
+/**
+ * Create a new file in a project (centralized function)
+ * This is the SINGLE SOURCE OF TRUTH for file creation.
+ * All services should use this function to create files.
+ * 
+ * Handles:
+ * - Database insertion
+ * - File system sync (for markdown files)
+ * - Automatic flushing
+ * 
+ * Does NOT handle indexing (chunks/embeddings) - use indexFileForSearch() after creation if needed.
+ */
+export async function createFile(
+  projectId: string,
+  filePath: string,
+  content: string,
+  fileType: 'md' | 'txt' | 'pdf' | 'docx' = 'md'
+): Promise<ProjectFile> {
+  await ensureInitialized();
+  
+  // Validate project exists
+  const project = await dbGetProject(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  
+  const now = new Date();
+  const fileId = crypto.randomUUID();
+  const size = new Blob([content]).size;
+  
+  // Create file record
+  const projectFile: ProjectFile = {
+    id: fileId,
+    projectId,
+    name: filePath,
+    type: fileType,
+    size,
+    status: 'indexed',
+    content,
+    createdAt: now,
+    updatedAt: now,
+  };
+  
+  await dbCreateFile(projectFile);
+  await flushDatabase();
+  
+  // Sync to file system (for text-based files)
+  if (fileType === 'md' || fileType === 'txt') {
+    await syncFileToFileSystem(project.name, filePath, content);
+  }
+  
+  return projectFile;
+}
+
+/**
+ * Index a file for semantic search (create chunks and embeddings)
+ * Call this after createFile() if the file should be searchable.
+ */
+export async function indexFileForSearch(
+  projectId: string,
+  fileId: string,
+  content: string,
+  fileType: 'md' | 'txt' = 'md'
+): Promise<void> {
+  await ensureInitialized();
+  
+  const { chunkText, chunkMarkdownText } = await import('./documentProcessor');
+  const { generateEmbeddingsForChunks } = await import('./embeddingService');
+  const conn = getConnection();
+  
+  // Chunk the content based on file type
+  const chunks = fileType === 'md'
+    ? chunkMarkdownText(content, fileId, projectId)
+    : chunkText(content, fileId, projectId);
+  
+  // Store chunks
+  for (const chunk of chunks) {
+    const escapedText = chunk.text.replace(/'/g, "''");
+    await conn.query(`
+      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
+      VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
+    `);
+  }
+  
+  // Generate and store embeddings
+  try {
+    const embeddings = await generateEmbeddingsForChunks(chunks);
+    for (const embedding of embeddings) {
+      const vectorStr = `[${embedding.vector.join(', ')}]`;
+      await conn.query(`
+        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
+        VALUES ('${embedding.id}', '${embedding.chunkId}', '${embedding.fileId}', '${embedding.projectId}', ${vectorStr}::DOUBLE[], '${embedding.createdAt.toISOString()}')
+      `);
+    }
+  } catch (error) {
+    console.warn('Failed to generate embeddings for file:', fileId, error);
+  }
+  
+  await flushDatabase();
 }
 
 /**
@@ -310,11 +441,58 @@ export async function getFileWithChunks(fileId: string): Promise<{ file: Project
 }
 
 /**
+ * Update file content and sync to file system
+ */
+export async function updateFile(fileId: string, content: string): Promise<ProjectFile | null> {
+  await ensureInitialized();
+  
+  // Get file info for sync
+  const file = await dbGetFile(fileId);
+  if (!file) {
+    return null;
+  }
+  
+  // Get project name for file system sync
+  const project = await dbGetProject(file.projectId);
+  
+  // Update content in database
+  await updateFileContent(fileId, content);
+  await flushDatabase();
+  
+  // Sync to file system
+  if (project && file.type === 'md') {
+    await syncFileToFileSystem(project.name, file.name, content);
+  }
+  
+  // Return updated file
+  return {
+    ...file,
+    content,
+    size: new Blob([content]).size,
+    updatedAt: new Date(),
+  };
+}
+
+/**
  * Delete a file and its chunks and embeddings
  */
 export async function deleteFile(fileId: string): Promise<void> {
   await ensureInitialized();
+  
+  // Get file and project info before deletion for file system sync
+  const file = await dbGetFile(fileId);
+  let projectName: string | undefined;
+  if (file) {
+    const project = await dbGetProject(file.projectId);
+    projectName = project?.name;
+  }
+  
   await dbDeleteFile(fileId);
+  
+  // Sync to file system (deletes file)
+  if (projectName && file) {
+    await syncFileDelete(projectName, file.name);
+  }
 }
 
 /**
@@ -332,6 +510,14 @@ export async function moveFile(
     throw new Error(`File not found: ${fileId}`);
   }
   
+  // Get source project name for file system sync
+  const sourceProject = await dbGetProject(file.projectId);
+  const sourceProjectName = sourceProject?.name;
+  
+  // Get target project name for file system sync
+  const targetProject = await dbGetProject(targetProjectId);
+  const targetProjectName = targetProject?.name;
+  
   // Get the file name (without path)
   const fileName = file.name.split('/').pop() || file.name;
   
@@ -341,6 +527,14 @@ export async function moveFile(
     : fileName;
   
   await dbUpdateFileProject(fileId, targetProjectId, newName);
+  
+  // Sync to file system: delete from old location, write to new location
+  if (sourceProjectName && file.content) {
+    await syncFileDelete(sourceProjectName, file.name);
+  }
+  if (targetProjectName && file.content) {
+    await syncFileToFileSystem(targetProjectName, newName, file.content);
+  }
   
   // Return updated file
   return {
@@ -391,6 +585,9 @@ export async function createEmptyMarkdownFile(
   
   await dbCreateFile(projectFile);
   await flushDatabase();
+  
+  // Sync to file system
+  await syncFileToFileSystem(project.name, fullPath, content);
   
   return projectFile;
 }

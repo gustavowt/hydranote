@@ -41,6 +41,8 @@ import {
   findFileByPath,
   findFileGlobal,
   searchAllProjects,
+  createFile as projectCreateFile,
+  indexFileForSearch,
 } from './projectService';
 import { chatCompletion, chatCompletionStreaming } from './llmService';
 import { generateDocument } from './documentGeneratorService';
@@ -923,124 +925,10 @@ function titleToFileName(title: string): string {
 }
 
 /**
- * Persist a file directly to the project database
+ * Helper to build full file path
  */
-async function persistFileToProject(
-  projectId: string,
-  fileName: string,
-  directory: string,
-  content: string,
-  fileType: 'md' | 'txt'
-): Promise<{ fileId: string; fullPath: string; size: number }> {
-  const { getConnection, flushDatabase } = await import('./database');
-  const conn = getConnection();
-  const now = new Date();
-  const fileId = crypto.randomUUID();
-  
-  // Build full path
-  const fullPath = directory ? `${directory}/${fileName}` : fileName;
-  
-  // Escape content for SQL
-  const escapedContent = content.replace(/'/g, "''");
-  const escapedName = fullPath.replace(/'/g, "''");
-  
-  // Calculate size in bytes
-  const size = new Blob([content]).size;
-  
-  // Insert file record
-  await conn.query(`
-    INSERT INTO files (id, project_id, name, type, size, status, content, created_at, updated_at)
-    VALUES ('${fileId}', '${projectId}', '${escapedName}', '${fileType}', ${size}, 'indexed', '${escapedContent}', '${now.toISOString()}', '${now.toISOString()}')
-  `);
-  
-  // Flush to persist immediately
-  await flushDatabase();
-  
-  return { fileId, fullPath, size };
-}
-
-/**
- * Index a file for semantic search (create chunks and embeddings)
- */
-async function indexFileForSearch(
-  projectId: string,
-  fileId: string,
-  content: string
-): Promise<void> {
-  const { getConnection, flushDatabase } = await import('./database');
-  const { generateEmbedding } = await import('./embeddingService');
-  const conn = getConnection();
-  
-  // Simple chunking for the file
-  const maxChunkSize = 800;
-  const chunks: Array<{ id: string; text: string; index: number; startOffset: number; endOffset: number }> = [];
-  
-  let currentOffset = 0;
-  let chunkIndex = 0;
-  
-  // Split by paragraphs first
-  const paragraphs = content.split(/\n\n+/);
-  let currentChunk = '';
-  let chunkStartOffset = 0;
-  
-  for (const para of paragraphs) {
-    if (currentChunk.length + para.length > maxChunkSize && currentChunk.length > 0) {
-      // Save current chunk
-      chunks.push({
-        id: crypto.randomUUID(),
-        text: currentChunk.trim(),
-        index: chunkIndex++,
-        startOffset: chunkStartOffset,
-        endOffset: currentOffset,
-      });
-      currentChunk = para;
-      chunkStartOffset = currentOffset;
-    } else {
-      currentChunk += (currentChunk ? '\n\n' : '') + para;
-    }
-    currentOffset += para.length + 2; // +2 for \n\n
-  }
-  
-  // Save final chunk
-  if (currentChunk.trim().length > 0) {
-    chunks.push({
-      id: crypto.randomUUID(),
-      text: currentChunk.trim(),
-      index: chunkIndex,
-      startOffset: chunkStartOffset,
-      endOffset: content.length,
-    });
-  }
-  
-  const now = new Date().toISOString();
-  
-  // Store chunks and generate embeddings
-  for (const chunk of chunks) {
-    const escapedText = chunk.text.replace(/'/g, "''");
-    
-    // Insert chunk
-    await conn.query(`
-      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-      VALUES ('${chunk.id}', '${fileId}', '${projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${now}')
-    `);
-    
-    // Generate and store embedding
-    try {
-      const vector = await generateEmbedding(chunk.text);
-      const embeddingId = crypto.randomUUID();
-      const vectorStr = `[${vector.join(', ')}]`;
-      
-      await conn.query(`
-        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
-        VALUES ('${embeddingId}', '${chunk.id}', '${fileId}', '${projectId}', ${vectorStr}::DOUBLE[], '${now}')
-      `);
-    } catch {
-      // Embedding generation failed, continue without it
-      console.warn(`Failed to generate embedding for chunk ${chunk.id}`);
-    }
-  }
-  
-  await flushDatabase();
+function buildFilePath(fileName: string, directory: string): string {
+  return directory ? `${directory}/${fileName}` : fileName;
 }
 
 /**
@@ -1077,35 +965,30 @@ export async function executeWriteTool(
       );
     }
 
-    // For Markdown files: Save directly to project
+    // For Markdown files: Save directly to project using centralized function
     if (format === 'md') {
       const fileName = titleToFileName(title) + '.md';
+      const fullPath = buildFilePath(fileName, directory);
       
       // Add title as H1 if content doesn't start with a heading
       const finalContent = content.trim().startsWith('#') 
         ? content 
         : `# ${title}\n\n${content}`;
       
-      // Persist to project
-      const { fileId, fullPath, size } = await persistFileToProject(
-        projectId,
-        fileName,
-        directory,
-        finalContent,
-        'md'
-      );
+      // Use centralized createFile (handles DB + file system sync)
+      const file = await projectCreateFile(projectId, fullPath, finalContent, 'md');
       
-      // Index for search
-      await indexFileForSearch(projectId, fileId, finalContent);
+      // Index for search using centralized function
+      await indexFileForSearch(projectId, file.id, finalContent, 'md');
       
       return {
         success: true,
         tool: 'write',
-        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(size)}\n**Location:** ${directory || 'project root'}`,
+        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${directory || 'project root'}`,
         metadata: {
           fileName: fullPath,
-          fileId: fileId,
-          fileSize: size,
+          fileId: file.id,
+          fileSize: file.size,
           truncated: false,
         },
       };
@@ -1249,10 +1132,13 @@ export async function executeCreateProjectTool(
 
     const project = await createProject(name, params.description);
 
+    // Check for sync error
+    const syncError = (project as { syncError?: string }).syncError;
+
     return {
       success: true,
       tool: 'createProject',
-      data: `Project "${project.name}" has been created successfully.${params.description ? `\n\n**Description:** ${params.description}` : ''}`,
+      data: `Project "${project.name}" has been created successfully.${syncError ? `\n\n⚠️ Note: Folder sync failed: ${syncError}` : ''}${params.description ? `\n\n**Description:** ${params.description}` : ''}`,
       metadata: {
         fileId: project.id,
         fileName: project.name,
@@ -2101,6 +1987,19 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
 
     // Flush to persist changes
     await flushDatabase();
+
+    // Sync to file system
+    try {
+      const { syncFileToFileSystem } = await import('./syncService');
+      const { getProject } = await import('./projectService');
+      const project = await getProject(file.projectId);
+      if (project && preview.fileType === 'md') {
+        await syncFileToFileSystem(project.name, preview.fileName, preview.newFullContent);
+      }
+    } catch (syncError) {
+      console.error('Failed to sync file to file system:', syncError);
+      // Don't fail the whole operation if sync fails
+    }
 
     // Clean up the preview
     pendingPreviews.delete(previewId);

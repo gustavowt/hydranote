@@ -10,12 +10,10 @@ import type {
   NoteContextMetadata,
   DirectoryDecision,
   ProjectFile,
-  Chunk,
   ProjectSummary,
   ProjectRouterDecision,
   GlobalAddNoteParams,
   GlobalAddNoteResult,
-  NoteCreationSource,
 } from '../types';
 import {
   trackNoteCreated,
@@ -39,10 +37,9 @@ export type NoteExecutionCallback = (steps: NoteExecutionStep[]) => void;
 import { MARKDOWN_FILE_CONFIG } from '../types';
 import { chatCompletion } from './llmService';
 import { getNoteFormatInstructions, getDefaultNoteDirectory } from './llmService';
-import { get_project_files, getProject, getAllProjects, createProject } from './projectService';
+import { get_project_files, getProject, getAllProjects, createProject, createFile, indexFileForSearch } from './projectService';
 import { updateProjectStatus } from './database';
-import { getConnection, flushDatabase } from './database';
-import { generateEmbedding } from './embeddingService';
+import { flushDatabase } from './database';
 
 // ============================================
 // Prompt Templates
@@ -346,6 +343,7 @@ export async function decideNoteDirectory(
 
 /**
  * Save note to database as a project file
+ * Uses centralized createFile from projectService for consistent DB + FS sync
  */
 export async function persistNote(
   projectId: string,
@@ -353,40 +351,11 @@ export async function persistNote(
   directory: string,
   content: string
 ): Promise<ProjectFile> {
-  const conn = getConnection();
-  const now = new Date();
-  const fileId = crypto.randomUUID();
-  
   // Build full path
   const fullPath = directory ? `${directory}/${fileName}` : fileName;
   
-  // Escape content for SQL
-  const escapedContent = content.replace(/'/g, "''");
-  const escapedName = fullPath.replace(/'/g, "''");
-  
-  // Calculate size in bytes
-  const size = new Blob([content]).size;
-  
-  // Insert file record
-  await conn.query(`
-    INSERT INTO files (id, project_id, name, type, size, status, content, created_at, updated_at)
-    VALUES ('${fileId}', '${projectId}', '${escapedName}', 'md', ${size}, 'indexed', '${escapedContent}', '${now.toISOString()}', '${now.toISOString()}')
-  `);
-  
-  // Flush to persist immediately
-  await flushDatabase();
-  
-  return {
-    id: fileId,
-    projectId,
-    name: fullPath,
-    type: 'md',
-    size,
-    status: 'indexed',
-    content,
-    createdAt: now,
-    updatedAt: now,
-  };
+  // Use centralized createFile (handles DB insert + file system sync)
+  return createFile(projectId, fullPath, content, 'md');
 }
 
 // ============================================
@@ -394,129 +363,14 @@ export async function persistNote(
 // ============================================
 
 /**
- * Create chunks from markdown content using heading-aware chunking
- */
-function chunkMarkdownContent(
-  content: string,
-  fileId: string,
-  projectId: string
-): Chunk[] {
-  const chunks: Chunk[] = [];
-  const lines = content.split('\n');
-  
-  let currentChunk = '';
-  let currentHeading = '';
-  let startOffset = 0;
-  let currentOffset = 0;
-  let chunkIndex = 0;
-  
-  const maxChunkSize = 800; // Characters per chunk
-  const overlap = 100;
-  
-  for (const line of lines) {
-    const lineLength = line.length + 1; // +1 for newline
-    
-    // Check if this is a heading
-    if (line.startsWith('#')) {
-      // Save current chunk if substantial
-      if (currentChunk.trim().length > 50) {
-        chunks.push({
-          id: crypto.randomUUID(),
-          fileId,
-          projectId,
-          index: chunkIndex++,
-          text: currentChunk.trim(),
-          startOffset,
-          endOffset: currentOffset,
-          createdAt: new Date(),
-        });
-      }
-      
-      currentHeading = line;
-      currentChunk = line + '\n';
-      startOffset = currentOffset;
-    } else {
-      currentChunk += line + '\n';
-      
-      // Check if chunk is too large
-      if (currentChunk.length > maxChunkSize) {
-        chunks.push({
-          id: crypto.randomUUID(),
-          fileId,
-          projectId,
-          index: chunkIndex++,
-          text: currentChunk.trim(),
-          startOffset,
-          endOffset: currentOffset + lineLength,
-          createdAt: new Date(),
-        });
-        
-        // Start new chunk with overlap
-        const overlapText = currentHeading ? currentHeading + '\n' : '';
-        currentChunk = overlapText;
-        startOffset = currentOffset - overlap;
-      }
-    }
-    
-    currentOffset += lineLength;
-  }
-  
-  // Add final chunk
-  if (currentChunk.trim().length > 0) {
-    chunks.push({
-      id: crypto.randomUUID(),
-      fileId,
-      projectId,
-      index: chunkIndex,
-      text: currentChunk.trim(),
-      startOffset,
-      endOffset: currentOffset,
-      createdAt: new Date(),
-    });
-  }
-  
-  return chunks;
-}
-
-/**
  * Index the note for search (create chunks and embeddings)
+ * Uses centralized indexFileForSearch from projectService
  */
 export async function indexNote(file: ProjectFile): Promise<void> {
-  const conn = getConnection();
-  
   if (!file.content) return;
   
-  // Create chunks
-  const chunks = chunkMarkdownContent(file.content, file.id, file.projectId);
-  
-  // Store chunks and generate embeddings
-  for (const chunk of chunks) {
-    const escapedText = chunk.text.replace(/'/g, "''");
-    
-    // Insert chunk
-    await conn.query(`
-      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-      VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
-    `);
-    
-    // Generate and store embedding
-    try {
-      const vector = await generateEmbedding(chunk.text);
-      const embeddingId = crypto.randomUUID();
-      const vectorStr = `[${vector.join(', ')}]`;
-      
-      await conn.query(`
-        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
-        VALUES ('${embeddingId}', '${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${vectorStr}::DOUBLE[], '${new Date().toISOString()}')
-      `);
-    } catch (error) {
-      // Continue even if embedding fails for a chunk
-      console.error('Failed to generate embedding for chunk:', error);
-    }
-  }
-  
-  // Flush to persist immediately
-  await flushDatabase();
+  // Use centralized indexing function
+  await indexFileForSearch(file.projectId, file.id, file.content, 'md');
 }
 
 // ============================================
