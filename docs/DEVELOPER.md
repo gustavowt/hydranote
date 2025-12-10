@@ -9,11 +9,12 @@ This document provides technical documentation for developers working on HydraNo
 3. [Tools](#tools)
 4. [Workspace Components](#workspace-components)
 5. [File Management](#file-management)
-6. [Telemetry & Metrics](#telemetry--metrics)
-7. [Phase 12 Guardrails](#phase-12-guardrails)
-8. [Routing](#routing)
-9. [Configuration](#configuration)
-10. [File Structure](#file-structure)
+6. [File System Sync](#file-system-sync)
+7. [Telemetry & Metrics](#telemetry--metrics)
+8. [Phase 12 Guardrails](#phase-12-guardrails)
+9. [Routing](#routing)
+10. [Configuration](#configuration)
+11. [File Structure](#file-structure)
 
 ---
 
@@ -22,9 +23,10 @@ This document provides technical documentation for developers working on HydraNo
 HydraNote is an AI-powered document indexing and interaction system built with:
 
 - **Frontend**: Ionic Vue (Vue 3 + TypeScript)
-- **Database**: DuckDB (in-browser, WASM)
+- **Database**: DuckDB (in-browser, WASM with OPFS persistence)
 - **AI**: OpenAI API / Ollama (local LLMs)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
+- **File System Sync**: File System Access API (bidirectional sync with local directories)
 
 ### Workspace Layout
 
@@ -61,21 +63,35 @@ User Input → Router → Tool Selection → Tool Execution → LLM Response →
 
 ### Project Service (`projectService.ts`)
 
-Manages projects and document ingestion.
+Manages projects and document ingestion. This is the **single source of truth** for all file operations.
 
 #### Key Functions
 
 | Function | Description |
 |----------|-------------|
-| `createProject(name, description?)` | Create a new project |
+| `createProject(name, description?)` | Create a new project (+ sync to FS) |
 | `getProject(projectId)` | Get project by ID |
 | `getAllProjects()` | List all projects |
+| `deleteProject(projectId)` | Delete project and all files (+ sync to FS) |
 | `ingestDocument(file, projectId)` | Process and index a document |
 | `get_project_files(projectId)` | Get all files in a project |
 | `get_file_chunks(fileId)` | Get chunks for a file |
 | `searchProject(projectId, query, k)` | Semantic search within a project |
 | `getProjectFileTree(projectId)` | Get hierarchical file tree (Phase 11) |
 | `findFileByPath(projectId, path)` | Find file by path (for @file: references) |
+
+#### Centralized File Operations (Single Source of Truth)
+
+These functions handle both database AND file system sync automatically:
+
+| Function | Description |
+|----------|-------------|
+| `createFile(projectId, path, content, type)` | Create file (DB + FS sync) |
+| `updateFile(fileId, content)` | Update file content (DB + FS sync) |
+| `deleteFile(fileId)` | Delete file (DB + FS sync) |
+| `moveFile(fileId, targetProjectId, targetDir?)` | Move file (DB + FS sync) |
+| `indexFileForSearch(projectId, fileId, content, type)` | Create chunks and embeddings |
+| `createEmptyMarkdownFile(projectId, fileName, dir?)` | Create empty file (DB + FS sync) |
 
 ### Note Service (`noteService.ts`)
 
@@ -379,6 +395,60 @@ refresh()  // Reload projects and file trees
 
 ## File Management
 
+### Centralized File Operations (Single Source of Truth)
+
+All file creation and modification operations are centralized in `projectService.ts` to ensure consistent database persistence AND file system synchronization.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Consumer Services                         │
+│  (toolService, noteService, chatService, components)        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   projectService.ts                          │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  Centralized File Operations                            ││
+│  │  • createFile(projectId, path, content, type)           ││
+│  │  • updateFile(fileId, content)                          ││
+│  │  • deleteFile(fileId)                                   ││
+│  │  • moveFile(fileId, targetProject, targetPath)          ││
+│  │  • indexFileForSearch(projectId, fileId, content, type) ││
+│  └─────────────────────────────────────────────────────────┘│
+│                    │                    │                    │
+│                    ▼                    ▼                    │
+│              ┌──────────┐        ┌─────────────┐            │
+│              │ database │        │ syncService │            │
+│              └──────────┘        └─────────────┘            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Key Functions
+
+| Function | Description |
+|----------|-------------|
+| `createFile(projectId, path, content, type)` | Create file in DB + sync to FS |
+| `updateFile(fileId, content)` | Update content in DB + sync to FS |
+| `deleteFile(fileId)` | Delete from DB + sync to FS |
+| `moveFile(fileId, targetProjectId, targetDir?)` | Move file + sync to FS |
+| `indexFileForSearch(projectId, fileId, content, type)` | Create chunks + embeddings |
+
+#### Usage Pattern
+
+All services that create or modify files should use these centralized functions:
+
+```typescript
+// ✅ Correct: Use centralized functions
+import { createFile, indexFileForSearch } from './projectService';
+
+const file = await createFile(projectId, 'notes/my-note.md', content, 'md');
+await indexFileForSearch(projectId, file.id, content, 'md');
+
+// ❌ Wrong: Direct database calls (bypasses file system sync)
+await conn.query(`INSERT INTO files ...`);
+```
+
 ### File Tree API (Phase 11)
 
 ```typescript
@@ -403,6 +473,137 @@ Users can reference files in chat/editor using:
 ```
 
 The router detects these references and automatically uses the `read` tool.
+
+---
+
+## File System Sync
+
+HydraNote supports bidirectional file system synchronization, allowing projects and files to be mirrored to actual directories on disk.
+
+### Overview
+
+When enabled, the sync system:
+- Creates a directory for each project in the configured root folder
+- Writes markdown files to the corresponding project directories
+- Detects changes made externally (outside HydraNote) and imports them
+- Supports automatic sync on save and manual sync
+
+### File System Structure
+
+```
+[Root Path]/
+├── Project-A/
+│   ├── notes/
+│   │   └── meeting-notes.md
+│   └── research/
+│       └── api-design.md
+└── Project-B/
+    └── notes/
+        └── quick-note.md
+```
+
+### Services
+
+#### File System Service (`fileSystemService.ts`)
+
+Handles low-level file system operations using the File System Access API.
+
+| Function | Description |
+|----------|-------------|
+| `selectRootDirectory()` | Prompt user to select root sync directory |
+| `createProjectDirectory(projectName)` | Create project directory in root folder |
+| `ensureFileSystemPermission()` | Ensure FS permission early (call during user gesture) |
+| `writeFile(projectName, filePath, content)` | Write file to disk |
+| `readFile(projectName, filePath)` | Read file from disk |
+| `deleteFile(projectName, filePath)` | Delete file from disk |
+| `listProjectFiles(projectName)` | List all files in project directory |
+| `listRootDirectories()` | List all project directories |
+| `isSyncAvailable()` | Check if sync is enabled and configured |
+
+#### Sync Service (`syncService.ts`)
+
+Handles bidirectional synchronization logic.
+
+| Function | Description |
+|----------|-------------|
+| `syncAll()` | Full sync of all projects (both directions) |
+| `syncProject(projectId)` | Sync a single project |
+| `syncFileToFileSystem(projectName, filePath, content)` | Sync single file to disk |
+| `syncFileFromFileSystem(projectId, projectName, filePath)` | Import file from disk |
+| `startFileWatcher()` | Start polling for external changes |
+| `stopFileWatcher()` | Stop the file watcher |
+
+### Automatic Sync Triggers
+
+All file operations automatically sync to the file system when sync is enabled. This is handled by the centralized functions in `projectService.ts`:
+
+| Action | Function | Sync Behavior |
+|--------|----------|---------------|
+| Create project | `createProject()` | Creates project directory |
+| Delete project | `deleteProject()` | Deletes project directory |
+| Create file | `createFile()` | Writes file to disk |
+| Save/edit file | `updateFile()` | Updates file on disk |
+| Delete file | `deleteFile()` | Deletes file from disk |
+| Move file | `moveFile()` | Moves file on disk |
+| AI creates file | `createFile()` (via tools) | Writes file to disk |
+| AI updates file | `updateFile()` (via tools) | Updates file on disk |
+
+**Important:** All services (toolService, noteService, etc.) must use the centralized functions from `projectService.ts` to ensure consistent sync behavior.
+
+### Import from File System
+
+When "Sync Now" is clicked:
+1. Existing projects sync bidirectionally
+2. New directories in root folder become new projects
+3. New `.md` files are imported into the database
+4. Modified external files update the database
+
+### Configuration
+
+Settings stored in `localStorage` under `hydranote_filesystem_settings`:
+
+```typescript
+interface FileSystemSettings {
+  enabled: boolean;           // Whether sync is enabled
+  rootPath: string;           // Display path of root directory
+  syncOnSave: boolean;        // Auto-sync when files are saved
+  watchForChanges: boolean;   // Poll for external changes
+  watchInterval: number;      // Polling interval (ms)
+  lastSyncTime?: string;      // ISO timestamp of last sync
+}
+```
+
+### Browser Compatibility
+
+The File System Access API is supported in:
+- Chrome (recommended)
+- Edge
+- Opera
+
+Not supported in:
+- Firefox
+- Safari
+
+For unsupported browsers, a warning message is displayed in Settings.
+
+### User Gesture Requirement
+
+The File System Access API requires a **user gesture** (click, keypress) to request permissions. This means:
+- Permission must be obtained during a click/keypress event handler
+- After multiple `await` calls, the user gesture may be "consumed" by the browser
+
+To handle this, the `ensureFileSystemPermission()` function should be called early in any user-initiated flow that may need file system access. For example, `ChatSidebar.vue` calls this at the start of `sendMessage()` before any other async operations.
+
+### Settings UI
+
+The Storage section in Settings (`SettingsPage.vue`) provides:
+- Enable/disable sync toggle
+- Directory picker button
+- Sync on save toggle
+- Watch for external changes toggle
+- Manual "Sync Now" button
+- Disconnect button
+- Last sync time display
 
 ---
 
@@ -482,6 +683,33 @@ type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
 type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
 ```
 
+### File System Sync Types
+
+```typescript
+type FileSyncStatus = 'synced' | 'pending' | 'conflict' | 'error';
+type SyncDirection = 'to_filesystem' | 'from_filesystem' | 'bidirectional';
+
+interface FileSystemEntry {
+  relativePath: string;
+  name: string;
+  isDirectory: boolean;
+  size?: number;
+  modifiedTime: Date;
+  content?: string;
+}
+
+interface SyncResult {
+  success: boolean;
+  filesWritten: number;
+  filesRead: number;
+  filesDeleted: number;
+  conflictsDetected: number;
+  conflicts: SyncConflict[];
+  error?: string;
+  syncTime: Date;
+}
+```
+
 ### Telemetry Types
 
 ```typescript
@@ -511,7 +739,7 @@ const routes = [
 
 ### LLM Settings
 
-Stored in IndexedDB under `hydranote_llm_settings`:
+Stored in localStorage under `hydranote_llm_settings`:
 
 ```typescript
 interface LLMSettings {
@@ -521,6 +749,23 @@ interface LLMSettings {
   noteSettings: { formatInstructions, defaultDirectory, autoGenerateTitle };
 }
 ```
+
+### File System Settings
+
+Stored in localStorage under `hydranote_filesystem_settings`:
+
+```typescript
+interface FileSystemSettings {
+  enabled: boolean;           // Whether sync is enabled
+  rootPath: string;           // Display path of root directory
+  syncOnSave: boolean;        // Auto-sync when files are saved
+  watchForChanges: boolean;   // Poll for external changes
+  watchInterval: number;      // Polling interval in ms (default: 5000)
+  lastSyncTime?: string;      // ISO timestamp of last sync
+}
+```
+
+The directory handle is stored in IndexedDB (`HydraNoteFSHandles`) for persistence across sessions.
 
 ### Context Window
 
@@ -584,12 +829,14 @@ src/
 │   └── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
 ├── services/
 │   ├── chatService.ts        # Chat session management
-│   ├── database.ts           # DuckDB operations
+│   ├── database.ts           # DuckDB operations (OPFS persistence)
 │   ├── documentProcessor.ts  # File processing
 │   ├── embeddingService.ts   # Vector embeddings
+│   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
 │   ├── noteService.ts        # AddNote pipeline
-│   ├── projectService.ts     # Project management
+│   ├── projectService.ts     # Project management (with FS sync)
+│   ├── syncService.ts        # Bidirectional file system sync
 │   ├── telemetryService.ts   # Metrics tracking (Phase 12)
 │   ├── toolService.ts        # Tool routing/execution
 │   └── index.ts              # Service exports
@@ -597,7 +844,7 @@ src/
 │   └── index.ts              # Type definitions
 └── views/
     ├── WorkspacePage.vue     # Main unified workspace layout
-    └── SettingsPage.vue      # Settings
+    └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Storage)
 ```
 
 

@@ -930,3 +930,122 @@ export const PENDING_ACTION_CONFIG = {
   /** How long pending actions remain valid (in milliseconds) - 10 minutes */
   expirationMs: 10 * 60 * 1000,
 } as const;
+
+// ============================================
+// File System Sync Types
+// ============================================
+
+/**
+ * Sync status for a file
+ */
+export type FileSyncStatus = 'synced' | 'pending' | 'conflict' | 'error';
+
+/**
+ * Sync direction
+ */
+export type SyncDirection = 'to_filesystem' | 'from_filesystem' | 'bidirectional';
+
+/**
+ * File system settings for directory sync
+ */
+export interface FileSystemSettings {
+  /** Whether file system sync is enabled */
+  enabled: boolean;
+  /** Root directory path on the file system */
+  rootPath: string;
+  /** Sync on every save operation */
+  syncOnSave: boolean;
+  /** Watch for external file changes */
+  watchForChanges: boolean;
+  /** Polling interval for file watching (in milliseconds) */
+  watchInterval: number;
+  /** Last successful sync timestamp */
+  lastSyncTime?: string;
+}
+
+/**
+ * Default file system settings
+ */
+export const DEFAULT_FILESYSTEM_SETTINGS: FileSystemSettings = {
+  enabled: false,
+  rootPath: '',
+  syncOnSave: true,
+  watchForChanges: true,
+  watchInterval: 5000,
+};
+
+/**
+ * Represents a file on the file system for sync comparison
+ */
+export interface FileSystemEntry {
+  /** Relative path from project root */
+  relativePath: string;
+  /** File name */
+  name: string;
+  /** Whether this is a directory */
+  isDirectory: boolean;
+  /** File size in bytes (for files only) */
+  size?: number;
+  /** Last modified timestamp */
+  modifiedTime: Date;
+  /** File content (for files only, loaded on demand) */
+  content?: string;
+}
+
+/**
+ * Sync conflict information
+ */
+export interface SyncConflict {
+  /** File ID in database */
+  fileId: string;
+  /** File path */
+  filePath: string;
+  /** Project ID */
+  projectId: string;
+  /** Database version modified time */
+  dbModifiedTime: Date;
+  /** File system version modified time */
+  fsModifiedTime: Date;
+  /** Database content */
+  dbContent: string;
+  /** File system content */
+  fsContent: string;
+}
+
+/**
+ * Result of a sync operation
+ */
+export interface SyncResult {
+  /** Whether sync was successful */
+  success: boolean;
+  /** Number of files synced to file system */
+  filesWritten: number;
+  /** Number of files read from file system */
+  filesRead: number;
+  /** Number of files deleted */
+  filesDeleted: number;
+  /** Number of conflicts detected */
+  conflictsDetected: number;
+  /** List of conflicts (if any) */
+  conflicts: SyncConflict[];
+  /** Error message if sync failed */
+  error?: string;
+  /** Timestamp of sync */
+  syncTime: Date;
+}
+
+/**
+ * Change detected during sync
+ */
+export interface SyncChange {
+  /** Type of change */
+  type: 'created' | 'modified' | 'deleted';
+  /** Direction of change */
+  direction: 'db_to_fs' | 'fs_to_db';
+  /** File path */
+  filePath: string;
+  /** Project ID */
+  projectId: string;
+  /** File ID (if exists in DB) */
+  fileId?: string;
+}
