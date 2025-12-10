@@ -21,10 +21,14 @@ export {
   searchProject,
   getFile,
   getFileWithChunks,
+  updateFile,
   getProjectStats,
   deleteFile,
   moveFile,
   createEmptyMarkdownFile,
+  // Centralized file operations (single source of truth)
+  createFile,
+  indexFileForSearch,
   // Phase 11: File tree API
   getProjectFileTree,
   getProjectFilesForAutocomplete,
@@ -163,3 +167,44 @@ export {
   clearEvents,
   getMetricsSummary,
 } from './telemetryService';
+
+// File System Service
+export {
+  isElectron,
+  isFileSystemAccessSupported,
+  loadFileSystemSettings,
+  saveFileSystemSettings,
+  updateFileSystemSettings,
+  selectRootDirectory,
+  getRootDirectoryHandle,
+  requestDirectoryPermission,
+  ensureFileSystemPermission,
+  disconnectRootDirectory,
+  writeFile as fsWriteFile,
+  readFile as fsReadFile,
+  deleteFile as fsDeleteFile,
+  createDirectory as fsCreateDirectory,
+  deleteDirectory as fsDeleteDirectory,
+  deleteProjectDirectory as fsDeleteProjectDirectory,
+  listProjectFiles as fsListProjectFiles,
+  getFileMetadata as fsGetFileMetadata,
+  isSyncAvailable,
+  getRootPath,
+  listRootDirectories,
+} from './fileSystemService';
+
+// Sync Service
+export {
+  onSyncEvent,
+  syncAll,
+  syncProject,
+  syncFileToFileSystem,
+  syncFileFromFileSystem,
+  syncFileDelete,
+  syncProjectCreate,
+  syncProjectDelete,
+  startFileWatcher,
+  stopFileWatcher,
+  isSyncInProgress,
+  getSyncStatus,
+} from './syncService';
