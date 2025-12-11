@@ -129,6 +129,7 @@ import {
   createProject,
   getProject,
   get_project_files,
+  updateFile,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
@@ -242,13 +243,29 @@ function handleNewNote() {
 
 // Save handlers
 async function handleSaveExistingFile(content: string, file?: ProjectFile) {
-  if (file) {
-    // Save existing file
-    // TODO: Implement file update service
+  if (!file) return;
+  
+  try {
+    // Save to database and sync to file system
+    const updatedFile = await updateFile(file.id, content);
+    
+    if (updatedFile) {
+      // Update local state
+      currentFile.value = updatedFile;
+      
+      const toast = await toastController.create({
+        message: 'Note saved!',
+        duration: 1500,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
     const toast = await toastController.create({
-      message: 'Note saved!',
+      message: 'Failed to save note',
       duration: 2000,
-      color: 'success',
+      color: 'danger',
       position: 'top',
     });
     await toast.present();
@@ -311,6 +328,17 @@ async function handleCreateProject() {
     projects.value.unshift(project);
     showCreateProjectModal.value = false;
     newProject.value = { name: '', description: '' };
+    
+    // Check if there was a sync error
+    if ('syncError' in project && project.syncError) {
+      const toast = await toastController.create({
+        message: `Project created but folder sync failed: ${project.syncError}`,
+        duration: 5000,
+        color: 'warning',
+        position: 'top',
+      });
+      await toast.present();
+    }
     
     // Select the new project
     handleProjectSelect(project.id);

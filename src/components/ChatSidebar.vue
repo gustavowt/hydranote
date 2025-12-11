@@ -252,6 +252,7 @@ import {
   removePendingPreview,
   getAllProjects,
   getAllFilesForAutocomplete,
+  ensureFileSystemPermission,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
 import { folderOutline, addOutline } from 'ionicons/icons';
@@ -397,6 +398,10 @@ async function sendMessage(text?: string) {
     // Could emit an event to show settings
     return;
   }
+
+  // Ensure file system permission early (while user gesture is still active)
+  // This allows project/file creation to work properly
+  await ensureFileSystemPermission();
 
   inputMessage.value = '';
 

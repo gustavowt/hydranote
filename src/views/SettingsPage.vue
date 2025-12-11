@@ -21,6 +21,10 @@
             <ion-icon :icon="documentTextOutline" />
             <ion-label>AI Instructions</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="storage">
+            <ion-icon :icon="folderOutline" />
+            <ion-label>Storage</ion-label>
+          </ion-segment-button>
         </ion-segment>
       </div>
 
@@ -43,6 +47,14 @@
             >
               <ion-icon :icon="documentTextOutline" />
               <span>AI Instructions</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'storage' }"
+              @click="activeSection = 'storage'"
+            >
+              <ion-icon :icon="folderOutline" />
+              <span>Storage</span>
             </button>
           </nav>
         </aside>
@@ -247,6 +259,122 @@
               </button>
             </div>
           </section>
+
+          <!-- Storage Section -->
+          <section v-if="activeSection === 'storage'" class="content-section">
+            <h2 class="section-title">Storage</h2>
+            <p class="section-description">Configure file system sync to keep your notes as files on your computer.</p>
+
+            <!-- Browser Support Warning -->
+            <div v-if="!isFileSystemSupported" class="connection-status error">
+              <ion-icon :icon="alertCircleOutline" />
+              <span>File System Access API is not supported in this browser. Please use Chrome, Edge, or Opera for file system sync.</span>
+            </div>
+
+            <div v-else class="config-panel">
+              <div class="config-fields">
+                <!-- Enable Sync Toggle -->
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Enable File System Sync</label>
+                    <span class="toggle-description">Mirror your projects and notes to a folder on your computer</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="fsSettings.enabled" @change="handleFsToggle" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <!-- Root Directory Selection -->
+                <div class="field-group">
+                  <label>Root Directory</label>
+                  <div class="directory-picker">
+                    <div class="directory-display" :class="{ connected: fsSettings.rootPath }">
+                      <ion-icon :icon="fsSettings.rootPath ? folderOpenOutline : folderOutline" />
+                      <span v-if="fsSettings.rootPath">{{ fsSettings.rootPath }}</span>
+                      <span v-else class="placeholder">No directory selected</span>
+                    </div>
+                    <button 
+                      class="btn btn-secondary" 
+                      @click="handleSelectDirectory"
+                      :disabled="selectingDirectory"
+                    >
+                      <ion-spinner v-if="selectingDirectory" name="crescent" />
+                      <ion-icon v-else :icon="folderOutline" />
+                      <span>{{ fsSettings.rootPath ? 'Change' : 'Select' }}</span>
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Each project will be created as a subdirectory with its files inside.
+                  </span>
+                </div>
+
+                <!-- Sync on Save Toggle -->
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Sync on Save</label>
+                    <span class="toggle-description">Automatically sync files when you save changes</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="fsSettings.syncOnSave" :disabled="!fsSettings.enabled" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <!-- Watch for Changes Toggle -->
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Watch for External Changes</label>
+                    <span class="toggle-description">Detect when files are modified outside HydraNote</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="fsSettings.watchForChanges" :disabled="!fsSettings.enabled" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <!-- Last Sync Time -->
+                <div v-if="fsSettings.lastSyncTime" class="field-group">
+                  <label>Last Sync</label>
+                  <div class="last-sync-info">
+                    <ion-icon :icon="timeOutline" />
+                    <span>{{ formatLastSyncTime(fsSettings.lastSyncTime) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sync Status -->
+            <div v-if="syncStatus" :class="['connection-status', syncStatus.success ? 'success' : 'error']">
+              <ion-icon :icon="syncStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+              <span>{{ syncStatus.message }}</span>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons" v-if="isFileSystemSupported">
+              <button 
+                class="btn btn-secondary" 
+                @click="handleSyncNow" 
+                :disabled="!fsSettings.enabled || syncing"
+              >
+                <ion-spinner v-if="syncing" name="crescent" />
+                <ion-icon v-else :icon="syncOutline" />
+                <span>Sync Now</span>
+              </button>
+              <button 
+                v-if="fsSettings.rootPath"
+                class="btn btn-danger" 
+                @click="handleDisconnect"
+              >
+                <ion-icon :icon="unlinkOutline" />
+                <span>Disconnect</span>
+              </button>
+              <button class="btn btn-primary" @click="handleSaveStorage">
+                <ion-icon :icon="saveOutline" />
+                <span>Save Settings</span>
+              </button>
+            </div>
+          </section>
         </main>
       </div>
     </ion-content>
@@ -254,7 +382,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import {
   IonPage,
   IonHeader,
@@ -282,10 +410,29 @@ import {
   documentTextOutline,
   eyeOutline,
   eyeOffOutline,
+  folderOutline,
+  folderOpenOutline,
+  syncOutline,
+  timeOutline,
+  alertCircleOutline,
+  unlinkOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider } from '@/types';
-import { DEFAULT_LLM_SETTINGS } from '@/types';
-import { loadSettings, saveSettings, testConnection, getOllamaModels } from '@/services';
+import type { LLMSettings, LLMProvider, FileSystemSettings } from '@/types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS } from '@/types';
+import { 
+  loadSettings, 
+  saveSettings, 
+  testConnection, 
+  getOllamaModels,
+  loadFileSystemSettings,
+  saveFileSystemSettings,
+  isFileSystemAccessSupported,
+  selectRootDirectory,
+  disconnectRootDirectory,
+  syncAll,
+  startFileWatcher,
+  stopFileWatcher,
+} from '@/services';
 
 // Provider configurations for modularity
 const providerConfigs: { id: LLMProvider; name: string; description: string; icon: string }[] = [
@@ -314,7 +461,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'instructions'>('providers');
+const activeSection = ref<'providers' | 'instructions' | 'storage'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -322,8 +469,27 @@ const ollamaModels = ref<string[]>([]);
 const connectionStatus = ref<{ success: boolean; message: string } | null>(null);
 const showApiKey = ref(false);
 
+// Storage section state
+const fsSettings = ref<FileSystemSettings>({ ...DEFAULT_FILESYSTEM_SETTINGS });
+const isFileSystemSupported = ref(false);
+const selectingDirectory = ref(false);
+const syncing = ref(false);
+const syncStatus = ref<{ success: boolean; message: string } | null>(null);
+
 onMounted(() => {
   settings.value = loadSettings();
+  fsSettings.value = loadFileSystemSettings();
+  isFileSystemSupported.value = isFileSystemAccessSupported();
+  
+  // Start file watcher if enabled
+  if (fsSettings.value.enabled && fsSettings.value.watchForChanges) {
+    startFileWatcher();
+  }
+});
+
+onUnmounted(() => {
+  // Stop file watcher when leaving settings
+  stopFileWatcher();
 });
 
 async function handleSave() {
@@ -389,6 +555,148 @@ async function fetchOllamaModels() {
 
 function selectOllamaModel(model: string) {
   settings.value.ollama.model = model;
+}
+
+// Storage section handlers
+async function handleSelectDirectory() {
+  selectingDirectory.value = true;
+  syncStatus.value = null;
+  
+  try {
+    const result = await selectRootDirectory();
+    
+    if (result.success) {
+      fsSettings.value.rootPath = result.path;
+      fsSettings.value.enabled = true;
+      saveFileSystemSettings(fsSettings.value);
+      
+      const toast = await toastController.create({
+        message: `Connected to: ${result.path}`,
+        duration: 2000,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    } else if (result.error && result.error !== 'Directory selection was cancelled') {
+      syncStatus.value = {
+        success: false,
+        message: result.error,
+      };
+    }
+  } catch (error) {
+    syncStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Failed to select directory',
+    };
+  } finally {
+    selectingDirectory.value = false;
+  }
+}
+
+async function handleFsToggle() {
+  if (fsSettings.value.enabled && !fsSettings.value.rootPath) {
+    // Need to select a directory first
+    await handleSelectDirectory();
+    if (!fsSettings.value.rootPath) {
+      fsSettings.value.enabled = false;
+    }
+  }
+  
+  // Update file watcher
+  if (fsSettings.value.enabled && fsSettings.value.watchForChanges) {
+    startFileWatcher();
+  } else {
+    stopFileWatcher();
+  }
+  
+  saveFileSystemSettings(fsSettings.value);
+}
+
+async function handleSyncNow() {
+  syncing.value = true;
+  syncStatus.value = null;
+  
+  try {
+    const result = await syncAll();
+    
+    if (result.success) {
+      fsSettings.value.lastSyncTime = result.syncTime.toISOString();
+      saveFileSystemSettings(fsSettings.value);
+      
+      syncStatus.value = {
+        success: true,
+        message: `Sync complete: ${result.filesWritten} written, ${result.filesRead} imported`,
+      };
+    } else {
+      syncStatus.value = {
+        success: false,
+        message: result.error || 'Sync failed',
+      };
+    }
+  } catch (error) {
+    syncStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Sync failed',
+    };
+  } finally {
+    syncing.value = false;
+  }
+}
+
+async function handleDisconnect() {
+  await disconnectRootDirectory();
+  stopFileWatcher();
+  
+  fsSettings.value = { ...DEFAULT_FILESYSTEM_SETTINGS };
+  syncStatus.value = null;
+  
+  const toast = await toastController.create({
+    message: 'Disconnected from file system',
+    duration: 2000,
+    color: 'warning',
+    position: 'top',
+  });
+  await toast.present();
+}
+
+async function handleSaveStorage() {
+  saveFileSystemSettings(fsSettings.value);
+  
+  // Update file watcher based on settings
+  if (fsSettings.value.enabled && fsSettings.value.watchForChanges) {
+    startFileWatcher();
+  } else {
+    stopFileWatcher();
+  }
+  
+  const toast = await toastController.create({
+    message: 'Storage settings saved',
+    duration: 2000,
+    color: 'success',
+    position: 'top',
+  });
+  await toast.present();
+}
+
+function formatLastSyncTime(isoString: string): string {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  
+  if (diffMins < 1) {
+    return 'Just now';
+  } else if (diffMins < 60) {
+    return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  } else if (diffDays < 7) {
+    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
 }
 </script>
 
@@ -965,6 +1273,71 @@ ion-content {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
+}
+
+.btn-danger {
+  background: var(--hn-danger-muted);
+  border: 1px solid var(--hn-danger);
+  color: var(--hn-danger);
+}
+
+.btn-danger:hover {
+  background: var(--hn-danger);
+  color: #ffffff;
+}
+
+/* Directory Picker */
+.directory-picker {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.directory-display {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  color: var(--hn-text-secondary);
+  font-size: 0.95rem;
+}
+
+.directory-display.connected {
+  border-color: var(--hn-green-light);
+  background: var(--hn-green-muted);
+  color: var(--hn-green-light);
+}
+
+.directory-display ion-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.directory-display .placeholder {
+  color: var(--hn-text-muted);
+  font-style: italic;
+}
+
+/* Last Sync Info */
+.last-sync-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+}
+
+.last-sync-info ion-icon {
+  font-size: 1.1rem;
+  color: var(--hn-text-muted);
 }
 
 /* Responsive: Mobile */
