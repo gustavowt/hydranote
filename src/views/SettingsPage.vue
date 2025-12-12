@@ -21,6 +21,10 @@
             <ion-icon :icon="documentTextOutline" />
             <ion-label>AI Instructions</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="webresearch">
+            <ion-icon :icon="globeOutline" />
+            <ion-label>Web Research</ion-label>
+          </ion-segment-button>
           <ion-segment-button value="storage">
             <ion-icon :icon="folderOutline" />
             <ion-label>Storage</ion-label>
@@ -47,6 +51,14 @@
             >
               <ion-icon :icon="documentTextOutline" />
               <span>AI Instructions</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'webresearch' }"
+              @click="activeSection = 'webresearch'"
+            >
+              <ion-icon :icon="globeOutline" />
+              <span>Web Research</span>
             </button>
             <button 
               class="nav-item" 
@@ -260,6 +272,155 @@
             </div>
           </section>
 
+          <!-- Web Research Section -->
+          <section v-if="activeSection === 'webresearch'" class="content-section">
+            <h2 class="section-title">Web Research</h2>
+            <p class="section-description">Configure web search to get information from the internet.</p>
+
+            <div class="config-panel">
+              <h3 class="config-title">Search Provider</h3>
+              <div class="config-fields">
+                <!-- Provider Selection -->
+                <div class="provider-cards">
+                  <button
+                    v-for="provider in webSearchProviders"
+                    :key="provider.id"
+                    class="provider-card small"
+                    :class="{ selected: webSearchSettings.provider === provider.id }"
+                    @click="webSearchSettings.provider = provider.id"
+                  >
+                    <div class="provider-icon" v-html="provider.icon"></div>
+                    <div class="provider-info">
+                      <h3>{{ provider.name }}</h3>
+                      <p>{{ provider.description }}</p>
+                    </div>
+                    <div class="selected-indicator" v-if="webSearchSettings.provider === provider.id">
+                      <ion-icon :icon="checkmarkCircle" />
+                    </div>
+                  </button>
+                </div>
+
+                <!-- SearXNG Configuration -->
+                <div v-if="webSearchSettings.provider === 'searxng'" class="field-group">
+                  <label>SearXNG Instance URL</label>
+                  <input
+                    v-model="webSearchSettings.searxngUrl"
+                    type="text"
+                    placeholder="https://searx.example.com"
+                  />
+                  <span class="field-hint">
+                    URL of your SearXNG instance. You can use a public instance or 
+                    <a href="https://docs.searxng.org/admin/installation.html" target="_blank" rel="noopener">self-host one</a>.
+                  </span>
+                </div>
+
+                <!-- Brave API Key Configuration -->
+                <div v-if="webSearchSettings.provider === 'brave'" class="field-group">
+                  <label>Brave Search API Key</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model="webSearchSettings.braveApiKey"
+                      :type="showBraveApiKey ? 'text' : 'password'"
+                      placeholder="BSA..."
+                    />
+                    <button class="toggle-visibility" @click="showBraveApiKey = !showBraveApiKey">
+                      <ion-icon :icon="showBraveApiKey ? eyeOffOutline : eyeOutline" />
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Get a free API key at 
+                    <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a>
+                    (2000 queries/month free).
+                  </span>
+                </div>
+
+                <!-- DuckDuckGo Notice -->
+                <div v-if="webSearchSettings.provider === 'duckduckgo'" class="connection-status success">
+                  <ion-icon :icon="checkmarkCircleOutline" />
+                  <span>DuckDuckGo Instant Answers API requires no configuration.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="config-panel">
+              <h3 class="config-title">Search Settings</h3>
+              <div class="config-fields">
+                <!-- CORS Proxy (for browser development) -->
+                <div class="field-group">
+                  <label>CORS Proxy URL <span class="optional">(Optional)</span></label>
+                  <input
+                    v-model="webSearchSettings.corsProxyUrl"
+                    type="text"
+                    placeholder="https://corsproxy.io/?"
+                  />
+                  <span class="field-hint">
+                    Only needed for browser development. Not required in Electron/Capacitor.
+                  </span>
+                </div>
+
+                <!-- Max Results -->
+                <div class="field-group">
+                  <label>Maximum Results per Search</label>
+                  <select v-model.number="webSearchSettings.maxResults">
+                    <option :value="3">3 results</option>
+                    <option :value="5">5 results (default)</option>
+                    <option :value="10">10 results</option>
+                  </select>
+                </div>
+
+                <!-- Cache Max Age -->
+                <div class="field-group">
+                  <label>Cache Duration (minutes)</label>
+                  <select v-model.number="webSearchSettings.cacheMaxAge">
+                    <option :value="30">30 minutes</option>
+                    <option :value="60">1 hour (default)</option>
+                    <option :value="120">2 hours</option>
+                    <option :value="360">6 hours</option>
+                  </select>
+                  <span class="field-hint">
+                    Cached results will be reused within this time window.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Web Search Status -->
+            <div v-if="webSearchStatus" :class="['connection-status', webSearchStatus.success ? 'success' : 'error']">
+              <div class="status-content">
+                <div class="status-header">
+                  <ion-icon :icon="webSearchStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+                  <span>{{ webSearchStatus.message }}</span>
+                </div>
+                <div v-if="webSearchStatus.details" class="status-details">
+                  {{ webSearchStatus.details }}
+                </div>
+                <ul v-if="webSearchStatus.suggestions && webSearchStatus.suggestions.length > 0" class="status-suggestions">
+                  <li v-for="(suggestion, idx) in webSearchStatus.suggestions" :key="idx">
+                    {{ suggestion }}
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+              <button class="btn btn-secondary" @click="handleTestWebSearch" :disabled="testingWebSearch">
+                <ion-spinner v-if="testingWebSearch" name="crescent" />
+                <ion-icon v-else :icon="searchOutline" />
+                <span>Test Search</span>
+              </button>
+              <button class="btn btn-secondary" @click="handleClearWebCache" :disabled="clearingCache">
+                <ion-spinner v-if="clearingCache" name="crescent" />
+                <ion-icon v-else :icon="trashOutline" />
+                <span>Clear Cache</span>
+              </button>
+              <button class="btn btn-primary" @click="handleSaveWebSearch">
+                <ion-icon :icon="saveOutline" />
+                <span>Save Settings</span>
+              </button>
+            </div>
+          </section>
+
           <!-- Storage Section -->
           <section v-if="activeSection === 'storage'" class="content-section">
             <h2 class="section-title">Storage</h2>
@@ -416,9 +577,12 @@ import {
   timeOutline,
   alertCircleOutline,
   unlinkOutline,
+  globeOutline,
+  searchOutline,
+  trashOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings } from '@/types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider } from '@/types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS } from '@/types';
 import { 
   loadSettings, 
   saveSettings, 
@@ -432,6 +596,10 @@ import {
   syncAll,
   startFileWatcher,
   stopFileWatcher,
+  loadWebSearchSettings,
+  saveWebSearchSettings,
+  testWebSearchConnection,
+  clearWebSearchCache,
 } from '@/services';
 
 // Provider configurations for modularity
@@ -461,7 +629,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'instructions' | 'storage'>('providers');
+const activeSection = ref<'providers' | 'instructions' | 'webresearch' | 'storage'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -476,9 +644,51 @@ const selectingDirectory = ref(false);
 const syncing = ref(false);
 const syncStatus = ref<{ success: boolean; message: string } | null>(null);
 
+// Web Search section state
+const webSearchSettings = ref<WebSearchSettings>({ ...DEFAULT_WEB_SEARCH_SETTINGS });
+const showBraveApiKey = ref(false);
+const testingWebSearch = ref(false);
+const clearingCache = ref(false);
+const webSearchStatus = ref<{ 
+  success: boolean; 
+  message: string; 
+  details?: string;
+  suggestions?: string[];
+} | null>(null);
+
+// Web search provider configurations
+const webSearchProviders: { id: WebSearchProvider; name: string; description: string; icon: string }[] = [
+  {
+    id: 'searxng',
+    name: 'SearXNG',
+    description: 'Self-hosted, private meta-search',
+    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`,
+  },
+  {
+    id: 'brave',
+    name: 'Brave Search',
+    description: 'Privacy-focused, 2000 free queries/month',
+    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2L3 7v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm0 11h7c-.53 4.12-3.28 7.79-7 8.94V13H5V8.3l7-3.89v8.59z"/>
+    </svg>`,
+  },
+  {
+    id: 'duckduckgo',
+    name: 'DuckDuckGo',
+    description: 'Instant Answers API, no setup required',
+    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+    </svg>`,
+  },
+];
+
 onMounted(() => {
   settings.value = loadSettings();
   fsSettings.value = loadFileSystemSettings();
+  webSearchSettings.value = loadWebSearchSettings();
   isFileSystemSupported.value = isFileSystemAccessSupported();
   
   // Start file watcher if enabled
@@ -696,6 +906,65 @@ function formatLastSyncTime(isoString: string): string {
     return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
   } else {
     return date.toLocaleDateString();
+  }
+}
+
+// Web Search handlers
+async function handleSaveWebSearch() {
+  saveWebSearchSettings(webSearchSettings.value);
+  
+  const toast = await toastController.create({
+    message: 'Web search settings saved',
+    duration: 2000,
+    color: 'success',
+    position: 'top',
+  });
+  await toast.present();
+}
+
+async function handleTestWebSearch() {
+  testingWebSearch.value = true;
+  webSearchStatus.value = null;
+
+  // Save settings first so test uses current values
+  saveWebSearchSettings(webSearchSettings.value);
+
+  try {
+    const result = await testWebSearchConnection();
+    webSearchStatus.value = result;
+  } catch (error) {
+    webSearchStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Search test failed',
+    };
+  } finally {
+    testingWebSearch.value = false;
+  }
+}
+
+async function handleClearWebCache() {
+  clearingCache.value = true;
+  
+  try {
+    const deletedCount = await clearWebSearchCache();
+    
+    const toast = await toastController.create({
+      message: `Cleared ${deletedCount} cached entries`,
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: error instanceof Error ? error.message : 'Failed to clear cache',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  } finally {
+    clearingCache.value = false;
   }
 }
 </script>
@@ -1377,5 +1646,77 @@ ion-content {
     justify-content: center;
     width: 100%;
   }
+}
+
+/* Small provider cards for web search */
+.provider-card.small {
+  padding: 16px;
+}
+
+.provider-card.small .provider-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.provider-card.small .provider-icon :deep(svg) {
+  width: 24px;
+  height: 24px;
+}
+
+.provider-card.small .provider-info h3 {
+  font-size: 1rem;
+}
+
+.provider-card.small .provider-info p {
+  font-size: 0.8rem;
+}
+
+/* Status content with suggestions */
+.status-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.status-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-header ion-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.status-details {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-left: 33px;
+}
+
+.status-suggestions {
+  margin: 8px 0 0 33px;
+  padding-left: 20px;
+  font-size: 0.85rem;
+}
+
+.status-suggestions li {
+  margin-bottom: 4px;
+  opacity: 0.9;
+}
+
+.status-suggestions li:last-child {
+  margin-bottom: 0;
+}
+
+.connection-status.error .status-suggestions {
+  list-style-type: disc;
+}
+
+.connection-status.success .status-suggestions {
+  list-style-type: none;
+  padding-left: 0;
 }
 </style>
