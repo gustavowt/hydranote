@@ -220,6 +220,7 @@ import {
   IonSelect,
   IonSelectOption,
   IonTextarea,
+  IonSpinner,
 } from '@ionic/vue';
 import {
   chatbubbleOutline,

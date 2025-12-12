@@ -100,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage,
@@ -117,6 +117,7 @@ import {
   IonInput,
   IonTextarea,
   toastController,
+  onIonViewWillEnter,
 } from '@ionic/vue';
 import {
   addOutline,
@@ -130,6 +131,7 @@ import {
   getProject,
   get_project_files,
   updateFile,
+  onSyncEvent,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
@@ -158,9 +160,34 @@ const newProject = ref({
   description: '',
 });
 
+// Sync event listener cleanup function
+let unsubscribeSyncEvent: (() => void) | null = null;
+
 onMounted(async () => {
   await initialize();
   await loadProjects();
+  
+  // Listen for sync events to refresh file tree when sync completes
+  unsubscribeSyncEvent = onSyncEvent(async (event) => {
+    if (event === 'complete') {
+      // Refresh projects and file trees after sync
+      await handleProjectsChanged();
+    }
+  });
+});
+
+// Refresh projects and file trees when navigating back to this page
+onIonViewWillEnter(async () => {
+  await loadProjects();
+  await projectsTreeRef.value?.refresh();
+});
+
+onUnmounted(() => {
+  // Clean up sync event listener
+  if (unsubscribeSyncEvent) {
+    unsubscribeSyncEvent();
+    unsubscribeSyncEvent = null;
+  }
 });
 
 async function loadProjects() {

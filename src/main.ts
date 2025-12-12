@@ -34,10 +34,26 @@ import '@ionic/vue/css/palettes/dark.system.css';
 /* Theme variables */
 import './theme/variables.css';
 
-const app = createApp(App)
-  .use(IonicVue)
-  .use(router);
+/* Services */
+import { initialize } from './services';
 
-router.isReady().then(() => {
+/**
+ * Bootstrap the application
+ * Ensures all critical resources (database, etc.) are initialized before mounting
+ */
+async function bootstrap() {
+  // Initialize database and core services before mounting the app
+  // This ensures the database is ready for all components and services
+  await initialize();
+
+  const app = createApp(App)
+    .use(IonicVue)
+    .use(router);
+
+  await router.isReady();
   app.mount('#app');
+}
+
+bootstrap().catch((error) => {
+  console.error('Failed to initialize application:', error);
 });

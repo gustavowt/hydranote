@@ -131,15 +131,27 @@ You can include multiple tool calls in a single response. Include explanatory te
 {"tool": "updateFile", "params": {"file": "document.md", "section": "Introduction", "operation": "replace", "newContent": "# Introduction\\n\\nThis is the updated introduction."}}
 \`\`\`
 
+### 7. WEB RESEARCH Tool
+**Purpose:** Search the web for current information not available in project documents.
+**When to use:** User asks about external resources, current events, latest updates, or information from the internet.
+**Parameters:**
+- \`query\` (required): The search query
+- \`maxResults\` (optional): Maximum number of sources to search (default: 5)
+**Example:**
+\`\`\`tool_call
+{"tool": "webResearch", "params": {"query": "Vue 3 composition API best practices 2024"}}
+\`\`\`
+
 ## IMPORTANT: When to Use Tools
 
 **ALWAYS use a tool when the user:**
 - Asks to CREATE, WRITE, or GENERATE a new file → use WRITE tool
 - Asks to READ or VIEW a file → use READ tool
-- Asks to SEARCH or FIND information → use SEARCH tool
+- Asks to SEARCH or FIND information in documents → use SEARCH tool
 - Asks to SUMMARIZE a document → use SUMMARIZE tool
 - Asks to SAVE a NOTE → use ADD NOTE tool
 - Asks to UPDATE or EDIT an existing file → use UPDATE FILE tool
+- Asks about EXTERNAL info, CURRENT events, or WEB search → use WEB RESEARCH tool
 
 **DO NOT just describe what you would do - actually invoke the tool!**
 
@@ -149,10 +161,11 @@ You can include multiple tool calls in a single response. Include explanatory te
 - Use clear, simple language
 - Respond in the same language the user is using
 - If you cannot find relevant information, say so honestly
+- For web research, summarize key findings and cite sources
 
 ## Constraints
-- Only reference information from the indexed project documents
-- Do not make up information that is not in the documents
+- Only reference information from the indexed project documents OR web research results
+- Do not make up information that is not in the documents or web results
 - When asked to create a file, ALWAYS use the WRITE tool - do not just output the content as text`;
 }
 
@@ -324,12 +337,23 @@ You can include multiple tool calls in a single response. Include explanatory te
 {"tool": "deleteProject", "params": {"project": "Old Project", "confirm": "yes"}}
 \`\`\`
 
+### 11. WEB RESEARCH Tool
+**Purpose:** Search the web for current information not available in project documents.
+**When to use:** User asks about external resources, current events, latest updates, or information from the internet.
+**Parameters:**
+- \`query\` (required): The search query
+- \`maxResults\` (optional): Maximum number of sources to search (default: 5)
+**Example:**
+\`\`\`tool_call
+{"tool": "webResearch", "params": {"query": "Vue 3 composition API best practices 2024"}}
+\`\`\`
+
 ## IMPORTANT: When to Use Tools
 
 **ALWAYS use a tool when the user:**
 - Asks to CREATE, WRITE, or GENERATE a new file → use WRITE tool
 - Asks to READ or VIEW a file → use READ tool
-- Asks to SEARCH or FIND information → use SEARCH tool
+- Asks to SEARCH or FIND information in documents → use SEARCH tool
 - Asks to SUMMARIZE a document → use SUMMARIZE tool
 - Asks to SAVE a NOTE → use ADD NOTE tool
 - Asks to UPDATE or EDIT an existing file → use UPDATE FILE tool
@@ -337,6 +361,7 @@ You can include multiple tool calls in a single response. Include explanatory te
 - Asks to MOVE a file between projects → use MOVE FILE tool
 - Asks to DELETE a file → use DELETE FILE tool
 - Asks to DELETE a project → use DELETE PROJECT tool
+- Asks about EXTERNAL info, CURRENT events, or WEB search → use WEB RESEARCH tool
 
 **DO NOT just describe what you would do - actually invoke the tool!**
 
@@ -346,10 +371,11 @@ You can include multiple tool calls in a single response. Include explanatory te
 - Use clear, simple language
 - Respond in the same language the user is using
 - In global mode, always clarify which project a file belongs to when discussing files
+- For web research, summarize key findings and cite sources
 
 ## Constraints
-- Only reference information from the indexed documents
-- Do not make up information that is not in the documents
+- Only reference information from the indexed documents OR web research results
+- Do not make up information that is not in the documents or web results
 - When creating files in global mode, always specify the target project`;
 }
 
