@@ -221,3 +221,151 @@ ipcMain.handle('fs:getStats', async (_event, targetPath: string) => {
     };
   }
 });
+
+// ============================================
+// Web Fetch IPC Handlers
+// ============================================
+
+// Configuration
+const WEB_FETCH_TIMEOUT_MS = 30000; // 30 seconds
+const WEB_FETCH_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+interface WebFetchOptions {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
+}
+
+interface WebFetchResult {
+  success: boolean;
+  status?: number;
+  headers?: Record<string, string>;
+  body?: string;
+  finalUrl?: string;
+  error?: string;
+}
+
+/**
+ * Validate URL - only allow http and https protocols
+ */
+function validateUrl(urlString: string): { valid: boolean; error?: string } {
+  try {
+    const url = new URL(urlString);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return { valid: false, error: `Invalid protocol: ${url.protocol}. Only http: and https: are allowed.` };
+    }
+    return { valid: true };
+  } catch {
+    return { valid: false, error: `Invalid URL: ${urlString}` };
+  }
+}
+
+/**
+ * Perform HTTP fetch with timeout and size limits
+ * This runs in the main process, bypassing CORS restrictions
+ */
+ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<WebFetchResult> => {
+  const { url, method = 'GET', headers = {}, body, timeout = WEB_FETCH_TIMEOUT_MS } = options;
+
+  // Validate URL
+  const validation = validateUrl(url);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+
+  try {
+    // Create AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    // Perform the fetch
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'User-Agent': 'HydraNote/1.0',
+        'Accept': 'text/html,application/json,application/xhtml+xml,*/*',
+        ...headers,
+      },
+      body: body || undefined,
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+
+    clearTimeout(timeoutId);
+
+    // Check content length before reading body
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > WEB_FETCH_MAX_SIZE_BYTES) {
+      return {
+        success: false,
+        error: `Response too large: ${contentLength} bytes (max: ${WEB_FETCH_MAX_SIZE_BYTES} bytes)`,
+      };
+    }
+
+    // Read body as text with size limit
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return {
+        success: true,
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        body: '',
+        finalUrl: response.url,
+      };
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      totalSize += value.length;
+      if (totalSize > WEB_FETCH_MAX_SIZE_BYTES) {
+        reader.cancel();
+        return {
+          success: false,
+          error: `Response too large: exceeded ${WEB_FETCH_MAX_SIZE_BYTES} bytes limit`,
+        };
+      }
+
+      chunks.push(value);
+    }
+
+    // Combine chunks and decode as text
+    const allChunks = new Uint8Array(totalSize);
+    let position = 0;
+    for (const chunk of chunks) {
+      allChunks.set(chunk, position);
+      position += chunk.length;
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    const bodyText = decoder.decode(allChunks);
+
+    // Convert headers to plain object
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+
+    return {
+      success: true,
+      status: response.status,
+      headers: responseHeaders,
+      body: bodyText,
+      finalUrl: response.url,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    if (errorMessage.includes('aborted')) {
+      return { success: false, error: `Request timeout after ${timeout}ms` };
+    }
+    
+    return { success: false, error: `Fetch failed: ${errorMessage}` };
+  }
+});

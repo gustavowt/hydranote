@@ -18,6 +18,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exists: (path: string) => ipcRenderer.invoke('fs:exists', path),
     getStats: (path: string) => ipcRenderer.invoke('fs:getStats', path),
   },
+  // Web Fetch Operations (bypasses CORS by running in main process)
+  web: {
+    fetch: (options: {
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      timeout?: number;
+    }) => ipcRenderer.invoke('web:fetch', options),
+  },
   // App info
   platform: process.platform,
   isElectron: true,
