@@ -345,19 +345,6 @@
             <div class="config-panel">
               <h3 class="config-title">Search Settings</h3>
               <div class="config-fields">
-                <!-- CORS Proxy (for browser development) -->
-                <div class="field-group">
-                  <label>CORS Proxy URL <span class="optional">(Optional)</span></label>
-                  <input
-                    v-model="webSearchSettings.corsProxyUrl"
-                    type="text"
-                    placeholder="https://corsproxy.io/?"
-                  />
-                  <span class="field-hint">
-                    Only needed for browser development. Not required in Electron/Capacitor.
-                  </span>
-                </div>
-
                 <!-- Max Results -->
                 <div class="field-group">
                   <label>Maximum Results per Search</label>

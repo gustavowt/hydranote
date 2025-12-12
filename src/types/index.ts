@@ -1069,8 +1069,6 @@ export interface WebSearchSettings {
   searxngUrl?: string;
   /** Brave Search API key (required for brave provider) */
   braveApiKey?: string;
-  /** Optional CORS proxy URL for browser development */
-  corsProxyUrl?: string;
   /** Cache max age in minutes (default: 60) */
   cacheMaxAge: number;
   /** Maximum results to fetch per search (default: 5) */
@@ -1084,7 +1082,6 @@ export const DEFAULT_WEB_SEARCH_SETTINGS: WebSearchSettings = {
   provider: 'searxng',
   searxngUrl: '',
   braveApiKey: '',
-  corsProxyUrl: '',
   cacheMaxAge: 60,
   maxResults: 5,
 };

@@ -104,19 +104,11 @@ function isCapacitorNative(): boolean {
 }
 
 /**
- * Check if running in Electron
+ * Check if Electron IPC is available for web fetch
+ * This is the proper way to bypass CORS in Electron - via main process IPC
  */
-function isElectronEnv(): boolean {
-  return typeof window !== 'undefined' 
-    && typeof (window as unknown as { process?: { type?: string } }).process !== 'undefined'
-    && (window as unknown as { process: { type: string } }).process.type === 'renderer';
-}
-
-/**
- * Check if CORS bypass is available (native environments)
- */
-function canBypassCors(): boolean {
-  return isCapacitorNative() || isElectronEnv();
+function isElectronWithIPC(): boolean {
+  return typeof window !== 'undefined' && !!window.electronAPI?.web?.fetch;
 }
 
 // ============================================
@@ -221,28 +213,8 @@ async function searchBrave(
   
   let response: Response;
   try {
-    // Use native HTTP in Electron/Capacitor to bypass browser restrictions
-    if (canBypassCors()) {
-      if (isCapacitorNative()) {
-        const { CapacitorHttp } = await import('@capacitor/core');
-        const result = await CapacitorHttp.request({
-          method: 'GET',
-          url,
-          headers,
-        });
-        // Convert CapacitorHttp response to fetch-like response
-        response = new Response(JSON.stringify(result.data), {
-          status: result.status,
-          headers: new Headers(result.headers),
-        });
-      } else {
-        // Electron - direct fetch works
-        response = await fetch(url, { headers });
-      }
-    } else {
-      // Browser mode - direct fetch (may fail if Brave doesn't allow CORS)
-      response = await fetch(url, { headers });
-    }
+    // Use fetchWithCorsHandling which handles Electron IPC
+    response = await fetchWithCorsHandling(url, { headers });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError')) {
@@ -391,39 +363,42 @@ export async function searchWeb(
 
 /**
  * Fetch URL with CORS handling
+ * Uses Electron IPC to bypass CORS when running in Electron
  */
-async function fetchWithCorsHandling(url: string): Promise<Response> {
+async function fetchWithCorsHandling(url: string, options?: { headers?: Record<string, string> }): Promise<Response> {
   const settings = loadWebSearchSettings();
 
-  // In native environments, fetch directly
-  if (canBypassCors()) {
+  // Use Electron IPC if available - this bypasses CORS by running in the main process
+  if (isElectronWithIPC()) {
     try {
-      return await fetch(url, {
+      const result = await window.electronAPI!.web.fetch({
+        url,
+        method: 'GET',
         headers: {
           'Accept': 'text/html,application/json,*/*',
-          'User-Agent': 'HydraNote/1.0',
+          ...options?.headers,
         },
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Fetch failed');
+      }
+
+      return new Response(result.body, {
+        status: result.status,
+        headers: new Headers(result.headers),
       });
     } catch (error) {
       throw new Error(`Network error: ${error instanceof Error ? error.message : 'Connection failed'}`);
     }
   }
 
-  // Use proxy if configured
-  if (settings.corsProxyUrl) {
-    try {
-      const proxyUrl = `${settings.corsProxyUrl.replace(/\/$/, '')}/${encodeURIComponent(url)}`;
-      return await fetch(proxyUrl);
-    } catch (error) {
-      throw new Error(`Proxy connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  // Direct fetch
+  // Direct fetch (for browser - may fail due to CORS)
   try {
     return await fetch(url, {
       headers: {
         'Accept': 'text/html,application/json,*/*',
+        ...options?.headers,
       },
     });
   } catch (error) {

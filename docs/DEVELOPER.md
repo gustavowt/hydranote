@@ -807,7 +807,6 @@ interface WebSearchSettings {
   provider: WebSearchProvider;
   searxngUrl?: string;        // SearXNG instance URL
   braveApiKey?: string;       // Brave Search API key
-  corsProxyUrl?: string;      // CORS proxy for browser dev
   cacheMaxAge: number;        // Cache duration in minutes
   maxResults: number;         // Max URLs to fetch per search
 }
