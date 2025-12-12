@@ -16,12 +16,23 @@ let rootDirectoryHandle: FileSystemDirectoryHandle | null = null;
 
 // Check if running in Electron
 export function isElectron(): boolean {
-  return typeof window !== 'undefined' && 
-         typeof (window as Record<string, unknown>).electronAPI !== 'undefined';
+  return typeof window !== 'undefined' && window.electronAPI?.isElectron === true;
 }
 
-// Check if File System Access API is supported
+// Get the Electron API (only available in Electron)
+function getElectronAPI() {
+  if (!isElectron()) {
+    return null;
+  }
+  return window.electronAPI!;
+}
+
+// Check if File System Access API is supported (or running in Electron)
 export function isFileSystemAccessSupported(): boolean {
+  // Electron has its own file system support via IPC
+  if (isElectron()) {
+    return true;
+  }
   return 'showDirectoryPicker' in window;
 }
 
@@ -147,10 +158,26 @@ async function clearDirectoryHandle(): Promise<void> {
 // ============================================
 
 /**
- * Prompt user to select root directory using File System Access API
- * Returns the selected path and stores the handle for future use
+ * Prompt user to select root directory
+ * Uses Electron's native dialog in Electron, File System Access API in browser
  */
 export async function selectRootDirectory(): Promise<{ success: boolean; path: string; error?: string }> {
+  // Use Electron's native dialog if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const result = await electronAPI.fs.selectDirectory();
+    if (result.success && result.path) {
+      // Update settings with the selected path
+      const settings = loadFileSystemSettings();
+      settings.rootPath = result.path;
+      settings.enabled = true;
+      saveFileSystemSettings(settings);
+      return { success: true, path: result.path };
+    }
+    return { success: false, path: '', error: result.error || 'Selection cancelled' };
+  }
+
+  // Fallback to File System Access API for browser
   if (!isFileSystemAccessSupported()) {
     return { 
       success: false, 
@@ -267,6 +294,11 @@ export async function ensureFileSystemPermission(): Promise<boolean> {
     return true;
   }
 
+  // In Electron, permissions are always granted
+  if (isElectron()) {
+    return settings.rootPath ? true : false;
+  }
+
   // Try to get the root handle - this will request permission if needed
   const handle = await getRootDirectoryHandle();
   return handle !== null;
@@ -347,6 +379,15 @@ export async function writeFile(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.writeFile(fullPath, content);
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -390,6 +431,15 @@ export async function readFile(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.readFile(fullPath);
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -435,6 +485,15 @@ export async function deleteFile(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.deleteFile(fullPath);
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -478,6 +537,15 @@ export async function createDirectory(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${dirPath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.createDirectory(fullPath);
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -506,6 +574,15 @@ export async function deleteDirectory(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${dirPath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.deleteDirectory(fullPath);
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -544,7 +621,17 @@ export async function deleteDirectory(
 export async function createProjectDirectory(
   projectName: string
 ): Promise<{ success: boolean; error?: string }> {
-  // Use the same logic as getProjectDirectory but return success/error result
+  const settings = loadFileSystemSettings();
+  
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}`;
+    return electronAPI.fs.createDirectory(fullPath);
+  }
+
+  // Fallback to File System Access API
   const rootHandle = await getRootDirectoryHandle();
   
   if (!rootHandle) {
@@ -574,6 +661,15 @@ export async function deleteProjectDirectory(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}`;
+    return electronAPI.fs.deleteDirectory(fullPath);
+  }
+
+  // Fallback to File System Access API
   const rootHandle = await getRootDirectoryHandle();
   if (!rootHandle) {
     return { success: false, error: 'Could not access root directory' };
@@ -605,6 +701,15 @@ export async function listProjectFiles(
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const projectPath = `${settings.rootPath}/${safeName}`;
+    return listDirectoryRecursiveElectron(electronAPI, projectPath, '');
+  }
+
+  // Fallback to File System Access API
   const projectDir = await getProjectDirectory(projectName);
   if (!projectDir) {
     return { success: false, error: 'Could not access project directory' };
@@ -619,6 +724,44 @@ export async function listProjectFiles(
       error: error instanceof Error ? error.message : 'Failed to list files' 
     };
   }
+}
+
+/**
+ * Recursively list directory using Electron API
+ */
+async function listDirectoryRecursiveElectron(
+  electronAPI: NonNullable<typeof window.electronAPI>,
+  dirPath: string,
+  basePath: string
+): Promise<{ success: boolean; files?: FileSystemEntry[]; error?: string }> {
+  const result = await electronAPI.fs.listDirectory(dirPath);
+  if (!result.success) {
+    return { success: false, error: result.error };
+  }
+
+  const entries: FileSystemEntry[] = [];
+  
+  for (const entry of result.entries || []) {
+    const relativePath = basePath ? `${basePath}/${entry.name}` : entry.name;
+    
+    entries.push({
+      relativePath,
+      name: entry.name,
+      isDirectory: entry.isDirectory,
+      size: entry.isDirectory ? undefined : entry.size,
+      modifiedTime: new Date(entry.modifiedTime),
+    });
+
+    // Recursively list subdirectories
+    if (entry.isDirectory) {
+      const subResult = await listDirectoryRecursiveElectron(electronAPI, entry.path, relativePath);
+      if (subResult.success && subResult.files) {
+        entries.push(...subResult.files);
+      }
+    }
+  }
+
+  return { success: true, files: entries };
 }
 
 /**
@@ -722,6 +865,18 @@ export async function isSyncAvailable(): Promise<boolean> {
     return false;
   }
 
+  // In Electron, just check if rootPath is set
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    if (!settings.rootPath) {
+      return false;
+    }
+    // Verify the directory exists
+    const result = await electronAPI.fs.exists(settings.rootPath);
+    return result.success && result.exists === true;
+  }
+
+  // Browser: check File System Access API handle
   const handle = await getRootDirectoryHandle();
   return handle !== null;
 }
@@ -743,6 +898,34 @@ export async function listRootDirectories(): Promise<{ success: boolean; directo
     return { success: false, error: 'File system sync is not enabled' };
   }
 
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    if (!settings.rootPath) {
+      return { success: false, error: 'No root directory configured' };
+    }
+    
+    try {
+      const result = await electronAPI.fs.listDirectory(settings.rootPath);
+      if (!result.success) {
+        return { success: false, error: result.error || 'Failed to list root directory' };
+      }
+      
+      // Filter for directories only
+      const directories = (result.entries || [])
+        .filter((entry: { isDirectory: boolean }) => entry.isDirectory)
+        .map((entry: { name: string }) => entry.name);
+      
+      return { success: true, directories };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to list directories',
+      };
+    }
+  }
+
+  // Fallback to File System Access API for browser
   const rootHandle = await getRootDirectoryHandle();
   if (!rootHandle) {
     return { success: false, error: 'Could not access root directory' };
