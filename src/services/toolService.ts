@@ -16,8 +16,6 @@ import type {
   ProjectFile,
   Chunk,
   DocumentFormat,
-  GeneratedDocument,
-  AddNoteParams,
   NoteContextMetadata,
   UpdateFileToolParams,
   UpdateFilePreview,
@@ -25,16 +23,17 @@ import type {
   DiffLine,
   UpdateFileResult,
   LLMStreamCallback,
-} from '../types';
-import { DEFAULT_PROGRESSIVE_READ_CONFIG } from '../types';
-import { 
-  get_project_files, 
-  get_file_chunks, 
-  getFile, 
-  searchProject, 
-  createProject, 
-  deleteProject, 
-  deleteFile, 
+  WebResearchToolParams,
+} from "../types";
+import { DEFAULT_PROGRESSIVE_READ_CONFIG } from "../types";
+import {
+  get_project_files,
+  get_file_chunks,
+  getFile,
+  searchProject,
+  createProject,
+  deleteProject,
+  deleteFile,
   moveFile,
   getAllProjects,
   getProject,
@@ -43,10 +42,11 @@ import {
   searchAllProjects,
   createFile as projectCreateFile,
   indexFileForSearch,
-} from './projectService';
-import { chatCompletion, chatCompletionStreaming } from './llmService';
-import { generateDocument } from './documentGeneratorService';
-import { addNote, addNoteWithTitle } from './noteService';
+} from "./projectService";
+import { chatCompletion, chatCompletionStreaming } from "./llmService";
+import { generateDocument } from "./documentGeneratorService";
+import { addNote, addNoteWithTitle } from "./noteService";
+import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
 
 // ============================================
 // Execution Log Types
@@ -54,8 +54,8 @@ import { addNote, addNoteWithTitle } from './noteService';
 
 export interface ExecutionStep {
   id: string;
-  type: 'routing' | 'tool' | 'response';
-  status: 'pending' | 'running' | 'completed' | 'error';
+  type: "routing" | "tool" | "response";
+  status: "pending" | "running" | "completed" | "error";
   label: string;
   detail?: string;
   startTime?: Date;
@@ -81,6 +81,7 @@ Available tools:
 - moveFile: Move a file from one project to another. Use when user wants to move, transfer, or relocate a file between projects. Keywords: move file, transfer file, mover arquivo.
 - deleteFile: Delete a file from a project. Use when user wants to delete, remove, or discard a file. Keywords: delete file, remove file, apagar arquivo, deletar arquivo, excluir arquivo.
 - deleteProject: Delete an entire project and all its files. Use when user wants to delete, remove, or discard a project. Keywords: delete project, remove project, apagar projeto, deletar projeto, excluir projeto.
+- webResearch: Search the web for current/external information not in the project documents. Use when user needs information from the internet, current news, external references, latest updates, or information not available in indexed documents. Keywords: search the web, web search, google, look up online, find on internet, current news, latest info, external info, what's new about, recent updates, pesquisar na web, buscar online, pesquisa externa, notícias sobre.
 
 IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
 
@@ -161,6 +162,17 @@ Project deletion (ALWAYS include confirm: "yes" when user explicitly asks to del
 - "Deletar projeto Teste" → {"tools": [{"name": "deleteProject", "params": {"project": "Teste", "confirm": "yes"}}]}
 - "Sim, apagar o projeto" → {"tools": [{"name": "deleteProject", "params": {"project": "...", "confirm": "yes"}}]}
 
+Web research (searching the internet for current/external information):
+- "Search the web for Vue 3 best practices" → {"tools": [{"name": "webResearch", "params": {"query": "Vue 3 best practices"}}]}
+- "What's the latest news about AI?" → {"tools": [{"name": "webResearch", "params": {"query": "latest AI news"}}]}
+- "Look up information about TypeScript 5 features" → {"tools": [{"name": "webResearch", "params": {"query": "TypeScript 5 new features"}}]}
+- "Find on internet how to configure Vite" → {"tools": [{"name": "webResearch", "params": {"query": "Vite configuration guide"}}]}
+- "Pesquisar na web sobre Ionic Capacitor" → {"tools": [{"name": "webResearch", "params": {"query": "Ionic Capacitor"}}]}
+- "Buscar online notícias sobre tecnologia" → {"tools": [{"name": "webResearch", "params": {"query": "technology news"}}]}
+
+Chaining web research with notes:
+- "Search the web for React hooks and save as a note" → {"tools": [{"name": "webResearch", "params": {"query": "React hooks"}}, {"name": "addNote", "params": {"content": "..."}}]}
+
 No tools (use existing context or conversation flow):
 - "Explain the previous answer" → {"tools": []}
 - "Thanks" → {"tools": []}
@@ -200,6 +212,7 @@ Available tools:
 - write: Create a new file. Params: {format: "md"|"pdf"|"docx", title: "title", content: "content", path: "optional/path"}
 - addNote: Create a quick note. Params: {content: "note content", title: "optional title"}
 - updateFile: Update an existing file. Params: {file: "filename", section: "section name", operation: "replace"|"insert_before"|"insert_after", newContent: "content"}
+- webResearch: Search the web for information. Params: {query: "search query", maxResults: optional number}
 
 Analyze the assistant's response and respond with JSON:
 {
@@ -209,9 +222,9 @@ Analyze the assistant's response and respond with JSON:
 }
 
 Rules:
-1. If assistant says "I will now...", "Let me...", "I'll add...", "I'll create...", "Proceeding to...", "Now, I will..." → Extract the tool and params
-2. If assistant already showed tool results or said "Done", "Created", "Added", "has been updated" → No tools needed
-3. If assistant is just explaining or asking a question → No tools needed
+1. If assistant says "I will now...", "Let me...", "I'll add...", "I'll create...", "Proceeding to...", "Now, I will...", "Let's proceed", "Let's create", "Let's do that" → Extract the tool and params
+2. If assistant already showed tool results or said "Done", "Created", "Added", "has been updated", "successfully created", "has been saved" → No tools needed
+3. If assistant is asking a question like "Should I proceed?", "Would you like me to...", "Do you want me to..." → No tools needed (asking for confirmation)
 4. For updateFile: Extract the file name, section identifier, operation, and the NEW CONTENT the assistant wrote/composed
 5. For write: Extract format, title, and the FULL CONTENT the assistant composed
 
@@ -232,7 +245,11 @@ Example 3 - Assistant asking for confirmation:
 Assistant: "Here's what I'll add:\n\n## Summary\n...\n\nShould I proceed?"
 → {"shouldExecuteTool": false, "tools": [], "reasoning": "Assistant is asking for confirmation, not committing to action"}
 
-Example 4 - Assistant just explaining:
+Example 4 - Assistant committing to action with "Let's proceed":
+Assistant: "I'll create a new Markdown file named 'meeting-notes' with the content you provided. Let's proceed with that."
+→ {"shouldExecuteTool": true, "tools": [{"name": "write", "params": {"format": "md", "title": "meeting-notes", "content": "the content provided"}}], "reasoning": "Assistant is committing to create a file with 'Let's proceed'"}
+
+Example 5 - Assistant just explaining:
 Assistant: "The file contains documentation about server monitoring and database management."
 → {"shouldExecuteTool": false, "tools": [], "reasoning": "Informational response only"}`;
 
@@ -252,23 +269,28 @@ export interface ContinuationResult {
 export async function analyzeAssistantResponse(
   assistantResponse: string,
   conversationHistory: Array<{ role: string; content: string }>,
-  projectFiles: string[]
+  projectFiles: string[],
 ): Promise<ContinuationResult> {
-  const filesContext = projectFiles.length > 0
-    ? `\n\nAvailable files in project: ${projectFiles.join(', ')}`
-    : '\n\nNo files in project yet.';
+  const filesContext =
+    projectFiles.length > 0
+      ? `\n\nAvailable files in project: ${projectFiles.join(", ")}`
+      : "\n\nNo files in project yet.";
 
   // Get last few messages for context
-  const recentContext = conversationHistory.slice(-4)
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 500)}`)
-    .join('\n\n');
+  const recentContext = conversationHistory
+    .slice(-4)
+    .map(
+      (m) =>
+        `${m.role === "user" ? "User" : "Assistant"}: ${m.content.substring(0, 500)}`,
+    )
+    .join("\n\n");
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: CONTINUATION_ROUTER_PROMPT + filesContext },
-      { 
-        role: 'user', 
-        content: `Recent conversation:\n${recentContext}\n\n---\n\nLatest assistant response to analyze:\n${assistantResponse}` 
+      { role: "system", content: CONTINUATION_ROUTER_PROMPT + filesContext },
+      {
+        role: "user",
+        content: `Recent conversation:\n${recentContext}\n\n---\n\nLatest assistant response to analyze:\n${assistantResponse}`,
       },
     ],
     temperature: 0,
@@ -288,19 +310,19 @@ export async function analyzeAssistantResponse(
       (t: { name: string; params?: Record<string, string> }) => ({
         tool: t.name as ToolName,
         params: t.params || {},
-      })
+      }),
     );
 
     return {
       shouldExecuteTool: parsed.shouldExecuteTool || false,
       tools,
-      reasoning: parsed.reasoning || '',
+      reasoning: parsed.reasoning || "",
     };
   } catch {
     return {
       shouldExecuteTool: false,
       tools: [],
-      reasoning: 'Failed to parse continuation analysis',
+      reasoning: "Failed to parse continuation analysis",
     };
   }
 }
@@ -319,20 +341,22 @@ export interface RoutingResult {
 export async function routeMessage(
   userMessage: string,
   projectFiles: string[],
-  conversationContext?: string
+  conversationContext?: string,
 ): Promise<RoutingResult> {
-  const filesContext = projectFiles.length > 0 
-    ? `\n\nAvailable files in project: ${projectFiles.join(', ')}`
-    : '\n\nNo files uploaded yet.';
+  const filesContext =
+    projectFiles.length > 0
+      ? `\n\nAvailable files in project: ${projectFiles.join(", ")}`
+      : "\n\nNo files uploaded yet.";
 
-  const contextInfo = conversationContext 
+  const contextInfo = conversationContext
     ? `\n\nRecent conversation context:\n${conversationContext}`
-    : '';
+    : "";
+  console.log("Routing message with context:", contextInfo);
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: ROUTER_PROMPT + filesContext + contextInfo },
-      { role: 'user', content: userMessage },
+      { role: "system", content: ROUTER_PROMPT + filesContext + contextInfo },
+      { role: "user", content: userMessage },
     ],
     temperature: 0,
     maxTokens: 300,
@@ -345,25 +369,27 @@ export async function routeMessage(
     if (jsonMatch) {
       jsonStr = jsonMatch[1].trim();
     }
-    
+
     const parsed = JSON.parse(jsonStr);
-    
+
     // Check for clarification request
-    if (parsed.clarification && typeof parsed.clarification === 'string') {
+    if (parsed.clarification && typeof parsed.clarification === "string") {
       return {
         tools: [],
         clarification: parsed.clarification,
       };
     }
-    
+
     if (!parsed.tools || !Array.isArray(parsed.tools)) {
       return { tools: [] };
     }
 
-    const tools = parsed.tools.map((t: { name: string; params?: Record<string, string> }) => ({
-      tool: t.name as ToolName,
-      params: t.params || {},
-    }));
+    const tools = parsed.tools.map(
+      (t: { name: string; params?: Record<string, string> }) => ({
+        tool: t.name as ToolName,
+        params: t.params || {},
+      }),
+    );
 
     return { tools };
   } catch {
@@ -381,7 +407,7 @@ export async function routeMessage(
  */
 async function findFile(
   projectId: string,
-  params: ReadToolParams
+  params: ReadToolParams,
 ): Promise<ProjectFile | null> {
   // If fileId is provided, get directly
   if (params.fileId) {
@@ -392,15 +418,15 @@ async function findFile(
   if (params.fileName) {
     const files = await get_project_files(projectId);
     const searchName = params.fileName.toLowerCase();
-    
+
     // Exact match first
-    let file = files.find(f => f.name.toLowerCase() === searchName);
-    
+    let file = files.find((f) => f.name.toLowerCase() === searchName);
+
     // Partial match if no exact match
     if (!file) {
-      file = files.find(f => f.name.toLowerCase().includes(searchName));
+      file = files.find((f) => f.name.toLowerCase().includes(searchName));
     }
-    
+
     return file || null;
   }
 
@@ -411,22 +437,22 @@ async function findFile(
  * Stitch chunks back together into full text
  */
 function stitchChunks(chunks: Chunk[]): string {
-  if (chunks.length === 0) return '';
+  if (chunks.length === 0) return "";
   if (chunks.length === 1) return chunks[0].text;
 
   // Sort by index and stitch, avoiding overlap duplication
   const sorted = [...chunks].sort((a, b) => a.index - b.index);
-  
+
   let result = sorted[0].text;
-  
+
   for (let i = 1; i < sorted.length; i++) {
     const prevChunk = sorted[i - 1];
     const currChunk = sorted[i];
-    
+
     // Check for overlap
     const overlapStart = currChunk.startOffset;
     const prevEnd = prevChunk.endOffset;
-    
+
     if (overlapStart < prevEnd) {
       // There's overlap, skip the overlapping part
       const overlapLength = prevEnd - overlapStart;
@@ -435,7 +461,7 @@ function stitchChunks(chunks: Chunk[]): string {
       }
     } else {
       // No overlap, add spacing if needed
-      result += '\n' + currChunk.text;
+      result += "\n" + currChunk.text;
     }
   }
 
@@ -449,30 +475,31 @@ function stitchChunks(chunks: Chunk[]): string {
 export async function executeReadTool(
   projectId: string,
   params: ReadToolParams,
-  config: ProgressiveReadConfig = DEFAULT_PROGRESSIVE_READ_CONFIG
+  config: ProgressiveReadConfig = DEFAULT_PROGRESSIVE_READ_CONFIG,
 ): Promise<ToolResult> {
   try {
     // Find the file
     const file = await findFile(projectId, params);
-    
+
     if (!file) {
       return {
         success: false,
-        tool: 'read',
-        error: `File not found: ${params.fileName || params.fileId || 'No file specified'}`,
+        tool: "read",
+        error: `File not found: ${params.fileName || params.fileId || "No file specified"}`,
       };
     }
 
     // Check if file has stored content
     if (file.content) {
       const truncated = file.content.length > config.maxCharacters;
-      const content = truncated 
-        ? file.content.slice(0, config.maxCharacters) + '\n\n[Content truncated due to size...]'
+      const content = truncated
+        ? file.content.slice(0, config.maxCharacters) +
+          "\n\n[Content truncated due to size...]"
         : file.content;
 
       return {
         success: true,
-        tool: 'read',
+        tool: "read",
         data: content,
         metadata: {
           fileName: file.name,
@@ -485,29 +512,30 @@ export async function executeReadTool(
 
     // Fall back to chunks
     const chunks = await get_file_chunks(file.id);
-    
+
     if (chunks.length === 0) {
       return {
         success: false,
-        tool: 'read',
+        tool: "read",
         error: `File "${file.name}" has no content indexed yet.`,
       };
     }
 
     // Progressive reading: limit chunks if file is very large
-    const maxChunks = params.maxChunks || Math.ceil(config.maxCharacters / 1000);
-    const chunksToUse = chunks.length > maxChunks 
-      ? chunks.slice(0, maxChunks) 
-      : chunks;
-    
+    const maxChunks =
+      params.maxChunks || Math.ceil(config.maxCharacters / 1000);
+    const chunksToUse =
+      chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
+
     const content = stitchChunks(chunksToUse);
     const truncated = chunks.length > chunksToUse.length;
 
     return {
       success: true,
-      tool: 'read',
-      data: truncated 
-        ? content + `\n\n[Showing ${chunksToUse.length} of ${chunks.length} chunks. Ask to continue reading for more.]`
+      tool: "read",
+      data: truncated
+        ? content +
+          `\n\n[Showing ${chunksToUse.length} of ${chunks.length} chunks. Ask to continue reading for more.]`
         : content,
       metadata: {
         fileName: file.name,
@@ -520,8 +548,8 @@ export async function executeReadTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'read',
-      error: error instanceof Error ? error.message : 'Failed to read file',
+      tool: "read",
+      error: error instanceof Error ? error.message : "Failed to read file",
     };
   }
 }
@@ -543,29 +571,29 @@ const DEFAULT_SEARCH_CONFIG = {
  */
 export async function executeSearchTool(
   projectId: string,
-  params: SearchToolParams
+  params: SearchToolParams,
 ): Promise<ToolResult> {
   try {
     const query = params.query;
-    
+
     if (!query || query.trim().length === 0) {
       return {
         success: false,
-        tool: 'search',
-        error: 'Search query is required',
+        tool: "search",
+        error: "Search query is required",
       };
     }
 
     const maxResults = params.maxResults || DEFAULT_SEARCH_CONFIG.maxResults;
-    
+
     // Perform semantic search
     const results = await searchProject(projectId, query, maxResults);
-    
+
     if (results.length === 0) {
       return {
         success: true,
-        tool: 'search',
-        data: 'No relevant results found for your query.',
+        tool: "search",
+        data: "No relevant results found for your query.",
         metadata: {
           truncated: false,
         },
@@ -573,14 +601,16 @@ export async function executeSearchTool(
     }
 
     // Format results with source references
-    const formattedResults = results.map((result, index) => {
-      const scorePercent = (result.score * 100).toFixed(1);
-      return `[Result ${index + 1}] (Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
-    }).join('\n\n---\n\n');
+    const formattedResults = results
+      .map((result, index) => {
+        const scorePercent = (result.score * 100).toFixed(1);
+        return `[Result ${index + 1}] (Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
+      })
+      .join("\n\n---\n\n");
 
     return {
       success: true,
-      tool: 'search',
+      tool: "search",
       data: formattedResults,
       metadata: {
         truncated: false,
@@ -589,8 +619,9 @@ export async function executeSearchTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'search',
-      error: error instanceof Error ? error.message : 'Failed to execute search',
+      tool: "search",
+      error:
+        error instanceof Error ? error.message : "Failed to execute search",
     };
   }
 }
@@ -620,7 +651,7 @@ function estimateTokens(text: string): number {
  * Check if file type is text-based (not image)
  */
 function isTextBasedFile(file: ProjectFile): boolean {
-  const imageTypes = ['png', 'jpg', 'jpeg', 'webp'];
+  const imageTypes = ["png", "jpg", "jpeg", "webp"];
   return !imageTypes.includes(file.type);
 }
 
@@ -630,15 +661,15 @@ function isTextBasedFile(file: ProjectFile): boolean {
  */
 function sampleChunksEvenly(chunks: Chunk[], maxCount: number): Chunk[] {
   if (chunks.length <= maxCount) return chunks;
-  
+
   const step = chunks.length / maxCount;
   const sampled: Chunk[] = [];
-  
+
   for (let i = 0; i < maxCount; i++) {
     const index = Math.floor(i * step);
     sampled.push(chunks[index]);
   }
-  
+
   return sampled;
 }
 
@@ -647,7 +678,7 @@ function sampleChunksEvenly(chunks: Chunk[], maxCount: number): Chunk[] {
  */
 async function summarizeText(text: string, context?: string): Promise<string> {
   const systemPrompt = `You are a document summarization assistant. Create clear, concise summaries that capture the key points.
-${context ? `\nContext: ${context}` : ''}
+${context ? `\nContext: ${context}` : ""}
 
 Guidelines:
 - Extract and present the main ideas
@@ -657,8 +688,11 @@ Guidelines:
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: `Please summarize the following text:\n\n${text}` },
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `Please summarize the following text:\n\n${text}`,
+      },
     ],
     temperature: 0.3,
     maxTokens: 1500,
@@ -670,16 +704,21 @@ Guidelines:
 /**
  * Summarize a single chunk (for hierarchical summarization)
  */
-async function summarizeChunk(chunk: Chunk, index: number, total: number): Promise<string> {
+async function summarizeChunk(
+  chunk: Chunk,
+  index: number,
+  total: number,
+): Promise<string> {
   const response = await chatCompletion({
     messages: [
-      { 
-        role: 'system', 
-        content: 'Summarize this document section concisely. Focus on key information only.' 
+      {
+        role: "system",
+        content:
+          "Summarize this document section concisely. Focus on key information only.",
       },
-      { 
-        role: 'user', 
-        content: `Section ${index + 1} of ${total}:\n\n${chunk.text}` 
+      {
+        role: "user",
+        content: `Section ${index + 1} of ${total}:\n\n${chunk.text}`,
       },
     ],
     temperature: 0.3,
@@ -692,23 +731,28 @@ async function summarizeChunk(chunk: Chunk, index: number, total: number): Promi
 /**
  * Merge multiple chunk summaries into a final summary
  */
-async function mergeSummaries(summaries: string[], fileName: string): Promise<string> {
-  const combined = summaries.map((s, i) => `[Section ${i + 1}]\n${s}`).join('\n\n');
+async function mergeSummaries(
+  summaries: string[],
+  fileName: string,
+): Promise<string> {
+  const combined = summaries
+    .map((s, i) => `[Section ${i + 1}]\n${s}`)
+    .join("\n\n");
 
   const response = await chatCompletion({
     messages: [
-      { 
-        role: 'system', 
+      {
+        role: "system",
         content: `You are synthesizing section summaries into a cohesive document summary for "${fileName}". 
 Create a unified summary that:
 - Integrates all key points
 - Eliminates redundancy
 - Maintains logical flow
-- Highlights the most important information` 
+- Highlights the most important information`,
       },
-      { 
-        role: 'user', 
-        content: `Create a comprehensive summary from these section summaries:\n\n${combined}` 
+      {
+        role: "user",
+        content: `Create a comprehensive summary from these section summaries:\n\n${combined}`,
       },
     ],
     temperature: 0.3,
@@ -724,7 +768,7 @@ Create a unified summary that:
  */
 export async function executeSummarizeTool(
   projectId: string,
-  params: SummarizeToolParams
+  params: SummarizeToolParams,
 ): Promise<ToolResult> {
   try {
     // Find the file
@@ -736,8 +780,8 @@ export async function executeSummarizeTool(
     if (!file) {
       return {
         success: false,
-        tool: 'summarize',
-        error: `File not found: ${params.fileName || params.fileId || 'No file specified'}`,
+        tool: "summarize",
+        error: `File not found: ${params.fileName || params.fileId || "No file specified"}`,
       };
     }
 
@@ -745,7 +789,7 @@ export async function executeSummarizeTool(
     if (!isTextBasedFile(file)) {
       return {
         success: false,
-        tool: 'summarize',
+        tool: "summarize",
         error: `Cannot summarize image file "${file.name}". Summarization only works with text-based documents.`,
       };
     }
@@ -756,19 +800,19 @@ export async function executeSummarizeTool(
       const fileMB = (file.size / (1024 * 1024)).toFixed(1);
       return {
         success: false,
-        tool: 'summarize',
+        tool: "summarize",
         error: `File "${file.name}" (${fileMB}MB) exceeds the ${maxMB}MB limit for summarization. Consider splitting the document.`,
       };
     }
 
     // Get file content or chunks
-    let textContent = file.content || '';
+    let textContent = file.content || "";
     const chunks = await get_file_chunks(file.id);
 
     if (!textContent && chunks.length === 0) {
       return {
         success: false,
-        tool: 'summarize',
+        tool: "summarize",
         error: `File "${file.name}" has no content indexed yet.`,
       };
     }
@@ -779,26 +823,27 @@ export async function executeSummarizeTool(
     }
 
     const tokenCount = estimateTokens(textContent);
-    const maxDirect = params.maxDirectTokens || DEFAULT_SUMMARIZE_CONFIG.maxDirectTokens;
+    const maxDirect =
+      params.maxDirectTokens || DEFAULT_SUMMARIZE_CONFIG.maxDirectTokens;
 
     let summary: string;
-    let method: 'direct' | 'hierarchical';
+    let method: "direct" | "hierarchical";
 
     if (tokenCount <= maxDirect) {
       // Direct summarization for smaller documents
-      method = 'direct';
+      method = "direct";
       summary = await summarizeText(textContent, `Document: ${file.name}`);
     } else {
       // Hierarchical summarization for larger documents
-      method = 'hierarchical';
-      
+      method = "hierarchical";
+
       // Filter to text chunks only (in case of mixed content)
-      let textChunks = chunks.filter(c => c.text.trim().length > 50);
-      
+      let textChunks = chunks.filter((c) => c.text.trim().length > 50);
+
       if (textChunks.length === 0) {
         return {
           success: false,
-          tool: 'summarize',
+          tool: "summarize",
           error: `File "${file.name}" has no substantial text content to summarize.`,
         };
       }
@@ -813,11 +858,11 @@ export async function executeSummarizeTool(
       // Summarize chunks in parallel batches of 5
       const chunkSummaries: string[] = new Array(textChunks.length);
       const batchSize = 5;
-      
+
       for (let i = 0; i < textChunks.length; i += batchSize) {
         const batch = textChunks.slice(i, i + batchSize);
-        const batchPromises = batch.map((chunk, batchIdx) => 
-          summarizeChunk(chunk, i + batchIdx, textChunks.length)
+        const batchPromises = batch.map((chunk, batchIdx) =>
+          summarizeChunk(chunk, i + batchIdx, textChunks.length),
         );
         const batchResults = await Promise.all(batchPromises);
         batchResults.forEach((summary, batchIdx) => {
@@ -827,7 +872,7 @@ export async function executeSummarizeTool(
 
       // Merge all summaries
       summary = await mergeSummaries(chunkSummaries, file.name);
-      
+
       if (wassampled) {
         summary += `\n\n_Note: This summary was generated from a sample of ${maxChunks} sections due to document size._`;
       }
@@ -835,7 +880,7 @@ export async function executeSummarizeTool(
 
     return {
       success: true,
-      tool: 'summarize',
+      tool: "summarize",
       data: summary,
       metadata: {
         fileName: file.name,
@@ -848,8 +893,9 @@ export async function executeSummarizeTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'summarize',
-      error: error instanceof Error ? error.message : 'Failed to summarize file',
+      tool: "summarize",
+      error:
+        error instanceof Error ? error.message : "Failed to summarize file",
     };
   }
 }
@@ -863,8 +909,8 @@ export async function executeSummarizeTool(
  */
 const DEFAULT_WRITE_CONFIG = {
   maxContentTokens: 4000,
-  defaultFormat: 'md' as DocumentFormat,
-  supportedFormats: ['pdf', 'docx', 'md'] as DocumentFormat[],
+  defaultFormat: "md" as DocumentFormat,
+  supportedFormats: ["pdf", "docx", "md"] as DocumentFormat[],
 };
 
 /**
@@ -873,16 +919,16 @@ const DEFAULT_WRITE_CONFIG = {
 async function generateDocumentContent(
   projectId: string,
   title: string,
-  userRequest: string
+  userRequest: string,
 ): Promise<string> {
   // Get relevant context from project
   const searchResults = await searchProject(projectId, userRequest, 10);
-  
-  let contextText = '';
+
+  let contextText = "";
   if (searchResults.length > 0) {
-    contextText = searchResults.map((r, i) => 
-      `[Source ${i + 1}: ${r.fileName}]\n${r.text}`
-    ).join('\n\n---\n\n');
+    contextText = searchResults
+      .map((r, i) => `[Source ${i + 1}: ${r.fileName}]\n${r.text}`)
+      .join("\n\n---\n\n");
   }
 
   const systemPrompt = `You are a professional document writer. Create well-structured content for a document.
@@ -901,8 +947,8 @@ Guidelines:
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
     ],
     temperature: 0.7,
     maxTokens: DEFAULT_WRITE_CONFIG.maxContentTokens,
@@ -917,10 +963,10 @@ Guidelines:
 function titleToFileName(title: string): string {
   return title
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
-    .replace(/\s+/g, '-') // Replace spaces with hyphens
-    .replace(/-+/g, '-') // Replace multiple hyphens with single
-    .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
+    .replace(/[^a-z0-9\s-]/g, "") // Remove special characters
+    .replace(/\s+/g, "-") // Replace spaces with hyphens
+    .replace(/-+/g, "-") // Replace multiple hyphens with single
+    .replace(/^-|-$/g, "") // Remove leading/trailing hyphens
     .substring(0, 50); // Limit length
 }
 
@@ -939,19 +985,19 @@ function buildFilePath(fileName: string, directory: string): string {
 export async function executeWriteTool(
   projectId: string,
   params: WriteToolParams,
-  userMessage?: string
+  userMessage?: string,
 ): Promise<ToolResult> {
   try {
     const format = params.format || DEFAULT_WRITE_CONFIG.defaultFormat;
-    const title = params.title || 'New Document';
-    const directory = params.path || ''; // Root of project by default
+    const title = params.title || "New Document";
+    const directory = params.path || ""; // Root of project by default
 
     // Validate format
     if (!DEFAULT_WRITE_CONFIG.supportedFormats.includes(format)) {
       return {
         success: false,
-        tool: 'write',
-        error: `Invalid format: ${format}. Supported formats: ${DEFAULT_WRITE_CONFIG.supportedFormats.join(', ')}`,
+        tool: "write",
+        error: `Invalid format: ${format}. Supported formats: ${DEFAULT_WRITE_CONFIG.supportedFormats.join(", ")}`,
       };
     }
 
@@ -959,32 +1005,37 @@ export async function executeWriteTool(
     let content = params.content;
     if (!content) {
       content = await generateDocumentContent(
-        projectId, 
-        title, 
-        userMessage || `Generate a document about ${title}`
+        projectId,
+        title,
+        userMessage || `Generate a document about ${title}`,
       );
     }
 
     // For Markdown files: Save directly to project using centralized function
-    if (format === 'md') {
-      const fileName = titleToFileName(title) + '.md';
+    if (format === "md") {
+      const fileName = titleToFileName(title) + ".md";
       const fullPath = buildFilePath(fileName, directory);
-      
+
       // Add title as H1 if content doesn't start with a heading
-      const finalContent = content.trim().startsWith('#') 
-        ? content 
+      const finalContent = content.trim().startsWith("#")
+        ? content
         : `# ${title}\n\n${content}`;
-      
+
       // Use centralized createFile (handles DB + file system sync)
-      const file = await projectCreateFile(projectId, fullPath, finalContent, 'md');
-      
+      const file = await projectCreateFile(
+        projectId,
+        fullPath,
+        finalContent,
+        "md",
+      );
+
       // Index for search using centralized function
-      await indexFileForSearch(projectId, file.id, finalContent, 'md');
-      
+      await indexFileForSearch(projectId, file.id, finalContent, "md");
+
       return {
         success: true,
-        tool: 'write',
-        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${directory || 'project root'}`,
+        tool: "write",
+        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${directory || "project root"}`,
         metadata: {
           fileName: fullPath,
           fileId: file.id,
@@ -993,13 +1044,13 @@ export async function executeWriteTool(
         },
       };
     }
-    
+
     // For PDF/DOCX: Generate document and store in project
     const result = await generateDocument(projectId, title, content, format);
-    
+
     return {
       success: true,
-      tool: 'write',
+      tool: "write",
       data: `Document "${result.fileName}" has been created.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}`,
       metadata: {
         fileName: result.fileName,
@@ -1012,8 +1063,8 @@ export async function executeWriteTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'write',
-      error: error instanceof Error ? error.message : 'Failed to create file',
+      tool: "write",
+      error: error instanceof Error ? error.message : "Failed to create file",
     };
   }
 }
@@ -1037,28 +1088,34 @@ function formatFileSize(bytes: number): string {
  */
 export async function executeAddNoteTool(
   projectId: string,
-  params: { content: string; title?: string; topic?: string; tags?: string }
+  params: { content: string; title?: string; topic?: string; tags?: string },
 ): Promise<ToolResult> {
   try {
     const content = params.content;
-    
+
     if (!content || content.trim().length === 0) {
       return {
         success: false,
-        tool: 'addNote',
-        error: 'Note content is required',
+        tool: "addNote",
+        error: "Note content is required",
       };
     }
 
     // Build context metadata
     const contextMetadata: NoteContextMetadata = {};
     if (params.topic) contextMetadata.topic = params.topic;
-    if (params.tags) contextMetadata.tags = params.tags.split(',').map(t => t.trim());
+    if (params.tags)
+      contextMetadata.tags = params.tags.split(",").map((t) => t.trim());
 
     // Execute the addNote pipeline
     let result;
     if (params.title) {
-      result = await addNoteWithTitle(projectId, content, params.title, contextMetadata);
+      result = await addNoteWithTitle(
+        projectId,
+        content,
+        params.title,
+        contextMetadata,
+      );
     } else {
       result = await addNote({
         projectId,
@@ -1070,14 +1127,14 @@ export async function executeAddNoteTool(
     if (!result.success) {
       return {
         success: false,
-        tool: 'addNote',
-        error: result.error || 'Failed to create note',
+        tool: "addNote",
+        error: result.error || "Failed to create note",
       };
     }
 
     return {
       success: true,
-      tool: 'addNote',
+      tool: "addNote",
       data: `Note "${result.title}" has been created and saved.\n\n**Location:** ${result.filePath}\n**Directory:** ${result.directory}`,
       metadata: {
         fileName: result.filePath,
@@ -1088,8 +1145,8 @@ export async function executeAddNoteTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'addNote',
-      error: error instanceof Error ? error.message : 'Failed to create note',
+      tool: "addNote",
+      error: error instanceof Error ? error.message : "Failed to create note",
     };
   }
 }
@@ -1102,30 +1159,31 @@ export async function executeAddNoteTool(
  * Execute the createProject tool
  * Creates a new project
  */
-export async function executeCreateProjectTool(
-  params: { name: string; description?: string }
-): Promise<ToolResult> {
+export async function executeCreateProjectTool(params: {
+  name: string;
+  description?: string;
+}): Promise<ToolResult> {
   try {
     const name = params.name?.trim();
-    
+
     if (!name) {
       return {
         success: false,
-        tool: 'createProject',
-        error: 'Project name is required',
+        tool: "createProject",
+        error: "Project name is required",
       };
     }
 
     // Check if project with same name already exists
     const existingProjects = await getAllProjects();
     const existingProject = existingProjects.find(
-      p => p.name.toLowerCase() === name.toLowerCase()
+      (p) => p.name.toLowerCase() === name.toLowerCase(),
     );
-    
+
     if (existingProject) {
       return {
         success: false,
-        tool: 'createProject',
+        tool: "createProject",
         error: `A project named "${name}" already exists.`,
       };
     }
@@ -1137,8 +1195,8 @@ export async function executeCreateProjectTool(
 
     return {
       success: true,
-      tool: 'createProject',
-      data: `Project "${project.name}" has been created successfully.${syncError ? `\n\n⚠️ Note: Folder sync failed: ${syncError}` : ''}${params.description ? `\n\n**Description:** ${params.description}` : ''}`,
+      tool: "createProject",
+      data: `Project "${project.name}" has been created successfully.${syncError ? `\n\n⚠️ Note: Folder sync failed: ${syncError}` : ""}${params.description ? `\n\n**Description:** ${params.description}` : ""}`,
       metadata: {
         fileId: project.id,
         fileName: project.name,
@@ -1147,8 +1205,9 @@ export async function executeCreateProjectTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'createProject',
-      error: error instanceof Error ? error.message : 'Failed to create project',
+      tool: "createProject",
+      error:
+        error instanceof Error ? error.message : "Failed to create project",
     };
   }
 }
@@ -1160,23 +1219,25 @@ export async function executeCreateProjectTool(
 /**
  * Resolve project by name or ID
  */
-async function resolveProject(nameOrId: string): Promise<{ id: string; name: string } | null> {
+async function resolveProject(
+  nameOrId: string,
+): Promise<{ id: string; name: string } | null> {
   // Try as ID first
   const projectById = await getProject(nameOrId);
   if (projectById) {
     return { id: projectById.id, name: projectById.name };
   }
-  
+
   // Try by name (case-insensitive)
   const allProjects = await getAllProjects();
   const projectByName = allProjects.find(
-    p => p.name.toLowerCase() === nameOrId.toLowerCase()
+    (p) => p.name.toLowerCase() === nameOrId.toLowerCase(),
   );
-  
+
   if (projectByName) {
     return { id: projectByName.id, name: projectByName.name };
   }
-  
+
   return null;
 }
 
@@ -1184,17 +1245,21 @@ async function resolveProject(nameOrId: string): Promise<{ id: string; name: str
  * Execute the moveFile tool
  * Moves a file from one project to another
  */
-export async function executeMoveFileTool(
-  params: { file: string; fromProject: string; toProject: string; directory?: string }
-): Promise<ToolResult> {
+export async function executeMoveFileTool(params: {
+  file: string;
+  fromProject: string;
+  toProject: string;
+  directory?: string;
+}): Promise<ToolResult> {
   try {
     const { file, fromProject, toProject, directory } = params;
-    
+
     if (!file || !fromProject || !toProject) {
       return {
         success: false,
-        tool: 'moveFile',
-        error: 'File name, source project, and destination project are all required.',
+        tool: "moveFile",
+        error:
+          "File name, source project, and destination project are all required.",
       };
     }
 
@@ -1203,7 +1268,7 @@ export async function executeMoveFileTool(
     if (!sourceProject) {
       return {
         success: false,
-        tool: 'moveFile',
+        tool: "moveFile",
         error: `Source project "${fromProject}" not found.`,
       };
     }
@@ -1213,7 +1278,7 @@ export async function executeMoveFileTool(
     if (!destProject) {
       return {
         success: false,
-        tool: 'moveFile',
+        tool: "moveFile",
         error: `Destination project "${toProject}" not found.`,
       };
     }
@@ -1223,7 +1288,7 @@ export async function executeMoveFileTool(
     if (!sourceFile) {
       return {
         success: false,
-        tool: 'moveFile',
+        tool: "moveFile",
         error: `File "${file}" not found in project "${sourceProject.name}".`,
       };
     }
@@ -1233,8 +1298,8 @@ export async function executeMoveFileTool(
 
     return {
       success: true,
-      tool: 'moveFile',
-      data: `File "${file}" has been moved from "${sourceProject.name}" to "${destProject.name}".${directory ? `\n\n**New location:** ${directory}/${movedFile.name.split('/').pop()}` : ''}`,
+      tool: "moveFile",
+      data: `File "${file}" has been moved from "${sourceProject.name}" to "${destProject.name}".${directory ? `\n\n**New location:** ${directory}/${movedFile.name.split("/").pop()}` : ""}`,
       metadata: {
         fileId: movedFile.id,
         fileName: movedFile.name,
@@ -1243,8 +1308,8 @@ export async function executeMoveFileTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'moveFile',
-      error: error instanceof Error ? error.message : 'Failed to move file',
+      tool: "moveFile",
+      error: error instanceof Error ? error.message : "Failed to move file",
     };
   }
 }
@@ -1259,16 +1324,16 @@ export async function executeMoveFileTool(
  */
 export async function executeDeleteFileTool(
   projectId: string | undefined,
-  params: { file: string; project?: string }
+  params: { file: string; project?: string },
 ): Promise<ToolResult> {
   try {
     const { file, project } = params;
-    
+
     if (!file) {
       return {
         success: false,
-        tool: 'deleteFile',
-        error: 'File name is required.',
+        tool: "deleteFile",
+        error: "File name is required.",
       };
     }
 
@@ -1282,7 +1347,7 @@ export async function executeDeleteFileTool(
       if (!resolvedProject) {
         return {
           success: false,
-          tool: 'deleteFile',
+          tool: "deleteFile",
           error: `Project "${project}" not found.`,
         };
       }
@@ -1312,8 +1377,8 @@ export async function executeDeleteFileTool(
     if (!fileToDelete) {
       return {
         success: false,
-        tool: 'deleteFile',
-        error: `File "${file}" not found.${!targetProjectId ? ' Please specify which project the file is in.' : ''}`,
+        tool: "deleteFile",
+        error: `File "${file}" not found.${!targetProjectId ? " Please specify which project the file is in." : ""}`,
       };
     }
 
@@ -1322,7 +1387,7 @@ export async function executeDeleteFileTool(
 
     return {
       success: true,
-      tool: 'deleteFile',
+      tool: "deleteFile",
       data: `File "${fileToDelete.name}" has been deleted from project "${targetProjectName}".`,
       metadata: {
         fileId: fileToDelete.id,
@@ -1332,8 +1397,8 @@ export async function executeDeleteFileTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'deleteFile',
-      error: error instanceof Error ? error.message : 'Failed to delete file',
+      tool: "deleteFile",
+      error: error instanceof Error ? error.message : "Failed to delete file",
     };
   }
 }
@@ -1346,17 +1411,18 @@ export async function executeDeleteFileTool(
  * Execute the deleteProject tool
  * Deletes an entire project and all its files
  */
-export async function executeDeleteProjectTool(
-  params: { project: string; confirm?: string }
-): Promise<ToolResult> {
+export async function executeDeleteProjectTool(params: {
+  project: string;
+  confirm?: string;
+}): Promise<ToolResult> {
   try {
     const { project, confirm } = params;
-    
+
     if (!project) {
       return {
         success: false,
-        tool: 'deleteProject',
-        error: 'Project name or ID is required.',
+        tool: "deleteProject",
+        error: "Project name or ID is required.",
       };
     }
 
@@ -1365,16 +1431,16 @@ export async function executeDeleteProjectTool(
     if (!resolvedProject) {
       return {
         success: false,
-        tool: 'deleteProject',
+        tool: "deleteProject",
         error: `Project "${project}" not found.`,
       };
     }
 
     // Require explicit confirmation
-    if (confirm?.toLowerCase() !== 'yes') {
+    if (confirm?.toLowerCase() !== "yes") {
       return {
         success: false,
-        tool: 'deleteProject',
+        tool: "deleteProject",
         error: `⚠️ **Confirmation required** to delete project "${resolvedProject.name}".\n\nThis will permanently delete the project and all its files. To confirm, please say "Yes, delete the project ${resolvedProject.name}" or ask me again with explicit confirmation.`,
       };
     }
@@ -1384,7 +1450,7 @@ export async function executeDeleteProjectTool(
 
     return {
       success: true,
-      tool: 'deleteProject',
+      tool: "deleteProject",
       data: `Project "${resolvedProject.name}" and all its files have been permanently deleted.`,
       metadata: {
         fileId: resolvedProject.id,
@@ -1394,8 +1460,87 @@ export async function executeDeleteProjectTool(
   } catch (error) {
     return {
       success: false,
-      tool: 'deleteProject',
-      error: error instanceof Error ? error.message : 'Failed to delete project',
+      tool: "deleteProject",
+      error:
+        error instanceof Error ? error.message : "Failed to delete project",
+    };
+  }
+}
+
+// ============================================
+// WebResearch Tool Implementation
+// ============================================
+
+/**
+ * Execute the webResearch tool
+ * Searches the web, fetches content, generates embeddings, and returns relevant chunks
+ */
+export async function executeWebResearchTool(
+  params: WebResearchToolParams,
+): Promise<ToolResult> {
+  try {
+    // Check if web search is configured
+    if (!isWebSearchConfigured()) {
+      return {
+        success: false,
+        tool: "webResearch",
+        error:
+          "Web search is not configured. Please configure a search provider (SearXNG, Brave, or DuckDuckGo) in Settings.",
+      };
+    }
+
+    const query = params.query;
+
+    if (!query || query.trim().length === 0) {
+      return {
+        success: false,
+        tool: "webResearch",
+        error: "Search query is required for web research.",
+      };
+    }
+
+    // Perform web research
+    const result = await webResearch(query, {
+      maxResults: params.maxResults,
+      maxChunks: params.maxChunks,
+    });
+
+    if (result.error) {
+      return {
+        success: false,
+        tool: "webResearch",
+        error: result.error,
+      };
+    }
+
+    if (result.relevantContent.length === 0) {
+      return {
+        success: true,
+        tool: "webResearch",
+        data: `No relevant information found for "${query}" from web search.`,
+        metadata: {
+          truncated: false,
+        },
+      };
+    }
+
+    // Format results
+    const formattedResults = formatWebResearchResults(result);
+
+    return {
+      success: true,
+      tool: "webResearch",
+      data: formattedResults,
+      metadata: {
+        truncated: false,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: "webResearch",
+      error:
+        error instanceof Error ? error.message : "Web research failed",
     };
   }
 }
@@ -1438,8 +1583,8 @@ If the section is not found, return:
  * Generate diff lines between original and new content
  */
 function generateDiffLines(original: string, updated: string): DiffLine[] {
-  const originalLines = original.split('\n');
-  const updatedLines = updated.split('\n');
+  const originalLines = original.split("\n");
+  const updatedLines = updated.split("\n");
   const diffLines: DiffLine[] = [];
 
   // Simple line-by-line diff
@@ -1455,7 +1600,7 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
     originalLines[commonPrefixEnd] === updatedLines[commonPrefixEnd]
   ) {
     diffLines.push({
-      type: 'unchanged',
+      type: "unchanged",
       content: originalLines[commonPrefixEnd],
       oldLineNumber: oldLineNum++,
       newLineNumber: newLineNum++,
@@ -1475,27 +1620,39 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
   }
 
   // Add removed lines
-  for (let i = commonPrefixEnd; i < originalLines.length - commonSuffixStart; i++) {
+  for (
+    let i = commonPrefixEnd;
+    i < originalLines.length - commonSuffixStart;
+    i++
+  ) {
     diffLines.push({
-      type: 'removed',
+      type: "removed",
       content: originalLines[i],
       oldLineNumber: oldLineNum++,
     });
   }
 
   // Add added lines
-  for (let i = commonPrefixEnd; i < updatedLines.length - commonSuffixStart; i++) {
+  for (
+    let i = commonPrefixEnd;
+    i < updatedLines.length - commonSuffixStart;
+    i++
+  ) {
     diffLines.push({
-      type: 'added',
+      type: "added",
       content: updatedLines[i],
       newLineNumber: newLineNum++,
     });
   }
 
   // Add common suffix
-  for (let i = originalLines.length - commonSuffixStart; i < originalLines.length; i++) {
+  for (
+    let i = originalLines.length - commonSuffixStart;
+    i < originalLines.length;
+    i++
+  ) {
     diffLines.push({
-      type: 'unchanged',
+      type: "unchanged",
       content: originalLines[i],
       oldLineNumber: oldLineNum++,
       newLineNumber: newLineNum++,
@@ -1511,7 +1668,7 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
 async function identifySection(
   content: string,
   sectionIdentifier: string,
-  identificationMethod?: string
+  identificationMethod?: string,
 ): Promise<{
   found: boolean;
   sectionContent: string;
@@ -1521,22 +1678,22 @@ async function identifySection(
   reasoning?: string;
 }> {
   // Try header-based identification first for markdown
-  if (!identificationMethod || identificationMethod === 'header') {
+  if (!identificationMethod || identificationMethod === "header") {
     const headerPattern = new RegExp(
       `^(#{1,6})\\s*${escapeRegex(sectionIdentifier)}\\s*$`,
-      'im'
+      "im",
     );
     const headerMatch = content.match(headerPattern);
 
     if (headerMatch) {
       const headerLevel = headerMatch[1].length;
       const startIndex = headerMatch.index!;
-      
+
       // Find the end of this section (next header of same or higher level, or end of file)
       const afterHeader = content.slice(startIndex + headerMatch[0].length);
-      const nextHeaderPattern = new RegExp(`^#{1,${headerLevel}}\\s+`, 'm');
+      const nextHeaderPattern = new RegExp(`^#{1,${headerLevel}}\\s+`, "m");
       const nextHeaderMatch = afterHeader.match(nextHeaderPattern);
-      
+
       const endIndex = nextHeaderMatch
         ? startIndex + headerMatch[0].length + nextHeaderMatch.index!
         : content.length;
@@ -1553,7 +1710,7 @@ async function identifySection(
   }
 
   // Try exact match
-  if (!identificationMethod || identificationMethod === 'exact_match') {
+  if (!identificationMethod || identificationMethod === "exact_match") {
     const exactIndex = content.indexOf(sectionIdentifier);
     if (exactIndex !== -1) {
       return {
@@ -1562,7 +1719,7 @@ async function identifySection(
         sectionStart: exactIndex,
         sectionEnd: exactIndex + sectionIdentifier.length,
         confidence: 1.0,
-        reasoning: 'Exact text match found',
+        reasoning: "Exact text match found",
       };
     }
   }
@@ -1570,9 +1727,9 @@ async function identifySection(
   // Fall back to semantic identification using LLM
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: SECTION_IDENTIFICATION_PROMPT },
+      { role: "system", content: SECTION_IDENTIFICATION_PROMPT },
       {
-        role: 'user',
+        role: "user",
         content: `Document:\n\n${content}\n\n---\n\nSection to find: "${sectionIdentifier}"`,
       },
     ],
@@ -1592,7 +1749,7 @@ async function identifySection(
     if (!result.found) {
       return {
         found: false,
-        sectionContent: '',
+        sectionContent: "",
         sectionStart: -1,
         sectionEnd: -1,
         confidence: 0,
@@ -1610,7 +1767,10 @@ async function identifySection(
         if (endIndex !== -1) {
           return {
             found: true,
-            sectionContent: content.slice(startIndex, endIndex + result.sectionEnd.length),
+            sectionContent: content.slice(
+              startIndex,
+              endIndex + result.sectionEnd.length,
+            ),
             sectionStart: startIndex,
             sectionEnd: endIndex + result.sectionEnd.length,
             confidence: result.confidence || 0.8,
@@ -1621,11 +1781,11 @@ async function identifySection(
 
       return {
         found: false,
-        sectionContent: '',
+        sectionContent: "",
         sectionStart: -1,
         sectionEnd: -1,
         confidence: 0,
-        reasoning: 'Could not locate section boundaries in document',
+        reasoning: "Could not locate section boundaries in document",
       };
     }
 
@@ -1640,11 +1800,11 @@ async function identifySection(
   } catch {
     return {
       found: false,
-      sectionContent: '',
+      sectionContent: "",
       sectionStart: -1,
       sectionEnd: -1,
       confidence: 0,
-      reasoning: 'Failed to parse section identification response',
+      reasoning: "Failed to parse section identification response",
     };
   }
 }
@@ -1653,7 +1813,7 @@ async function identifySection(
  * Escape special regex characters
  */
 function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -1664,26 +1824,26 @@ function applyUpdateOperation(
   sectionStart: number,
   sectionEnd: number,
   newContent: string,
-  operation: UpdateOperation
+  operation: UpdateOperation,
 ): string {
   switch (operation) {
-    case 'insert_before':
+    case "insert_before":
       return (
         originalContent.slice(0, sectionStart) +
         newContent +
-        '\n\n' +
+        "\n\n" +
         originalContent.slice(sectionStart)
       );
 
-    case 'insert_after':
+    case "insert_after":
       return (
         originalContent.slice(0, sectionEnd) +
-        '\n\n' +
+        "\n\n" +
         newContent +
         originalContent.slice(sectionEnd)
       );
 
-    case 'replace':
+    case "replace":
     default:
       // Default to 'replace' operation for any unrecognized operation
       return (
@@ -1701,7 +1861,7 @@ function applyUpdateOperation(
 export async function executeUpdateFileTool(
   projectId: string,
   params: UpdateFileToolParams,
-  userMessage?: string
+  userMessage?: string,
 ): Promise<ToolResult & { preview?: UpdateFilePreview }> {
   try {
     // Find the file
@@ -1713,28 +1873,28 @@ export async function executeUpdateFileTool(
     if (!file) {
       return {
         success: false,
-        tool: 'updateFile',
-        error: `File not found: ${params.fileName || params.fileId || 'No file specified'}`,
+        tool: "updateFile",
+        error: `File not found: ${params.fileName || params.fileId || "No file specified"}`,
       };
     }
 
     // Validate file type (only MD and DOCX supported)
-    if (file.type !== 'md' && file.type !== 'docx') {
+    if (file.type !== "md" && file.type !== "docx") {
       return {
         success: false,
-        tool: 'updateFile',
+        tool: "updateFile",
         error: `UpdateFile only supports Markdown (.md) and DOCX files. "${file.name}" is a ${file.type} file.`,
       };
     }
 
     // Get file content
-    let content = file.content || '';
+    let content = file.content || "";
     if (!content) {
       const chunks = await get_file_chunks(file.id);
       if (chunks.length === 0) {
         return {
           success: false,
-          tool: 'updateFile',
+          tool: "updateFile",
           error: `File "${file.name}" has no content indexed yet.`,
         };
       }
@@ -1745,14 +1905,14 @@ export async function executeUpdateFileTool(
     const sectionResult = await identifySection(
       content,
       params.sectionIdentifier,
-      params.identificationMethod
+      params.identificationMethod,
     );
 
     if (!sectionResult.found) {
       return {
         success: false,
-        tool: 'updateFile',
-        error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ''}`,
+        tool: "updateFile",
+        error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ""}`,
       };
     }
 
@@ -1761,19 +1921,23 @@ export async function executeUpdateFileTool(
     if (!newContent && userMessage) {
       // Get surrounding context from the document
       const contextStart = Math.max(0, sectionResult.sectionStart - 500);
-      const contextEnd = Math.min(content.length, sectionResult.sectionEnd + 500);
+      const contextEnd = Math.min(
+        content.length,
+        sectionResult.sectionEnd + 500,
+      );
       const surroundingContext = content.slice(contextStart, contextEnd);
-      
-      const operationDescription = params.operation === 'replace' 
-        ? 'replace the following section with improved/updated content'
-        : params.operation === 'insert_before' 
-          ? 'create new content to insert BEFORE the following section'
-          : 'create new content to insert AFTER the following section';
-      
+
+      const operationDescription =
+        params.operation === "replace"
+          ? "replace the following section with improved/updated content"
+          : params.operation === "insert_before"
+            ? "create new content to insert BEFORE the following section"
+            : "create new content to insert AFTER the following section";
+
       const generateResponse = await chatCompletion({
         messages: [
           {
-            role: 'system',
+            role: "system",
             content: `You are a professional content writer. Your task is to ${operationDescription} in a document.
 
 DOCUMENT: "${file.name}"
@@ -1796,7 +1960,7 @@ IMPORTANT INSTRUCTIONS:
 5. Output ONLY the new content - no explanations, no "Here is..." prefix
 6. The content should be ready to insert directly into the document`,
           },
-          { role: 'user', content: `User request: ${userMessage}` },
+          { role: "user", content: `User request: ${userMessage}` },
         ],
         temperature: 0.7,
         maxTokens: 3000,
@@ -1807,8 +1971,8 @@ IMPORTANT INSTRUCTIONS:
     if (!newContent) {
       return {
         success: false,
-        tool: 'updateFile',
-        error: 'No new content provided for the update operation.',
+        tool: "updateFile",
+        error: "No new content provided for the update operation.",
       };
     }
 
@@ -1818,7 +1982,7 @@ IMPORTANT INSTRUCTIONS:
       sectionResult.sectionStart,
       sectionResult.sectionEnd,
       newContent,
-      params.operation
+      params.operation,
     );
 
     // Generate diff
@@ -1830,7 +1994,7 @@ IMPORTANT INSTRUCTIONS:
       previewId,
       fileId: file.id,
       fileName: file.name,
-      fileType: file.type as 'md' | 'docx',
+      fileType: file.type as "md" | "docx",
       operation: params.operation,
       identifiedSection: sectionResult.sectionContent,
       originalContent: sectionResult.sectionContent,
@@ -1848,22 +2012,22 @@ IMPORTANT INSTRUCTIONS:
 
     // Format diff for display
     const diffDisplay = diffLines
-      .filter((line) => line.type !== 'unchanged')
+      .filter((line) => line.type !== "unchanged")
       .slice(0, 20) // Limit display
       .map((line) => {
-        const prefix = line.type === 'added' ? '+' : '-';
+        const prefix = line.type === "added" ? "+" : "-";
         return `${prefix} ${line.content}`;
       })
-      .join('\n');
+      .join("\n");
 
     const truncatedNote =
-      diffLines.filter((l) => l.type !== 'unchanged').length > 20
-        ? '\n\n_[Diff truncated - showing first 20 changes]_'
-        : '';
+      diffLines.filter((l) => l.type !== "unchanged").length > 20
+        ? "\n\n_[Diff truncated - showing first 20 changes]_"
+        : "";
 
     return {
       success: true,
-      tool: 'updateFile',
+      tool: "updateFile",
       data: `**Preview of changes to "${file.name}"**
 
 **Operation:** ${params.operation}
@@ -1885,8 +2049,11 @@ To apply these changes, confirm the update. To cancel, dismiss this preview.`,
   } catch (error) {
     return {
       success: false,
-      tool: 'updateFile',
-      error: error instanceof Error ? error.message : 'Failed to prepare file update',
+      tool: "updateFile",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to prepare file update",
     };
   }
 }
@@ -1894,7 +2061,9 @@ To apply these changes, confirm the update. To cancel, dismiss this preview.`,
 /**
  * Get a pending preview by ID
  */
-export function getPendingPreview(previewId: string): UpdateFilePreview | undefined {
+export function getPendingPreview(
+  previewId: string,
+): UpdateFilePreview | undefined {
   return pendingPreviews.get(previewId);
 }
 
@@ -1909,24 +2078,28 @@ export function removePendingPreview(previewId: string): void {
  * Apply a file update from a confirmed preview
  * Commits changes to the database and re-indexes the file
  */
-export async function applyFileUpdate(previewId: string): Promise<UpdateFileResult> {
+export async function applyFileUpdate(
+  previewId: string,
+): Promise<UpdateFileResult> {
   const preview = pendingPreviews.get(previewId);
 
   if (!preview) {
     return {
       success: false,
-      fileId: '',
-      fileName: '',
-      operation: 'replace',
-      error: 'Preview not found or expired. Please try the update again.',
+      fileId: "",
+      fileName: "",
+      operation: "replace",
+      error: "Preview not found or expired. Please try the update again.",
       reIndexed: false,
     };
   }
 
   try {
-    const { getConnection, flushDatabase } = await import('./database');
-    const { chunkText, chunkMarkdownText } = await import('./documentProcessor');
-    const { generateEmbeddingsForChunks } = await import('./embeddingService');
+    const { getConnection, flushDatabase } = await import("./database");
+    const { chunkText, chunkMarkdownText } = await import(
+      "./documentProcessor"
+    );
+    const { generateEmbeddingsForChunks } = await import("./embeddingService");
 
     const conn = getConnection();
 
@@ -1938,7 +2111,7 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
         fileId: preview.fileId,
         fileName: preview.fileName,
         operation: preview.operation,
-        error: 'File no longer exists.',
+        error: "File no longer exists.",
         reIndexed: false,
       };
     }
@@ -1962,9 +2135,14 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
     `);
 
     // Re-chunk the document
-    const chunks = preview.fileType === 'md'
-      ? chunkMarkdownText(preview.newFullContent, preview.fileId, file.projectId)
-      : chunkText(preview.newFullContent, preview.fileId, file.projectId);
+    const chunks =
+      preview.fileType === "md"
+        ? chunkMarkdownText(
+            preview.newFullContent,
+            preview.fileId,
+            file.projectId,
+          )
+        : chunkText(preview.newFullContent, preview.fileId, file.projectId);
 
     // Store new chunks
     for (const chunk of chunks) {
@@ -1978,7 +2156,7 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
     // Generate and store new embeddings
     const embeddings = await generateEmbeddingsForChunks(chunks);
     for (const embedding of embeddings) {
-      const vectorStr = `[${embedding.vector.join(', ')}]`;
+      const vectorStr = `[${embedding.vector.join(", ")}]`;
       await conn.query(`
         INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
         VALUES ('${embedding.id}', '${embedding.chunkId}', '${embedding.fileId}', '${embedding.projectId}', ${vectorStr}::DOUBLE[], '${embedding.createdAt.toISOString()}')
@@ -1990,14 +2168,18 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
 
     // Sync to file system
     try {
-      const { syncFileToFileSystem } = await import('./syncService');
-      const { getProject } = await import('./projectService');
+      const { syncFileToFileSystem } = await import("./syncService");
+      const { getProject } = await import("./projectService");
       const project = await getProject(file.projectId);
-      if (project && preview.fileType === 'md') {
-        await syncFileToFileSystem(project.name, preview.fileName, preview.newFullContent);
+      if (project && preview.fileType === "md") {
+        await syncFileToFileSystem(
+          project.name,
+          preview.fileName,
+          preview.newFullContent,
+        );
       }
     } catch (syncError) {
-      console.error('Failed to sync file to file system:', syncError);
+      console.error("Failed to sync file to file system:", syncError);
       // Don't fail the whole operation if sync fails
     }
 
@@ -2017,7 +2199,8 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
       fileId: preview.fileId,
       fileName: preview.fileName,
       operation: preview.operation,
-      error: error instanceof Error ? error.message : 'Failed to apply file update',
+      error:
+        error instanceof Error ? error.message : "Failed to apply file update",
       reIndexed: false,
     };
   }
@@ -2033,14 +2216,14 @@ export async function applyFileUpdate(previewId: string): Promise<UpdateFileResu
  */
 async function resolveProjectForTool(
   defaultProjectId: string | undefined,
-  projectParam?: string
+  projectParam?: string,
 ): Promise<string | null> {
   // If project is specified in params, try to resolve it
   if (projectParam) {
     const resolved = await resolveProject(projectParam);
     return resolved?.id || null;
   }
-  
+
   // Otherwise use the default
   return defaultProjectId || null;
 }
@@ -2052,16 +2235,20 @@ async function resolveProjectForTool(
 export async function executeTool(
   projectId: string | undefined,
   call: ToolCall,
-  userMessage?: string
+  userMessage?: string,
 ): Promise<ToolResult> {
   switch (call.tool) {
-    case 'read': {
+    case "read": {
       // In global mode, need to resolve project from params or find file globally
-      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+      let targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       if (!targetProjectId) {
         // Try to find the file globally
-        const fileName = call.params.fileName || call.params.file || call.params.name;
+        const fileName =
+          call.params.fileName || call.params.file || call.params.name;
         if (fileName) {
           const globalResult = await findFileGlobal(fileName);
           if (globalResult) {
@@ -2069,67 +2256,81 @@ export async function executeTool(
           }
         }
       }
-      
+
       if (!targetProjectId) {
         return {
           success: false,
-          tool: 'read',
-          error: 'Could not determine which project the file belongs to. Please specify the project.',
+          tool: "read",
+          error:
+            "Could not determine which project the file belongs to. Please specify the project.",
         };
       }
-      
+
       return executeReadTool(targetProjectId, {
         fileId: call.params.fileId || call.params.file_id,
         fileName: call.params.fileName || call.params.file || call.params.name,
-        maxChunks: call.params.maxChunks ? parseInt(call.params.maxChunks) : undefined,
+        maxChunks: call.params.maxChunks
+          ? parseInt(call.params.maxChunks)
+          : undefined,
       });
     }
 
-    case 'search': {
-      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+    case "search": {
+      const targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       // Search can work globally if no project specified
       if (!targetProjectId) {
         // Global search
         const results = await searchAllProjects(
           call.params.query || call.params.q || call.params.search,
-          call.params.maxResults ? parseInt(call.params.maxResults) : 5
+          call.params.maxResults ? parseInt(call.params.maxResults) : 5,
         );
-        
+
         if (results.length === 0) {
           return {
             success: true,
-            tool: 'search',
-            data: 'No relevant results found for your query across all projects.',
+            tool: "search",
+            data: "No relevant results found for your query across all projects.",
             metadata: { truncated: false },
           };
         }
-        
-        const formattedResults = results.map((result, index) => {
-          const scorePercent = (result.score * 100).toFixed(1);
-          return `[Result ${index + 1}] (Project: ${result.projectName}, Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
-        }).join('\n\n---\n\n');
-        
+
+        const formattedResults = results
+          .map((result, index) => {
+            const scorePercent = (result.score * 100).toFixed(1);
+            return `[Result ${index + 1}] (Project: ${result.projectName}, Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
+          })
+          .join("\n\n---\n\n");
+
         return {
           success: true,
-          tool: 'search',
+          tool: "search",
           data: formattedResults,
           metadata: { truncated: false },
         };
       }
-      
+
       return executeSearchTool(targetProjectId, {
         query: call.params.query || call.params.q || call.params.search,
-        maxResults: call.params.maxResults ? parseInt(call.params.maxResults) : undefined,
+        maxResults: call.params.maxResults
+          ? parseInt(call.params.maxResults)
+          : undefined,
       });
     }
 
-    case 'summarize': {
-      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+    case "summarize": {
+      let targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       if (!targetProjectId) {
         // Try to find the file globally
-        const fileName = call.params.fileName || call.params.file || call.params.name;
+        const fileName =
+          call.params.fileName || call.params.file || call.params.name;
         if (fileName) {
           const globalResult = await findFileGlobal(fileName);
           if (globalResult) {
@@ -2137,65 +2338,87 @@ export async function executeTool(
           }
         }
       }
-      
+
       if (!targetProjectId) {
         return {
           success: false,
-          tool: 'summarize',
-          error: 'Could not determine which project the file belongs to. Please specify the project.',
+          tool: "summarize",
+          error:
+            "Could not determine which project the file belongs to. Please specify the project.",
         };
       }
-      
+
       return executeSummarizeTool(targetProjectId, {
         fileId: call.params.fileId || call.params.file_id,
         fileName: call.params.fileName || call.params.file || call.params.name,
       });
     }
 
-    case 'write': {
-      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+    case "write": {
+      const targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       if (!targetProjectId) {
         return {
           success: false,
-          tool: 'write',
-          error: 'Project is required. Please specify which project to create the file in.',
+          tool: "write",
+          error:
+            "Project is required. Please specify which project to create the file in.",
         };
       }
-      
-      return executeWriteTool(targetProjectId, {
-        format: (call.params.format as DocumentFormat) || 'md',
-        title: call.params.title || 'New Document',
-        content: call.params.content || '',
-        path: call.params.path || call.params.directory || '',
-      }, userMessage);
+
+      return executeWriteTool(
+        targetProjectId,
+        {
+          format: (call.params.format as DocumentFormat) || "md",
+          title: call.params.title || "New Document",
+          content: call.params.content || "",
+          path: call.params.path || call.params.directory || "",
+        },
+        userMessage,
+      );
     }
 
-    case 'addNote': {
-      const targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+    case "addNote": {
+      const targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       if (!targetProjectId) {
         return {
           success: false,
-          tool: 'addNote',
-          error: 'Project is required. Please specify which project to add the note to.',
+          tool: "addNote",
+          error:
+            "Project is required. Please specify which project to add the note to.",
         };
       }
-      
+
       return executeAddNoteTool(targetProjectId, {
-        content: call.params.content || call.params.text || call.params.note || userMessage || '',
+        content:
+          call.params.content ||
+          call.params.text ||
+          call.params.note ||
+          userMessage ||
+          "",
         title: call.params.title,
         topic: call.params.topic,
         tags: call.params.tags,
       });
     }
 
-    case 'updateFile': {
-      let targetProjectId = await resolveProjectForTool(projectId, call.params.project);
-      
+    case "updateFile": {
+      let targetProjectId = await resolveProjectForTool(
+        projectId,
+        call.params.project,
+      );
+
       if (!targetProjectId) {
         // Try to find the file globally
-        const fileName = call.params.fileName || call.params.file || call.params.name;
+        const fileName =
+          call.params.fileName || call.params.file || call.params.name;
         if (fileName) {
           const globalResult = await findFileGlobal(fileName);
           if (globalResult) {
@@ -2203,39 +2426,52 @@ export async function executeTool(
           }
         }
       }
-      
+
       if (!targetProjectId) {
         return {
           success: false,
-          tool: 'updateFile',
-          error: 'Could not determine which project the file belongs to. Please specify the project.',
+          tool: "updateFile",
+          error:
+            "Could not determine which project the file belongs to. Please specify the project.",
         };
       }
-      
+
       // Validate operation - must be one of the valid values, default to 'replace'
-      const validOperations: UpdateOperation[] = ['replace', 'insert_before', 'insert_after'];
-      const rawOperation = call.params.operation?.toLowerCase?.() || '';
-      const operation: UpdateOperation = validOperations.includes(rawOperation as UpdateOperation)
+      const validOperations: UpdateOperation[] = [
+        "replace",
+        "insert_before",
+        "insert_after",
+      ];
+      const rawOperation = call.params.operation?.toLowerCase?.() || "";
+      const operation: UpdateOperation = validOperations.includes(
+        rawOperation as UpdateOperation,
+      )
         ? (rawOperation as UpdateOperation)
-        : 'replace';
-      
-      return executeUpdateFileTool(targetProjectId, {
-        fileId: call.params.fileId || call.params.file_id,
-        fileName: call.params.fileName || call.params.file || call.params.name,
-        operation,
-        sectionIdentifier: call.params.section || call.params.sectionIdentifier || '',
-        newContent: call.params.newContent || call.params.content || '',
-      }, userMessage);
+        : "replace";
+
+      return executeUpdateFileTool(
+        targetProjectId,
+        {
+          fileId: call.params.fileId || call.params.file_id,
+          fileName:
+            call.params.fileName || call.params.file || call.params.name,
+          operation,
+          sectionIdentifier:
+            call.params.section || call.params.sectionIdentifier || "",
+          newContent: call.params.newContent || call.params.content || "",
+        },
+        userMessage,
+      );
     }
 
     // Global tools (work without projectId)
-    case 'createProject':
+    case "createProject":
       return executeCreateProjectTool({
         name: call.params.name,
         description: call.params.description,
       });
 
-    case 'moveFile':
+    case "moveFile":
       return executeMoveFileTool({
         file: call.params.file || call.params.fileName,
         fromProject: call.params.fromProject || call.params.from,
@@ -2243,16 +2479,27 @@ export async function executeTool(
         directory: call.params.directory || call.params.path,
       });
 
-    case 'deleteFile':
+    case "deleteFile":
       return executeDeleteFileTool(projectId, {
         file: call.params.file || call.params.fileName,
         project: call.params.project,
       });
 
-    case 'deleteProject':
+    case "deleteProject":
       return executeDeleteProjectTool({
         project: call.params.project || call.params.name,
         confirm: call.params.confirm,
+      });
+
+    case "webResearch":
+      return executeWebResearchTool({
+        query: call.params.query || call.params.q || call.params.search || "",
+        maxResults: call.params.maxResults
+          ? parseInt(call.params.maxResults)
+          : undefined,
+        maxChunks: call.params.maxChunks
+          ? parseInt(call.params.maxChunks)
+          : undefined,
       });
 
     default:
@@ -2271,10 +2518,10 @@ export async function executeTool(
 export async function executeToolCalls(
   projectId: string | undefined,
   calls: ToolCall[],
-  userMessage?: string
+  userMessage?: string,
 ): Promise<ToolResult[]> {
   const results: ToolResult[] = [];
-  
+
   for (const call of calls) {
     const result = await executeTool(projectId, call, userMessage);
     results.push(result);
@@ -2287,16 +2534,18 @@ export async function executeToolCalls(
  * Format tool results for inclusion in LLM context
  */
 export function formatToolResults(results: ToolResult[]): string {
-  return results.map(result => {
-    if (result.success) {
-      const header = result.metadata?.fileName 
-        ? `[File: ${result.metadata.fileName}]`
-        : `[Tool: ${result.tool}]`;
-      return `${header}\n${result.data}`;
-    } else {
-      return `[Tool Error: ${result.tool}] ${result.error}`;
-    }
-  }).join('\n\n---\n\n');
+  return results
+    .map((result) => {
+      if (result.success) {
+        const header = result.metadata?.fileName
+          ? `[File: ${result.metadata.fileName}]`
+          : `[Tool: ${result.tool}]`;
+        return `${header}\n${result.data}`;
+      } else {
+        return `[Tool Error: ${result.tool}] ${result.error}`;
+      }
+    })
+    .join("\n\n---\n\n");
 }
 
 // ============================================
@@ -2321,16 +2570,16 @@ export interface ParsedToolCalls {
  */
 export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
   const toolCalls: ToolCall[] = [];
-  
+
   // Pattern to match ```tool_call ... ``` blocks
   const toolCallPattern = /```tool_call\s*\n?([\s\S]*?)```/g;
-  
+
   let match;
   while ((match = toolCallPattern.exec(content)) !== null) {
     const jsonStr = match[1].trim();
     try {
       const parsed = JSON.parse(jsonStr);
-      if (parsed.tool && typeof parsed.tool === 'string') {
+      if (parsed.tool && typeof parsed.tool === "string") {
         toolCalls.push({
           tool: parsed.tool as ToolName,
           params: parsed.params || {},
@@ -2338,16 +2587,16 @@ export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
       }
     } catch {
       // Invalid JSON in tool call block, skip it
-      console.warn('Failed to parse tool call JSON:', jsonStr);
+      console.warn("Failed to parse tool call JSON:", jsonStr);
     }
   }
-  
+
   // Remove tool call blocks from content to get clean text
   const textContent = content
-    .replace(toolCallPattern, '')
-    .replace(/\n{3,}/g, '\n\n') // Clean up excessive newlines
+    .replace(toolCallPattern, "")
+    .replace(/\n{3,}/g, "\n\n") // Clean up excessive newlines
     .trim();
-  
+
   return {
     textContent,
     toolCalls,
@@ -2386,21 +2635,28 @@ Respond with ONLY one word:
 async function isRequestComplete(
   originalRequest: string,
   conversationSoFar: Array<{ role: string; content: string }>,
-  toolResults: ToolResult[]
+  toolResults: ToolResult[],
 ): Promise<boolean> {
-  const context = conversationSoFar.map(m => `${m.role}: ${m.content}`).join('\n\n');
-  const toolSummary = toolResults.map(r => `${r.tool}: ${r.success ? 'success' : 'failed'}`).join(', ');
+  const context = conversationSoFar
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n\n");
+  const toolSummary = toolResults
+    .map((r) => `${r.tool}: ${r.success ? "success" : "failed"}`)
+    .join(", ");
 
   const response = await chatCompletion({
     messages: [
-      { role: 'system', content: COMPLETION_CHECK_PROMPT },
-      { role: 'user', content: `Original request: "${originalRequest}"\n\nTools executed: ${toolSummary || 'none'}\n\nConversation:\n${context}` },
+      { role: "system", content: COMPLETION_CHECK_PROMPT },
+      {
+        role: "user",
+        content: `Original request: "${originalRequest}"\n\nTools executed: ${toolSummary || "none"}\n\nConversation:\n${context}`,
+      },
     ],
     temperature: 0,
     maxTokens: 10,
   });
 
-  return response.content.trim().toUpperCase().includes('COMPLETE');
+  return response.content.trim().toUpperCase().includes("COMPLETE");
 }
 
 /**
@@ -2417,15 +2673,15 @@ export async function orchestrateToolExecution(
   conversationHistory: Array<{ role: string; content: string }>,
   projectFiles: string[],
   onStepUpdate?: ExecutionLogCallback,
-  onStreamChunk?: LLMStreamCallback
+  onStreamChunk?: LLMStreamCallback,
 ): Promise<OrchestratedResult> {
   const steps: ExecutionStep[] = [];
   const allResponses: string[] = [];
   const allToolCalls: ToolCall[] = [];
   const allToolResults: ToolResult[] = [];
-  
+
   const updateStep = (step: ExecutionStep) => {
-    const idx = steps.findIndex(s => s.id === step.id);
+    const idx = steps.findIndex((s) => s.id === step.id);
     if (idx >= 0) {
       steps[idx] = step;
     } else {
@@ -2435,13 +2691,16 @@ export async function orchestrateToolExecution(
   };
 
   // Build initial messages array
-  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory.map(m => ({ 
-      role: m.role as 'user' | 'assistant', 
-      content: m.content 
+  const messages: Array<{
+    role: "system" | "user" | "assistant";
+    content: string;
+  }> = [
+    { role: "system", content: systemPrompt },
+    ...conversationHistory.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
     })),
-    { role: 'user', content: userMessage },
+    { role: "user", content: userMessage },
   ];
 
   const MAX_ITERATIONS = 5;
@@ -2449,16 +2708,16 @@ export async function orchestrateToolExecution(
 
   while (iteration < MAX_ITERATIONS) {
     iteration++;
-    const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : '';
+    const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : "";
 
     // Step 1: Router-based tool detection (first iteration only, as a hint)
     let routerToolCalls: ToolCall[] = [];
-    
+
     if (iteration === 1) {
       const routingStep: ExecutionStep = {
         id: `routing-${iteration}`,
-        type: 'routing',
-        status: 'running',
+        type: "routing",
+        status: "running",
         label: `Analyzing request${iterationSuffix}...`,
         startTime: new Date(),
       };
@@ -2466,19 +2725,27 @@ export async function orchestrateToolExecution(
 
       try {
         // Build conversation context from recent messages (last 4 exchanges)
-        const recentHistory = conversationHistory.slice(-4).map(m => 
-          `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`
-        ).join('\n');
-        
-        const routingResult = await routeMessage(userMessage, projectFiles, recentHistory);
-        
+        const recentHistory = conversationHistory
+          .slice(-4)
+          .map(
+            (m) =>
+              `${m.role === "user" ? "User" : "Assistant"}: ${m.content.substring(0, 200)}${m.content.length > 200 ? "..." : ""}`,
+          )
+          .join("\n");
+
+        const routingResult = await routeMessage(
+          userMessage,
+          projectFiles,
+          recentHistory,
+        );
+
         // Check if clarification is needed
         if (routingResult.clarification) {
-          routingStep.status = 'completed';
+          routingStep.status = "completed";
           routingStep.endTime = new Date();
-          routingStep.detail = 'Clarification needed';
+          routingStep.detail = "Clarification needed";
           updateStep(routingStep);
-          
+
           return {
             responses: [routingResult.clarification],
             response: routingResult.clarification,
@@ -2487,18 +2754,19 @@ export async function orchestrateToolExecution(
             clarificationRequested: true,
           };
         }
-        
+
         routerToolCalls = routingResult.tools;
 
-        routingStep.status = 'completed';
+        routingStep.status = "completed";
         routingStep.endTime = new Date();
-        routingStep.detail = routerToolCalls.length > 0 
-          ? `Tools to execute: ${routerToolCalls.map(t => t.tool).join(', ')}`
-          : 'Proceeding to LLM';
+        routingStep.detail =
+          routerToolCalls.length > 0
+            ? `Tools to execute: ${routerToolCalls.map((t) => t.tool).join(", ")}`
+            : "Proceeding to LLM";
         updateStep(routingStep);
       } catch {
-        routingStep.status = 'completed';
-        routingStep.detail = 'Proceeding to LLM';
+        routingStep.status = "completed";
+        routingStep.detail = "Proceeding to LLM";
         routingStep.endTime = new Date();
         updateStep(routingStep);
       }
@@ -2508,16 +2776,24 @@ export async function orchestrateToolExecution(
     for (const call of routerToolCalls) {
       // Skip if already executed
       const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-      if (allToolCalls.some(t => `${t.tool}-${JSON.stringify(t.params)}` === callKey)) {
+      if (
+        allToolCalls.some(
+          (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
+        )
+      ) {
         continue;
       }
 
       const toolStep: ExecutionStep = {
         id: `tool-${call.tool}-${Date.now()}`,
-        type: 'tool',
-        status: 'running',
+        type: "tool",
+        status: "running",
         label: `Running ${call.tool}`,
-        detail: call.params.file || call.params.fileName || call.params.query || call.params.title,
+        detail:
+          call.params.file ||
+          call.params.fileName ||
+          call.params.query ||
+          call.params.title,
         startTime: new Date(),
       };
       updateStep(toolStep);
@@ -2526,22 +2802,22 @@ export async function orchestrateToolExecution(
       allToolResults.push(result);
       allToolCalls.push(call);
 
-      toolStep.status = result.success ? 'completed' : 'error';
+      toolStep.status = result.success ? "completed" : "error";
       toolStep.endTime = new Date();
-      toolStep.detail = result.success 
-        ? (result.metadata?.fileName || 'Done')
+      toolStep.detail = result.success
+        ? result.metadata?.fileName || "Done"
         : result.error;
       updateStep(toolStep);
     }
 
     // Step 3: Add tool results to messages if any router tools were executed
     if (routerToolCalls.length > 0) {
-      const successResults = allToolResults.filter(r => r.success);
+      const successResults = allToolResults.filter((r) => r.success);
       if (successResults.length > 0) {
         const toolContext = formatToolResults(successResults);
-        messages.push({ 
-          role: 'user', 
-          content: `[System: Tool results]\n\n${toolContext}` 
+        messages.push({
+          role: "user",
+          content: `[System: Tool results]\n\n${toolContext}`,
         });
       }
     }
@@ -2549,8 +2825,8 @@ export async function orchestrateToolExecution(
     // Step 4: Generate LLM response (without streaming initially to parse tool calls)
     const responseStep: ExecutionStep = {
       id: `response-${iteration}`,
-      type: 'response',
-      status: 'running',
+      type: "response",
+      status: "running",
       label: `Generating response${iterationSuffix}...`,
       startTime: new Date(),
     };
@@ -2558,14 +2834,13 @@ export async function orchestrateToolExecution(
 
     // Generate response without streaming first to check for tool calls
     const llmResponse = await chatCompletion({ messages });
-    
+
     // Step 5: Parse response for inline tool calls
     const parsed = parseToolCallsFromResponse(llmResponse.content);
-    
-    responseStep.status = 'completed';
-    responseStep.endTime = new Date();
-    
+
     if (parsed.hasToolCalls) {
+      responseStep.status = "completed";
+      responseStep.endTime = new Date();
       responseStep.label = `Found ${parsed.toolCalls.length} tool call(s)`;
       updateStep(responseStep);
 
@@ -2576,20 +2851,29 @@ export async function orchestrateToolExecution(
 
       // Step 6: Execute inline tool calls from LLM response
       const inlineResults: ToolResult[] = [];
-      
+
       for (const call of parsed.toolCalls) {
         // Skip if already executed
         const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-        if (allToolCalls.some(t => `${t.tool}-${JSON.stringify(t.params)}` === callKey)) {
+        if (
+          allToolCalls.some(
+            (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
+          )
+        ) {
           continue;
         }
 
         const toolStep: ExecutionStep = {
           id: `inline-tool-${call.tool}-${Date.now()}`,
-          type: 'tool',
-          status: 'running',
+          type: "tool",
+          status: "running",
           label: `Executing ${call.tool}`,
-          detail: call.params.file || call.params.fileName || call.params.query || call.params.title || call.params.content?.substring(0, 30),
+          detail:
+            call.params.file ||
+            call.params.fileName ||
+            call.params.query ||
+            call.params.title ||
+            call.params.content?.substring(0, 30),
           startTime: new Date(),
         };
         updateStep(toolStep);
@@ -2599,10 +2883,10 @@ export async function orchestrateToolExecution(
         allToolResults.push(result);
         allToolCalls.push(call);
 
-        toolStep.status = result.success ? 'completed' : 'error';
+        toolStep.status = result.success ? "completed" : "error";
         toolStep.endTime = new Date();
-        toolStep.detail = result.success 
-          ? (result.metadata?.fileName || 'Done')
+        toolStep.detail = result.success
+          ? result.metadata?.fileName || "Done"
           : result.error;
         updateStep(toolStep);
       }
@@ -2610,80 +2894,107 @@ export async function orchestrateToolExecution(
       // Step 7: Add inline tool results and get final response
       if (inlineResults.length > 0) {
         // Add assistant's partial response
-        messages.push({ role: 'assistant', content: parsed.textContent || 'Executing tools...' });
-        
+        messages.push({
+          role: "assistant",
+          content: parsed.textContent || "Executing tools...",
+        });
+
         // Add tool results
         const toolContext = formatToolResults(inlineResults);
-        messages.push({ 
-          role: 'user', 
-          content: `[System: Tool execution results]\n\n${toolContext}\n\nPlease summarize the results for the user.` 
+        messages.push({
+          role: "user",
+          content: `[System: Tool execution results]\n\n${toolContext}\n\nPlease summarize the results for the user.`,
         });
 
         // Generate final response with results
         const finalStep: ExecutionStep = {
           id: `final-response-${iteration}`,
-          type: 'response',
-          status: 'running',
-          label: 'Summarizing results...',
+          type: "response",
+          status: "running",
+          label: "Summarizing results...",
           startTime: new Date(),
         };
         updateStep(finalStep);
 
         let finalResponse;
         if (onStreamChunk) {
-          finalResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
+          finalResponse = await chatCompletionStreaming(
+            { messages },
+            onStreamChunk,
+          );
         } else {
           finalResponse = await chatCompletion({ messages });
         }
-        
-        finalStep.status = 'completed';
+
+        finalStep.status = "completed";
         finalStep.endTime = new Date();
-        finalStep.label = 'Response ready';
+        finalStep.label = "Response ready";
         updateStep(finalStep);
 
         // Build combined response
-        const combinedResponse = parsed.textContent 
+        const combinedResponse = parsed.textContent
           ? `${parsed.textContent}\n\n${finalResponse.content}`
           : finalResponse.content;
-        
+
         allResponses.push(combinedResponse);
-        messages.push({ role: 'assistant', content: finalResponse.content });
+        messages.push({ role: "assistant", content: finalResponse.content });
       } else {
         // No tools actually executed (maybe all were duplicates)
         allResponses.push(parsed.textContent || llmResponse.content);
-        messages.push({ role: 'assistant', content: llmResponse.content });
+        messages.push({ role: "assistant", content: llmResponse.content });
       }
     } else {
-      // No inline tool calls in response - check if assistant committed to an action
-      responseStep.label = 'Analyzing response...';
+      // No inline tool calls in response - mark response generation complete
+      responseStep.status = "completed";
+      responseStep.endTime = new Date();
+      responseStep.label = "Response generated";
       updateStep(responseStep);
+
+      // Stream the assistant's response immediately so user sees it during planning
+      if (onStreamChunk) {
+        onStreamChunk(llmResponse.content, false);
+      }
+
+      // Add planning step for continuation analysis
+      const planningStep: ExecutionStep = {
+        id: `planning-${iteration}`,
+        type: "routing",
+        status: "running",
+        label: "Planning next steps...",
+        startTime: new Date(),
+      };
+      updateStep(planningStep);
 
       // Run continuation analysis to check if assistant said "I will now..." without executing
       const continuationResult = await analyzeAssistantResponse(
         llmResponse.content,
-        [...conversationHistory, { role: 'user', content: userMessage }],
-        projectFiles
+        [...conversationHistory, { role: "user", content: userMessage }],
+        projectFiles,
       );
 
-      if (continuationResult.shouldExecuteTool && continuationResult.tools.length > 0) {
+      if (
+        continuationResult.shouldExecuteTool &&
+        continuationResult.tools.length > 0
+      ) {
         // Assistant committed to action - execute the tools
-        responseStep.label = `Executing: ${continuationResult.reasoning}`;
-        updateStep(responseStep);
-
-        // Stream the assistant's response first
-        if (onStreamChunk) {
-          onStreamChunk(llmResponse.content, false);
-        }
+        planningStep.label = `Executing: ${continuationResult.reasoning}`;
+        planningStep.status = "completed";
+        planningStep.endTime = new Date();
+        updateStep(planningStep);
 
         const continuationResults: ToolResult[] = [];
-        
+
         for (const call of continuationResult.tools) {
           const toolStep: ExecutionStep = {
             id: `continuation-tool-${call.tool}-${Date.now()}`,
-            type: 'tool',
-            status: 'running',
+            type: "tool",
+            status: "running",
             label: `Executing ${call.tool}`,
-            detail: call.params.file || call.params.fileName || call.params.title || 'Processing...',
+            detail:
+              call.params.file ||
+              call.params.fileName ||
+              call.params.title ||
+              "Processing...",
             startTime: new Date(),
           };
           updateStep(toolStep);
@@ -2693,82 +3004,87 @@ export async function orchestrateToolExecution(
           allToolResults.push(result);
           allToolCalls.push(call);
 
-          toolStep.status = result.success ? 'completed' : 'error';
+          toolStep.status = result.success ? "completed" : "error";
           toolStep.endTime = new Date();
-          toolStep.detail = result.success 
-            ? (result.metadata?.fileName || 'Done')
+          toolStep.detail = result.success
+            ? result.metadata?.fileName || "Done"
             : result.error;
           updateStep(toolStep);
         }
 
         // Add tool results and generate final response
-        if (continuationResults.some(r => r.success)) {
-          messages.push({ role: 'assistant', content: llmResponse.content });
-          
+        if (continuationResults.some((r) => r.success)) {
+          messages.push({ role: "assistant", content: llmResponse.content });
+
           const toolContext = formatToolResults(continuationResults);
-          messages.push({ 
-            role: 'user', 
-            content: `[System: Tool execution completed]\n\n${toolContext}\n\nBriefly confirm the action was completed.` 
+          messages.push({
+            role: "user",
+            content: `[System: Tool execution completed]\n\n${toolContext}\n\nBriefly confirm the action was completed.`,
           });
 
           const confirmStep: ExecutionStep = {
             id: `confirm-response-${iteration}`,
-            type: 'response',
-            status: 'running',
-            label: 'Confirming completion...',
+            type: "response",
+            status: "running",
+            label: "Confirming completion...",
             startTime: new Date(),
           };
           updateStep(confirmStep);
 
           let confirmResponse;
           if (onStreamChunk) {
-            onStreamChunk('\n\n', false); // Add separator
-            confirmResponse = await chatCompletionStreaming({ messages }, onStreamChunk);
+            onStreamChunk("\n\n", false); // Add separator
+            confirmResponse = await chatCompletionStreaming(
+              { messages },
+              onStreamChunk,
+            );
           } else {
             confirmResponse = await chatCompletion({ messages });
           }
 
-          confirmStep.status = 'completed';
+          confirmStep.status = "completed";
           confirmStep.endTime = new Date();
-          confirmStep.label = 'Complete';
+          confirmStep.label = "Complete";
           updateStep(confirmStep);
 
           const combinedResponse = `${llmResponse.content}\n\n${confirmResponse.content}`;
           allResponses.push(combinedResponse);
-          messages.push({ role: 'assistant', content: confirmResponse.content });
+          messages.push({
+            role: "assistant",
+            content: confirmResponse.content,
+          });
         } else {
           // Tools failed
           allResponses.push(llmResponse.content);
-          messages.push({ role: 'assistant', content: llmResponse.content });
+          messages.push({ role: "assistant", content: llmResponse.content });
+        }
+      } else {
+        // No continuation needed - complete planning step
+        planningStep.label = "Complete";
+        planningStep.status = "completed";
+        planningStep.endTime = new Date();
+        updateStep(planningStep);
+
+        // Signal streaming completion (content already streamed earlier)
+        if (onStreamChunk) {
+          onStreamChunk("", true);
         }
 
-        responseStep.status = 'completed';
-        responseStep.endTime = new Date();
-        updateStep(responseStep);
-      } else {
-        // No continuation needed - just use the response as-is
-        responseStep.label = 'Response ready';
-        responseStep.status = 'completed';
-        responseStep.endTime = new Date();
-        updateStep(responseStep);
-        
-        // Stream the response if callback provided
-        if (onStreamChunk) {
-          onStreamChunk(llmResponse.content, false);
-          onStreamChunk('', true); // Signal completion
-        }
-        
         allResponses.push(llmResponse.content);
-        messages.push({ role: 'assistant', content: llmResponse.content });
+        messages.push({ role: "assistant", content: llmResponse.content });
       }
     }
 
     // Step 8: Check if more iterations needed (only if we had tool calls)
-    if ((parsed.hasToolCalls || allToolCalls.length > 0) && iteration < MAX_ITERATIONS) {
+    if (
+      (parsed.hasToolCalls || allToolCalls.length > 0) &&
+      iteration < MAX_ITERATIONS
+    ) {
       // Check if the response still contains unfulfilled requests
       const lastResponse = allResponses[allResponses.length - 1];
-      const stillHasToolCalls = parseToolCallsFromResponse(lastResponse).hasToolCalls;
-      
+      const stillHasToolCalls =
+        parseToolCallsFromResponse(lastResponse).hasToolCalls;
+
       if (!stillHasToolCalls) {
         // No more tool calls, we're done
         break;
@@ -2780,9 +3096,10 @@ export async function orchestrateToolExecution(
   }
 
   // Combine all responses
-  const finalResponse = allResponses.length === 1 
-    ? allResponses[0]
-    : allResponses[allResponses.length - 1]; // Use the last (most complete) response
+  const finalResponse =
+    allResponses.length === 1
+      ? allResponses[0]
+      : allResponses[allResponses.length - 1]; // Use the last (most complete) response
 
   return {
     responses: allResponses,
@@ -2791,4 +3108,3 @@ export async function orchestrateToolExecution(
     toolResults: allToolResults,
   };
 }
-
