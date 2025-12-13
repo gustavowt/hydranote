@@ -156,7 +156,7 @@ export interface ChatSession {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
 
 /**
  * Tool definition for system prompt
@@ -1048,4 +1048,159 @@ export interface SyncChange {
   projectId: string;
   /** File ID (if exists in DB) */
   fileId?: string;
+}
+
+// ============================================
+// Web Research Tool Types
+// ============================================
+
+/**
+ * Web search provider options
+ */
+export type WebSearchProvider = 'searxng' | 'brave' | 'duckduckgo';
+
+/**
+ * Web search settings
+ */
+export interface WebSearchSettings {
+  /** Search provider */
+  provider: WebSearchProvider;
+  /** SearXNG instance URL (required for searxng provider) */
+  searxngUrl?: string;
+  /** Brave Search API key (required for brave provider) */
+  braveApiKey?: string;
+  /** Optional CORS proxy URL for browser development */
+  corsProxyUrl?: string;
+  /** Cache max age in minutes (default: 60) */
+  cacheMaxAge: number;
+  /** Maximum results to fetch per search (default: 5) */
+  maxResults: number;
+}
+
+/**
+ * Default web search settings
+ */
+export const DEFAULT_WEB_SEARCH_SETTINGS: WebSearchSettings = {
+  provider: 'searxng',
+  searxngUrl: '',
+  braveApiKey: '',
+  corsProxyUrl: '',
+  cacheMaxAge: 60,
+  maxResults: 5,
+};
+
+/**
+ * Search result from web search API
+ */
+export interface WebSearchApiResult {
+  /** Page title */
+  title: string;
+  /** Page URL */
+  url: string;
+  /** Snippet/description from search results */
+  snippet: string;
+}
+
+/**
+ * Fetched web page content
+ */
+export interface WebPageContent {
+  /** Source URL */
+  url: string;
+  /** Page title */
+  title: string;
+  /** Extracted text content */
+  content: string;
+  /** When the page was fetched */
+  fetchedAt: Date;
+  /** Content length in characters */
+  contentLength: number;
+}
+
+/**
+ * Cached web search entry (stored in DuckDB)
+ */
+export interface WebSearchCacheEntry {
+  /** Unique cache entry ID */
+  id: string;
+  /** Hash of the search query for lookup */
+  queryHash: string;
+  /** Original search query */
+  query: string;
+  /** Source URL */
+  url: string;
+  /** Page title */
+  title: string;
+  /** Raw extracted content */
+  rawContent: string;
+  /** When the page was fetched */
+  fetchedAt: Date;
+  /** When the cache entry was created */
+  createdAt: Date;
+}
+
+/**
+ * Web content chunk with embedding
+ */
+export interface WebChunk {
+  /** Chunk ID */
+  id: string;
+  /** Reference to cache entry */
+  cacheId: string;
+  /** Source URL */
+  url: string;
+  /** Page title */
+  title: string;
+  /** Chunk text */
+  text: string;
+  /** Chunk index within the page */
+  chunkIndex: number;
+  /** Embedding vector */
+  embedding: number[];
+  /** Similarity score (populated after vector search) */
+  score?: number;
+}
+
+/**
+ * Web research tool parameters
+ */
+export interface WebResearchToolParams {
+  /** Search query */
+  query: string;
+  /** Maximum number of URLs to fetch (default: 5) */
+  maxResults?: number;
+  /** Maximum chunks to return after filtering (default: 10) */
+  maxChunks?: number;
+}
+
+/**
+ * Web research options
+ */
+export interface WebResearchOptions {
+  /** Maximum URLs to fetch (default: 5) */
+  maxResults?: number;
+  /** Maximum chunks to return (default: 10) */
+  maxChunks?: number;
+  /** Whether to use cache (default: true) */
+  useCache?: boolean;
+  /** Override default cache age in minutes */
+  cacheMaxAge?: number;
+}
+
+/**
+ * Web research result
+ */
+export interface WebResearchResult {
+  /** Original search query */
+  query: string;
+  /** Sources that were searched */
+  sources: Array<{ url: string; title: string }>;
+  /** Relevant content chunks after vector filtering */
+  relevantContent: WebChunk[];
+  /** Whether results came from cache */
+  fromCache: boolean;
+  /** Total search time in milliseconds */
+  searchTime: number;
+  /** Error message if search failed */
+  error?: string;
 }
