@@ -34,14 +34,31 @@ import {
 } from './syncService';
 
 let initialized = false;
+let initializationPromise: Promise<void> | null = null;
 
 /**
  * Initialize the project service
+ * Uses a lock to prevent concurrent initialization attempts.
  */
 export async function initialize(): Promise<void> {
   if (initialized) return;
-  await initializeDatabase();
-  initialized = true;
+  
+  // If initialization is in progress, wait for it
+  if (initializationPromise) {
+    return initializationPromise;
+  }
+  
+  // Start initialization and store the promise
+  initializationPromise = initializeDatabase();
+  
+  try {
+    await initializationPromise;
+    initialized = true;
+  } catch (error) {
+    // Reset on failure so it can be retried
+    initializationPromise = null;
+    throw error;
+  }
 }
 
 /**
@@ -60,9 +77,29 @@ async function ensureInitialized(): Promise<void> {
 /**
  * Create a new project
  * Returns the project and an optional sync error if file system sync failed
+ * 
+ * Note: If a project with the same name already exists (case-insensitive),
+ * returns the existing project instead of creating a duplicate.
+ * This makes the operation idempotent and safe to use in pipelines.
  */
 export async function createProject(name: string, description?: string): Promise<Project & { syncError?: string }> {
   await ensureInitialized();
+  
+  // Check if a project with the same name already exists (case-insensitive)
+  const existingProjects = await dbGetAllProjects();
+  const existingProject = existingProjects.find(
+    (p) => p.name.toLowerCase() === name.toLowerCase()
+  );
+  
+  if (existingProject) {
+    // Return existing project instead of creating a duplicate
+    // Still ensure the file system directory exists
+    const syncResult = await syncProjectCreate(existingProject.name);
+    if (!syncResult.success) {
+      return { ...existingProject, syncError: syncResult.error };
+    }
+    return existingProject;
+  }
   
   const project: Project = {
     id: crypto.randomUUID(),
