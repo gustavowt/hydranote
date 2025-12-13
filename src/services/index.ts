@@ -86,6 +86,7 @@ export {
   executeMoveFileTool,
   executeDeleteFileTool,
   executeDeleteProjectTool,
+  executeWebResearchTool,
   executeTool,
   executeToolCalls,
   formatToolResults,
@@ -208,3 +209,17 @@ export {
   isSyncInProgress,
   getSyncStatus,
 } from './syncService';
+
+// Web Search Service
+export {
+  loadWebSearchSettings,
+  saveWebSearchSettings,
+  isWebSearchConfigured,
+  searchWeb,
+  fetchPageContent,
+  extractTextFromHTML,
+  webResearch,
+  formatWebResearchResults,
+  clearWebSearchCache,
+  testWebSearchConnection,
+} from './webSearchService';
