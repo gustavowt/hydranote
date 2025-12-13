@@ -12,6 +12,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@capacitor-community/electron": "^5.0.1",
     "@capacitor/app": "7.1.0",
     "@capacitor/core": "7.4.4",
     "@capacitor/haptics": "7.0.2",

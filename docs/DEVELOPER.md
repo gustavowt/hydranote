@@ -57,6 +57,27 @@ User Input → Router → Tool Selection → Tool Execution → LLM Response →
             Embeddings → Vector Search → Context Retrieval
 ```
 
+### Application Bootstrap
+
+The application initializes critical resources before mounting the Vue app. This ensures all services have access to required dependencies (database, etc.) from the start.
+
+```typescript
+// main.ts
+async function bootstrap() {
+  // Initialize database and core services BEFORE mounting
+  await initialize();  // from projectService
+
+  const app = createApp(App)
+    .use(IonicVue)
+    .use(router);
+
+  await router.isReady();
+  app.mount('#app');
+}
+```
+
+**Important:** All services that need database access should use `projectService` functions which internally call `ensureInitialized()`. This pattern guarantees the database is ready before any operations.
+
 ---
 
 ## Services
@@ -65,11 +86,13 @@ User Input → Router → Tool Selection → Tool Execution → LLM Response →
 
 Manages projects and document ingestion. This is the **single source of truth** for all file operations.
 
+**Initialization:** All public functions call `ensureInitialized()` internally, which lazily initializes the database if needed. The `initialize()` function is also called at app boot in `main.ts` for immediate availability.
+
 #### Key Functions
 
 | Function | Description |
 |----------|-------------|
-| `createProject(name, description?)` | Create a new project (+ sync to FS) |
+| `createProject(name, description?)` | Create a new project (+ sync to FS). **Idempotent**: returns existing project if name matches (case-insensitive) |
 | `getProject(projectId)` | Get project by ID |
 | `getAllProjects()` | List all projects |
 | `deleteProject(projectId)` | Delete project and all files (+ sync to FS) |
@@ -137,6 +160,7 @@ Handles tool routing and execution.
 | `write` | Generate documents (PDF/DOCX/MD) | write, create, generate |
 | `addNote` | Create and save notes | add note, save note, criar nota |
 | `updateFile` | Update sections in existing files | update, edit, modify, replace, insert |
+| `webResearch` | Search the web for information | web search, google, look up online, current news |
 
 #### Router Prompt
 
@@ -289,6 +313,54 @@ The tool uses a preview/confirmation flow:
 
 - Markdown (`.md`)
 - DOCX (`.docx`)
+
+### WebResearch Tool
+
+Searches the web for current information not available in project documents.
+
+#### Architecture
+
+```
+User Query → Check Cache → Web Search API → Fetch Pages → Extract Text
+                ↓                                              ↓
+         If cache hit                                   Chunk Content
+                ↓                                              ↓
+         Use cached                                   Generate Embeddings
+                ↓                                              ↓
+         Vector Search ←────────────────────────── Store in Cache
+                ↓
+         Return Relevant Chunks
+```
+
+#### Supported Providers
+
+| Provider | Configuration | Notes |
+|----------|--------------|-------|
+| SearXNG | Instance URL | Self-hosted, private, recommended |
+| Brave Search | API Key | Free tier: 2000 queries/month |
+| DuckDuckGo | None | Instant Answers API, limited results |
+
+#### Parameters
+
+```typescript
+interface WebResearchToolParams {
+  query: string;           // Search query (required)
+  maxResults?: number;     // Max URLs to fetch (default: 5)
+  maxChunks?: number;      // Max chunks to return (default: 10)
+}
+```
+
+#### Caching
+
+- Results are cached in DuckDB (`web_search_cache` and `web_search_chunks` tables)
+- Default cache duration: 60 minutes
+- Cache is keyed by query hash
+- Expired entries are automatically cleaned up
+
+#### CORS Handling
+
+- **Electron/Capacitor**: Direct fetch, no CORS issues
+- **Browser**: Requires CORS proxy configuration in settings
 
 ---
 
@@ -506,7 +578,11 @@ When enabled, the sync system:
 
 #### File System Service (`fileSystemService.ts`)
 
-Handles low-level file system operations using the File System Access API.
+Handles low-level file system operations. Supports both:
+- **Browser**: File System Access API (Chrome, Edge, Opera)
+- **Electron**: Native file system via IPC handlers
+
+All functions automatically detect the runtime environment and use the appropriate API.
 
 | Function | Description |
 |----------|-------------|
@@ -517,12 +593,16 @@ Handles low-level file system operations using the File System Access API.
 | `readFile(projectName, filePath)` | Read file from disk |
 | `deleteFile(projectName, filePath)` | Delete file from disk |
 | `listProjectFiles(projectName)` | List all files in project directory |
-| `listRootDirectories()` | List all project directories |
+| `listRootDirectories()` | List all project directories in root |
 | `isSyncAvailable()` | Check if sync is enabled and configured |
+| `isFileSystemAccessSupported()` | Check if FS sync is supported (browser API or Electron) |
+| `isElectron()` | Check if running in Electron environment |
 
 #### Sync Service (`syncService.ts`)
 
 Handles bidirectional synchronization logic.
+
+**Important:** Sync service uses `projectService` functions for all database operations, ensuring proper initialization and consistent behavior. Never call database functions directly from syncService.
 
 | Function | Description |
 |----------|-------------|
@@ -677,10 +757,11 @@ When AI suggests creating a new project:
 ```typescript
 type SupportedFileType = 'pdf' | 'txt' | 'docx' | 'md' | 'png' | 'jpg' | 'jpeg' | 'webp';
 type ProjectStatus = 'created' | 'indexing' | 'indexed' | 'error';
-type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile';
+type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'webResearch';
 type DocumentFormat = 'pdf' | 'docx' | 'md';
 type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
 type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
+type WebSearchProvider = 'searxng' | 'brave' | 'duckduckgo';
 ```
 
 ### File System Sync Types
@@ -715,6 +796,41 @@ interface SyncResult {
 ```typescript
 type TelemetryEventType = 'note_created' | 'project_created' | 'directory_created' | 'note_creation_failed';
 type NoteCreationSource = 'dashboard' | 'project_chat';
+```
+
+### Web Search Types
+
+```typescript
+type WebSearchProvider = 'searxng' | 'brave' | 'duckduckgo';
+
+interface WebSearchSettings {
+  provider: WebSearchProvider;
+  searxngUrl?: string;        // SearXNG instance URL
+  braveApiKey?: string;       // Brave Search API key
+  corsProxyUrl?: string;      // CORS proxy for browser dev
+  cacheMaxAge: number;        // Cache duration in minutes
+  maxResults: number;         // Max URLs to fetch per search
+}
+
+interface WebChunk {
+  id: string;
+  cacheId: string;
+  url: string;
+  title: string;
+  text: string;
+  chunkIndex: number;
+  embedding: number[];
+  score?: number;             // Similarity score after vector search
+}
+
+interface WebResearchResult {
+  query: string;
+  sources: Array<{ url: string; title: string }>;
+  relevantContent: WebChunk[];
+  fromCache: boolean;
+  searchTime: number;
+  error?: string;
+}
 ```
 
 ---
@@ -781,6 +897,39 @@ const DEFAULT_CONTEXT_CONFIG = {
 
 ---
 
+## Electron Configuration
+
+### Content Security Policy (CSP)
+
+The Electron app (`electron/src/setup.ts`) configures CSP to balance security with functionality:
+
+```typescript
+// Key CSP directives:
+script-src: 'self' capacitor-electron://* blob: https://cdn.jsdelivr.net
+worker-src: 'self' blob: capacitor-electron://* https://cdn.jsdelivr.net
+connect-src: 'self' https://* http://localhost:* (for APIs)
+```
+
+**DuckDB WASM Requirement:** The `https://cdn.jsdelivr.net` source is required because DuckDB WASM loads worker scripts from jsdelivr CDN. Without this, database initialization will fail with a CSP violation error.
+
+### IPC Handlers
+
+Electron exposes file system operations via IPC handlers in `electron/src/index.ts`:
+
+| Handler | Description |
+|---------|-------------|
+| `fs:selectDirectory` | Open directory picker dialog |
+| `fs:readFile` | Read file contents |
+| `fs:writeFile` | Write file (creates parent dirs) |
+| `fs:deleteFile` | Delete a file |
+| `fs:createDirectory` | Create directory recursively |
+| `fs:deleteDirectory` | Delete directory recursively |
+| `fs:listDirectory` | List directory contents with metadata |
+| `fs:exists` | Check if path exists |
+| `fs:getStats` | Get file/directory statistics |
+
+---
+
 ## Development Tips
 
 ### Adding a New Tool
@@ -839,12 +988,13 @@ src/
 │   ├── syncService.ts        # Bidirectional file system sync
 │   ├── telemetryService.ts   # Metrics tracking (Phase 12)
 │   ├── toolService.ts        # Tool routing/execution
+│   ├── webSearchService.ts   # Web research with caching and embeddings
 │   └── index.ts              # Service exports
 ├── types/
 │   └── index.ts              # Type definitions
 └── views/
     ├── WorkspacePage.vue     # Main unified workspace layout
-    └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Storage)
+    └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage)
 ```
 
 
