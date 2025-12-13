@@ -9,14 +9,42 @@ import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 let db: duckdb.AsyncDuckDB | null = null;
 let connection: duckdb.AsyncDuckDBConnection | null = null;
 
+// Initialization lock to prevent concurrent initialization attempts
+// This prevents OPFS "Access Handles cannot be created" errors
+let initializationPromise: Promise<void> | null = null;
+
 const OPFS_DB_PATH = 'opfs://hydranote.duckdb';
 
 /**
  * Initialize DuckDB WASM with OPFS persistence
+ * Uses a lock to prevent concurrent initialization attempts which would cause
+ * OPFS access handle conflicts.
  */
 export async function initializeDatabase(): Promise<void> {
-  if (db) return;
+  // Already initialized
+  if (db && connection) return;
 
+  // If initialization is in progress, wait for it
+  if (initializationPromise) {
+    return initializationPromise;
+  }
+
+  // Start initialization and store the promise
+  initializationPromise = doInitializeDatabase();
+  
+  try {
+    await initializationPromise;
+  } catch (error) {
+    // Reset on failure so it can be retried
+    initializationPromise = null;
+    throw error;
+  }
+}
+
+/**
+ * Internal initialization logic
+ */
+async function doInitializeDatabase(): Promise<void> {
   const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
 
   const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
@@ -119,6 +147,42 @@ async function createSchema(): Promise<void> {
       FOREIGN KEY (file_id) REFERENCES files(id),
       FOREIGN KEY (project_id) REFERENCES projects(id)
     )
+  `);
+
+  // Web search cache table
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS web_search_cache (
+      id VARCHAR PRIMARY KEY,
+      query_hash VARCHAR NOT NULL,
+      query VARCHAR NOT NULL,
+      url VARCHAR NOT NULL,
+      title VARCHAR,
+      raw_content TEXT,
+      fetched_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Web search chunks with embeddings
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS web_search_chunks (
+      id VARCHAR PRIMARY KEY,
+      cache_id VARCHAR NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      embedding DOUBLE[] NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (cache_id) REFERENCES web_search_cache(id)
+    )
+  `);
+
+  // Create indexes for web search cache
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_web_cache_query_hash ON web_search_cache(query_hash)
+  `);
+  
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_web_cache_fetched ON web_search_cache(fetched_at)
   `);
 }
 
@@ -433,5 +497,204 @@ export async function closeDatabase(): Promise<void> {
     await db.terminate();
     db = null;
   }
+}
+
+// ============================================
+// Web Search Cache Operations
+// ============================================
+
+/**
+ * Store a web search cache entry
+ */
+export async function createWebSearchCache(entry: {
+  id: string;
+  queryHash: string;
+  query: string;
+  url: string;
+  title: string;
+  rawContent: string;
+  fetchedAt: Date;
+}): Promise<void> {
+  const conn = getConnection();
+  const escapedQuery = entry.query.replace(/'/g, "''");
+  const escapedUrl = entry.url.replace(/'/g, "''");
+  const escapedTitle = (entry.title || '').replace(/'/g, "''");
+  const escapedContent = entry.rawContent.replace(/'/g, "''");
+  
+  await conn.query(`
+    INSERT INTO web_search_cache (id, query_hash, query, url, title, raw_content, fetched_at, created_at)
+    VALUES ('${entry.id}', '${entry.queryHash}', '${escapedQuery}', '${escapedUrl}', '${escapedTitle}', '${escapedContent}', '${entry.fetchedAt.toISOString()}', CURRENT_TIMESTAMP)
+  `);
+}
+
+/**
+ * Store a web search chunk with embedding
+ */
+export async function createWebSearchChunk(chunk: {
+  id: string;
+  cacheId: string;
+  chunkIndex: number;
+  text: string;
+  embedding: number[];
+}): Promise<void> {
+  const conn = getConnection();
+  const escapedText = chunk.text.replace(/'/g, "''");
+  const vectorStr = `[${chunk.embedding.join(', ')}]`;
+  
+  await conn.query(`
+    INSERT INTO web_search_chunks (id, cache_id, chunk_index, text, embedding, created_at)
+    VALUES ('${chunk.id}', '${chunk.cacheId}', ${chunk.chunkIndex}, '${escapedText}', ${vectorStr}::DOUBLE[], CURRENT_TIMESTAMP)
+  `);
+}
+
+/**
+ * Get cached web search results by query hash within max age
+ */
+export async function getWebSearchCache(
+  queryHash: string,
+  maxAgeMinutes: number = 60
+): Promise<Array<{
+  id: string;
+  query: string;
+  url: string;
+  title: string;
+  rawContent: string;
+  fetchedAt: Date;
+}>> {
+  const conn = getConnection();
+  const minTime = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+  
+  const result = await conn.query(`
+    SELECT id, query, url, title, raw_content, fetched_at
+    FROM web_search_cache
+    WHERE query_hash = '${queryHash}'
+      AND fetched_at >= '${minTime.toISOString()}'
+    ORDER BY fetched_at DESC
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    query: row.query as string,
+    url: row.url as string,
+    title: row.title as string,
+    rawContent: row.raw_content as string,
+    fetchedAt: new Date(row.fetched_at as string),
+  }));
+}
+
+/**
+ * Get web search chunks by cache IDs
+ */
+export async function getWebSearchChunks(
+  cacheIds: string[]
+): Promise<Array<{
+  id: string;
+  cacheId: string;
+  chunkIndex: number;
+  text: string;
+  embedding: number[];
+}>> {
+  if (cacheIds.length === 0) return [];
+  
+  const conn = getConnection();
+  const idsStr = cacheIds.map(id => `'${id}'`).join(', ');
+  
+  const result = await conn.query(`
+    SELECT id, cache_id, chunk_index, text, embedding
+    FROM web_search_chunks
+    WHERE cache_id IN (${idsStr})
+    ORDER BY cache_id, chunk_index
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    cacheId: row.cache_id as string,
+    chunkIndex: row.chunk_index as number,
+    text: row.text as string,
+    embedding: row.embedding as number[],
+  }));
+}
+
+/**
+ * Vector search on web search chunks
+ */
+export async function webVectorSearch(
+  queryVector: number[],
+  cacheIds: string[],
+  k: number = 10
+): Promise<Array<{
+  chunkId: string;
+  cacheId: string;
+  text: string;
+  url: string;
+  title: string;
+  score: number;
+}>> {
+  if (cacheIds.length === 0) return [];
+  
+  const conn = getConnection();
+  const queryVectorStr = `[${queryVector.join(', ')}]`;
+  const idsStr = cacheIds.map(id => `'${id}'`).join(', ');
+  
+  const result = await conn.query(`
+    WITH query AS (
+      SELECT ${queryVectorStr}::DOUBLE[] as qvec
+    )
+    SELECT 
+      wc.id as chunk_id,
+      wc.cache_id,
+      wc.text,
+      wsc.url,
+      wsc.title,
+      (
+        list_sum(list_transform(list_zip(wc.embedding, q.qvec), x -> x[1] * x[2])) /
+        (sqrt(list_sum(list_transform(wc.embedding, x -> x * x))) * sqrt(list_sum(list_transform(q.qvec, x -> x * x))))
+      ) as score
+    FROM web_search_chunks wc
+    CROSS JOIN query q
+    JOIN web_search_cache wsc ON wsc.id = wc.cache_id
+    WHERE wc.cache_id IN (${idsStr})
+    ORDER BY score DESC
+    LIMIT ${k}
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    chunkId: row.chunk_id as string,
+    cacheId: row.cache_id as string,
+    text: row.text as string,
+    url: row.url as string,
+    title: row.title as string,
+    score: row.score as number,
+  }));
+}
+
+/**
+ * Delete expired web search cache entries
+ */
+export async function cleanExpiredWebCache(maxAgeMinutes: number = 60): Promise<number> {
+  const conn = getConnection();
+  const minTime = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+  
+  // Get expired cache IDs first
+  const expiredResult = await conn.query(`
+    SELECT id FROM web_search_cache
+    WHERE fetched_at < '${minTime.toISOString()}'
+  `);
+  
+  const expiredIds = expiredResult.toArray().map((row: Record<string, unknown>) => row.id as string);
+  
+  if (expiredIds.length === 0) return 0;
+  
+  const idsStr = expiredIds.map(id => `'${id}'`).join(', ');
+  
+  // Delete chunks first (foreign key)
+  await conn.query(`DELETE FROM web_search_chunks WHERE cache_id IN (${idsStr})`);
+  
+  // Delete cache entries
+  await conn.query(`DELETE FROM web_search_cache WHERE id IN (${idsStr})`);
+  
+  await flushDatabase();
+  
+  return expiredIds.length;
 }
 
