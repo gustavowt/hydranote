@@ -35,7 +35,7 @@ The app uses a unified three-panel workspace layout:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Header Bar                              │
+│  Logo  │        [  Search Bar  ]          │  New Note │ Settings│
 ├──────────────┬─────────────────────────────┬────────────────────┤
 │   Projects   │                             │                    │
 │     Tree     │      Markdown Editor        │    Chat Sidebar    │
@@ -46,6 +46,7 @@ The app uses a unified three-panel workspace layout:
 └──────────────┴─────────────────────────────┴────────────────────┘
 ```
 
+- **Header Search Bar**: Global fuzzy search across all projects (files and content)
 - **ProjectsTreeSidebar**: Hierarchical view of projects and files
 - **MarkdownEditor**: Full editor with edit/split/preview modes, inline note saving
 - **ChatSidebar**: Project-scoped chat with AI, @file references
@@ -280,7 +281,7 @@ interface UpdateFileToolParams {
   fileName?: string;
   operation: 'replace' | 'insert_before' | 'insert_after';
   sectionIdentifier: string;
-  identificationMethod?: 'header' | 'exact_match' | 'semantic';
+  identificationMethod?: 'header' | 'exact_match' | 'semantic' | 'line_number';
   newContent: string;
 }
 ```
@@ -299,7 +300,37 @@ interface UpdateFileToolParams {
 |--------|-------------|
 | `header` | Match by markdown header (e.g., `## Section Name`) or DOCX heading |
 | `exact_match` | Find and replace exact text |
-| `semantic` | Use LLM to semantically locate the section |
+| `semantic` | Use fuzzy matching and embeddings to locate the section |
+| `line_number` | Specify by line number (e.g., `line:42` or `lines:10-25`) |
+
+#### Multi-Level Cascade Matching
+
+The section identification uses a cascade of matching strategies for robustness:
+
+```
+1. Special Keywords → (end, start, bottom, top, append, prepend)
+2. Line Number Spec → (line:42, lines:10-25)
+3. Exact Text Match → (indexOf)
+4. Structural Parse  → (markdown headers with normalized matching)
+5. Fuzzy Match      → (Levenshtein distance, typo tolerance)
+6. Semantic Match   → (embedding similarity via chunks)
+7. LLM Fallback     → (line-number based response)
+```
+
+**Special Keywords:**
+- End/append: `end`, `bottom`, `eof`, `fim`, `final`, `append`
+- Start/prepend: `start`, `beginning`, `top`, `prepend`
+
+**Path-based Lookups:**
+- Support for hierarchical paths: `Features/API`, `Features > API`
+
+**Fuzzy Matching:**
+- Tolerates typos and partial matches
+- Uses Levenshtein distance with configurable threshold (default: 60%)
+
+**Semantic Embeddings:**
+- Leverages existing chunk embeddings for similarity matching
+- No additional LLM calls, uses vector comparison
 
 #### Preview Flow
 
@@ -496,8 +527,54 @@ Collapsible hierarchical project/file navigator.
 #### Exposed Methods
 
 ```typescript
-refresh()  // Reload projects and file trees
+refresh()                              // Reload projects and file trees
+revealFile(projectId, fileId)          // Expand parents and scroll file into view
 ```
+
+#### File Reveal Feature
+
+When a file is created or saved, the sidebar automatically:
+1. Expands the project containing the file
+2. Expands all parent directories to reveal the file
+3. Scrolls the file into view
+4. Highlights the file with a brief animation
+
+This is triggered automatically when `selectedFileId` prop changes, or can be called manually via `revealFile()`.
+
+### SearchAutocomplete (`SearchAutocomplete.vue`)
+
+Global search bar with fuzzy autocomplete across all projects.
+
+#### Features
+
+- **Fuzzy search**: JavaScript-based fuzzy matching (exact, prefix, contains, character sequence)
+- **Multi-target search**: Searches project names, file names, and file paths
+- **Lazy loading**: Data loaded on first focus, cached for subsequent searches
+- **Keyboard navigation**: Arrow keys, Enter to select, Escape to close
+- **Visual feedback**: Loading spinner, match highlighting, project/file sections
+
+#### Events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `select-file` | `FileItem` | Emitted when user selects a file |
+| `select-project` | `Project` | Emitted when user selects a project |
+
+#### Search Algorithm
+
+The fuzzy scoring function uses a multi-tier approach:
+
+```typescript
+// Scoring priority:
+1.0  - Exact match
+0.9  - Starts with query
+0.7  - Contains query
+0.6  - All query characters found in sequence (fuzzy match)
+```
+
+#### Data Loading
+
+Uses existing `getAllFilesForAutocomplete()` and `getAllProjects()` functions to load data on first focus. This reuses the same pattern as `FileReferenceAutocomplete.vue` for consistency.
 
 ---
 
@@ -1010,7 +1087,8 @@ src/
 │   ├── FileTreeSidebar.vue          # Legacy file tree (Phase 11)
 │   ├── MarkdownEditor.vue           # Center panel: markdown editor
 │   ├── MarkdownViewerEditor.vue     # Read-only markdown viewer
-│   └── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
+│   ├── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
+│   └── SearchAutocomplete.vue       # Header: global fuzzy search bar
 ├── services/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations (OPFS persistence)
