@@ -29,6 +29,7 @@
     "mammoth": "^1.11.0",
     "marked": "^17.0.1",
     "marked-highlight": "^2.2.3",
+    "mermaid": "^11.12.2",
     "pdfjs-dist": "^5.4.394",
     "tesseract.js": "^6.0.1",
     "vue": "^3.3.0",
