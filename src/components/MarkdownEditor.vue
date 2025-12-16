@@ -122,11 +122,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
+import mermaid from 'mermaid';
 import {
   IonIcon,
   IonButton,
@@ -167,11 +168,34 @@ const emit = defineEmits<{
   (e: 'note-saved', result: GlobalAddNoteResult): void;
 }>();
 
-// Configure marked with highlight.js
+// Initialize mermaid with dark theme
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  securityLevel: 'loose',
+  fontFamily: 'inherit',
+});
+
+// Custom renderer for mermaid code blocks
+const mermaidRenderer = {
+  code(token: { text: string; lang?: string }): string | false {
+    if (token.lang === 'mermaid') {
+      const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
+      // Encode the mermaid code to preserve special characters
+      const encodedCode = btoa(encodeURIComponent(token.text));
+      return `<div class="mermaid-diagram" data-mermaid-id="${id}" data-mermaid-code="${encodedCode}"></div>`;
+    }
+    return false; // Use default renderer for other languages
+  }
+};
+
+// Configure marked with highlight.js and mermaid support
 const marked = new Marked(
   markedHighlight({
     langPrefix: 'hljs language-',
     highlight(code: string, lang: string) {
+      // Skip mermaid blocks - they're handled by custom renderer
+      if (lang === 'mermaid') return code;
       if (lang && hljs.getLanguage(lang)) {
         try {
           return hljs.highlight(code, { language: lang }).value;
@@ -188,6 +212,9 @@ const marked = new Marked(
   })
 );
 
+// Apply mermaid renderer
+marked.use({ renderer: mermaidRenderer });
+
 const content = ref('');
 const originalContent = ref('');
 const viewMode = ref<'edit' | 'split' | 'view'>('edit');
@@ -198,6 +225,45 @@ const executionSteps = ref<NoteExecutionStep[]>([]);
 
 const hasChanges = computed(() => content.value !== originalContent.value);
 const isNewNote = computed(() => !props.currentFile);
+
+// Mermaid rendering with debounce
+let mermaidRenderTimeout: ReturnType<typeof setTimeout> | null = null;
+
+async function renderMermaidDiagrams() {
+  await nextTick();
+  try {
+    const diagrams = Array.from(document.querySelectorAll('.mermaid-diagram:not([data-processed])'));
+    if (diagrams.length === 0) return;
+    
+    for (const diagram of diagrams) {
+      const id = diagram.getAttribute('data-mermaid-id') || `mermaid-${Math.random().toString(36).substring(2, 9)}`;
+      const encodedCode = diagram.getAttribute('data-mermaid-code') || '';
+      if (!encodedCode) {
+        diagram.setAttribute('data-processed', 'true');
+        continue;
+      }
+      // Decode the mermaid code
+      const code = decodeURIComponent(atob(encodedCode));
+      try {
+        const { svg } = await mermaid.render(id, code);
+        diagram.innerHTML = svg;
+        diagram.setAttribute('data-processed', 'true');
+      } catch (err) {
+        // Invalid mermaid syntax - show error state with details
+        const errorMsg = err instanceof Error ? err.message : 'Invalid diagram syntax';
+        diagram.innerHTML = `<div class="mermaid-error">${errorMsg}</div>`;
+        diagram.setAttribute('data-processed', 'true');
+      }
+    }
+  } catch {
+    // Silently handle errors
+  }
+}
+
+function debouncedRenderMermaid() {
+  if (mermaidRenderTimeout) clearTimeout(mermaidRenderTimeout);
+  mermaidRenderTimeout = setTimeout(renderMermaidDiagrams, 300);
+}
 
 const displayFileName = computed(() => {
   if (!props.currentFile) return 'New Note';
@@ -240,6 +306,20 @@ watch(() => props.initialContent, (newContent) => {
     originalContent.value = '';
   }
 }, { immediate: true });
+
+// Watch for content changes to render mermaid diagrams
+watch(renderedContent, () => {
+  if (viewMode.value === 'view' || viewMode.value === 'split') {
+    debouncedRenderMermaid();
+  }
+});
+
+// Watch for view mode changes to render mermaid diagrams
+watch(viewMode, (newMode) => {
+  if (newMode === 'view' || newMode === 'split') {
+    debouncedRenderMermaid();
+  }
+});
 
 function handleInput() {
   emit('content-change', content.value);
@@ -673,6 +753,30 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   max-width: 100%;
   border-radius: 8px;
   margin: 1em 0;
+}
+
+/* Mermaid Diagram Styles */
+.markdown-preview :deep(.mermaid-diagram) {
+  margin: 1.5em 0;
+  padding: 16px;
+  background: var(--hn-bg-surface);
+  border-radius: 8px;
+  border: 1px solid var(--hn-border-default);
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+}
+
+.markdown-preview :deep(.mermaid-diagram svg) {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-preview :deep(.mermaid-error) {
+  color: var(--hn-error, #ef4444);
+  font-style: italic;
+  padding: 12px;
+  text-align: center;
 }
 
 /* Status Bar */
