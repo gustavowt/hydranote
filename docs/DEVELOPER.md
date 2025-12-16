@@ -26,6 +26,7 @@ HydraNote is an AI-powered document indexing and interaction system built with:
 - **Database**: DuckDB (in-browser, WASM with OPFS persistence)
 - **AI**: OpenAI API / Ollama (local LLMs)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
+- **Markdown**: marked + highlight.js + Mermaid (diagrams)
 - **File System Sync**: File System Access API (bidirectional sync with local directories)
 
 ### Workspace Layout
@@ -413,6 +414,41 @@ Full-featured markdown editor with three view modes.
 - **edit**: Raw markdown textarea
 - **split**: Side-by-side editor and preview
 - **view**: Rendered markdown preview
+
+#### Mermaid Diagram Support
+
+The markdown editor supports Mermaid flowcharts and diagrams. Users can create diagrams using fenced code blocks with the `mermaid` language identifier:
+
+````markdown
+```mermaid
+flowchart TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Proceed]
+    B -->|No| D[Stop]
+```
+````
+
+**Supported Diagram Types:**
+- Flowcharts (`flowchart`, `graph`)
+- Sequence diagrams (`sequenceDiagram`)
+- Class diagrams (`classDiagram`)
+- State diagrams (`stateDiagram-v2`)
+- Entity relationship diagrams (`erDiagram`)
+- Gantt charts (`gantt`)
+- Pie charts (`pie`)
+- And more (see [Mermaid documentation](https://mermaid.js.org/))
+
+**Implementation Notes:**
+- Mermaid is initialized with `theme: 'dark'` to match the editor aesthetic
+- Diagrams are rendered asynchronously after DOM updates (debounced 300ms)
+- Invalid syntax shows an error message instead of breaking the preview
+- Mermaid code is base64-encoded in data attributes to preserve special characters
+
+**Syntax Tips:**
+- When node labels contain special characters like `()`, `{}`, `[]`, or quotes, wrap in double quotes:
+  - ✅ `A["Label with (parentheses)"]`
+  - ❌ `A[Label with (parentheses)]`
+- The note formatter prompt automatically applies these rules when generating mermaid diagrams
 
 #### Exposed Methods
 

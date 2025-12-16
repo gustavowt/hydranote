@@ -86,8 +86,15 @@
           <!-- Typing Indicator + Streaming -->
           <div v-if="isTyping || streamingContent" class="message assistant">
             <div class="message-bubble">
-              <!-- Current Step Indicator (single line) -->
-              <div v-if="currentStep && !streamingContent" class="current-step-indicator">
+              <!-- Streaming Content -->
+              <div 
+                v-if="streamingContent" 
+                class="message-content markdown-content"
+                v-html="renderMarkdown(streamingContent)"
+              ></div>
+
+              <!-- Current Step Indicator (always at bottom) -->
+              <div v-if="currentStep && (currentStep.status === 'running' || !streamingContent)" class="current-step-indicator">
                 <ion-spinner v-if="currentStep.status === 'running'" name="dots" class="step-spinner" />
                 <ion-icon v-else-if="currentStep.status === 'completed'" :icon="checkmarkCircle" class="step-icon-done" />
                 <ion-icon v-else-if="currentStep.status === 'error'" :icon="closeCircle" class="step-icon-error" />
@@ -95,15 +102,8 @@
                 <span v-if="currentStep.detail" class="step-detail">{{ currentStep.detail }}</span>
               </div>
               
-              <!-- Streaming Content -->
-              <div 
-                v-if="streamingContent" 
-                class="message-content markdown-content"
-                v-html="renderMarkdown(streamingContent)"
-              ></div>
-              
               <!-- Typing dots when no steps and no streaming -->
-              <div v-else-if="!currentStep" class="typing">
+              <div v-if="!currentStep && !streamingContent" class="typing">
                 <span class="dot"></span>
                 <span class="dot"></span>
                 <span class="dot"></span>
