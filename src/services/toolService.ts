@@ -47,6 +47,18 @@ import { chatCompletion, chatCompletionStreaming } from "./llmService";
 import { generateDocument } from "./documentGeneratorService";
 import { addNote, addNoteWithTitle } from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
+import { generateEmbedding, cosineSimilarity } from "./embeddingService";
+import {
+  parseDocumentStructure,
+  buildSectionTree,
+  findSectionByTitle,
+  findSectionByPath,
+  fuzzyMatchSections,
+  findMatchingSections,
+  parseLineNumberSpec,
+  getOffsetFromLineNumbers,
+  stringSimilarity,
+} from "./documentProcessor";
 
 // ============================================
 // Execution Log Types
@@ -1045,6 +1057,7 @@ export async function executeWriteTool(
         metadata: {
           fileName: fullPath,
           fileId: file.id,
+          projectId,
           fileSize: file.size,
           truncated: false,
         },
@@ -1061,6 +1074,7 @@ export async function executeWriteTool(
       metadata: {
         fileName: result.fileName,
         fileId: result.fileId,
+        projectId,
         fileSize: result.size,
         downloadUrl: result.downloadUrl,
         truncated: false,
@@ -1145,6 +1159,7 @@ export async function executeAddNoteTool(
       metadata: {
         fileName: result.filePath,
         fileId: result.fileId,
+        projectId,
         truncated: false,
       },
     };
@@ -1559,43 +1574,37 @@ export async function executeWebResearchTool(
 const pendingPreviews = new Map<string, UpdateFilePreview>();
 
 /**
- * Section identification prompt for LLM
+ * Section identification prompt for LLM (improved - uses line numbers)
  */
-const SECTION_IDENTIFICATION_PROMPT = `You are a document section identifier. Given a document and a section description, identify the exact section to modify.
+const SECTION_IDENTIFICATION_PROMPT = `You are a document section identifier. Given a document with line numbers, identify the section to modify.
+
+IMPORTANT: The document is provided with line numbers in format "LINE_NUMBER|content".
 
 Your task:
 1. Analyze the document structure (headings, paragraphs, sections)
 2. Find the section that best matches the user's description
-3. Return the exact text boundaries of that section
-
-SPECIAL CASES:
-- If the user wants to insert at the END/BOTTOM of the document (e.g., "end", "bottom", "EOF", "final", "append", "after everything"):
-  - Set found: true
-  - Set sectionContent to the LAST paragraph or last few lines of the document
-  - Set sectionStart/sectionEnd to match that last content
-  - This allows insert_after to append content at the end of the file
-  - Use confidence 1.0 for clear end-of-file requests
-
-- If the user wants to insert at the BEGINNING/TOP (e.g., "start", "beginning", "top", "first"):
-  - Set found: true
-  - Set sectionContent to the FIRST paragraph or first few lines
-  - This allows insert_before to prepend content at the start
+3. Return LINE NUMBERS (more reliable than text content)
 
 Response format (JSON only):
 {
   "found": true/false,
-  "sectionStart": "exact text where section starts (first 50 chars)",
-  "sectionEnd": "exact text where section ends (last 50 chars)", 
-  "sectionContent": "the full content of the identified section",
+  "startLine": <number>,
+  "endLine": <number>,
   "confidence": 0.0-1.0,
-  "reasoning": "brief explanation of why this section was chosen"
+  "reasoning": "brief explanation"
 }
 
-If the section is not found, return:
+RULES:
+- startLine and endLine are 1-based line numbers from the document
+- For headings, include the heading line and all content until next same-level heading or end
+- For paragraphs, include all contiguous non-empty lines
+- confidence should be 0.9+ for clear matches, 0.6-0.8 for partial matches, <0.6 for uncertain
+
+If section is not found:
 {
   "found": false,
   "confidence": 0,
-  "reasoning": "explanation of why section was not found"
+  "reasoning": "explanation of why not found"
 }`;
 
 /**
@@ -1682,24 +1691,87 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
 }
 
 /**
- * Identify section in document using LLM
+ * Section identification result
  */
-async function identifySection(
-  content: string,
-  sectionIdentifier: string,
-  identificationMethod?: string,
-): Promise<{
+interface SectionIdentificationResult {
   found: boolean;
   sectionContent: string;
   sectionStart: number;
   sectionEnd: number;
   confidence: number;
   reasoning?: string;
-}> {
-  // Special handling for "end"/"bottom" keywords - append at end of document
-  const endKeywords = ["end", "bottom", "eof", "fim", "final", "末尾"];
-  if (endKeywords.includes(sectionIdentifier.toLowerCase().trim())) {
-    // Return the last character position for insert_after operations
+  method?: string;
+}
+
+/**
+ * Convert line numbers to character offsets
+ */
+function lineNumbersToOffsets(
+  content: string,
+  startLine: number,
+  endLine: number,
+): { start: number; end: number } | null {
+  const lines = content.split("\n");
+
+  if (startLine < 1 || startLine > lines.length) return null;
+  if (endLine < startLine || endLine > lines.length) return null;
+
+  let start = 0;
+  for (let i = 0; i < startLine - 1; i++) {
+    start += lines[i].length + 1;
+  }
+
+  let end = start;
+  for (let i = startLine - 1; i <= endLine - 1; i++) {
+    end += lines[i].length;
+    if (i < endLine - 1) end += 1;
+  }
+
+  return { start, end };
+}
+
+/**
+ * Format document with line numbers for LLM
+ */
+function formatDocumentWithLineNumbers(content: string): string {
+  const lines = content.split("\n");
+  return lines.map((line, i) => `${String(i + 1).padStart(4)}|${line}`).join("\n");
+}
+
+/**
+ * Identify section in document using multi-level cascade matching
+ *
+ * Cascade order:
+ * 1. Special keywords (end, start, bottom, top)
+ * 2. Line number specification (line:42, lines:10-25)
+ * 3. Exact text match
+ * 4. Structural parsing (markdown headers)
+ * 5. Fuzzy matching (typo tolerance)
+ * 6. Semantic embeddings (existing chunks)
+ * 7. LLM fallback (line-number based)
+ */
+async function identifySection(
+  content: string,
+  sectionIdentifier: string,
+  identificationMethod?: string,
+  fileId?: string,
+): Promise<SectionIdentificationResult> {
+  const notFound: SectionIdentificationResult = {
+    found: false,
+    sectionContent: "",
+    sectionStart: -1,
+    sectionEnd: -1,
+    confidence: 0,
+  };
+
+  const identifier = sectionIdentifier.trim();
+  const identifierLower = identifier.toLowerCase();
+
+  // ============================================
+  // Level 1: Special Keywords
+  // ============================================
+  const endKeywords = ["end", "bottom", "eof", "fim", "final", "末尾", "append"];
+  if (endKeywords.includes(identifierLower)) {
     const trimmedContent = content.trimEnd();
     return {
       found: true,
@@ -1707,84 +1779,196 @@ async function identifySection(
       sectionStart: trimmedContent.length,
       sectionEnd: trimmedContent.length,
       confidence: 1.0,
-      reasoning: `Special keyword "${sectionIdentifier}" - targeting end of document`,
+      reasoning: `Special keyword "${identifier}" - targeting end of document`,
+      method: "special_keyword",
     };
   }
 
-  // Special handling for "start"/"beginning" keywords - prepend at start of document
-  const startKeywords = ["start", "beginning", "top", "início", "inicio", "開始"];
-  if (startKeywords.includes(sectionIdentifier.toLowerCase().trim())) {
+  const startKeywords = ["start", "beginning", "top", "início", "inicio", "開始", "prepend"];
+  if (startKeywords.includes(identifierLower)) {
     return {
       found: true,
       sectionContent: "",
       sectionStart: 0,
       sectionEnd: 0,
       confidence: 1.0,
-      reasoning: `Special keyword "${sectionIdentifier}" - targeting start of document`,
+      reasoning: `Special keyword "${identifier}" - targeting start of document`,
+      method: "special_keyword",
     };
   }
 
-  // Try header-based identification first for markdown
-  if (!identificationMethod || identificationMethod === "header") {
-    const headerPattern = new RegExp(
-      `^(#{1,6})\\s*${escapeRegex(sectionIdentifier)}\\s*$`,
-      "im",
-    );
-    const headerMatch = content.match(headerPattern);
-
-    if (headerMatch) {
-      const headerLevel = headerMatch[1].length;
-      const startIndex = headerMatch.index!;
-
-      // Find the end of this section (next header of same or higher level, or end of file)
-      const afterHeader = content.slice(startIndex + headerMatch[0].length);
-      const nextHeaderPattern = new RegExp(`^#{1,${headerLevel}}\\s+`, "m");
-      const nextHeaderMatch = afterHeader.match(nextHeaderPattern);
-
-      const endIndex = nextHeaderMatch
-        ? startIndex + headerMatch[0].length + nextHeaderMatch.index!
-        : content.length;
-
-      return {
-        found: true,
-        sectionContent: content.slice(startIndex, endIndex).trim(),
-        sectionStart: startIndex,
-        sectionEnd: endIndex,
-        confidence: 1.0,
-        reasoning: `Found header matching "${sectionIdentifier}"`,
-      };
+  // ============================================
+  // Level 2: Line Number Specification
+  // ============================================
+  if (!identificationMethod || identificationMethod === "line_number") {
+    const lineSpec = parseLineNumberSpec(identifier);
+    if (lineSpec) {
+      const offsets = getOffsetFromLineNumbers(content, lineSpec.startLine, lineSpec.endLine);
+      if (offsets) {
+        return {
+          found: true,
+          sectionContent: content.slice(offsets.startOffset, offsets.endOffset),
+          sectionStart: offsets.startOffset,
+          sectionEnd: offsets.endOffset,
+          confidence: 1.0,
+          reasoning: `Line number specification: ${identifier}`,
+          method: "line_number",
+        };
+      }
     }
   }
 
-  // Try exact match
+  // ============================================
+  // Level 3: Exact Text Match
+  // ============================================
   if (!identificationMethod || identificationMethod === "exact_match") {
-    const exactIndex = content.indexOf(sectionIdentifier);
+    const exactIndex = content.indexOf(identifier);
     if (exactIndex !== -1) {
       return {
         found: true,
-        sectionContent: sectionIdentifier,
+        sectionContent: identifier,
         sectionStart: exactIndex,
-        sectionEnd: exactIndex + sectionIdentifier.length,
+        sectionEnd: exactIndex + identifier.length,
         confidence: 1.0,
         reasoning: "Exact text match found",
+        method: "exact_match",
       };
     }
   }
 
-  // Fall back to semantic identification using LLM
-  const response = await chatCompletion({
-    messages: [
-      { role: "system", content: SECTION_IDENTIFICATION_PROMPT },
-      {
-        role: "user",
-        content: `Document:\n\n${content}\n\n---\n\nSection to find: "${sectionIdentifier}"`,
-      },
-    ],
-    temperature: 0,
-    maxTokens: 1000,
-  });
+  // ============================================
+  // Level 4: Structural Parsing (Markdown)
+  // ============================================
+  if (!identificationMethod || identificationMethod === "header") {
+    const sections = parseDocumentStructure(content);
+    const tree = buildSectionTree(sections);
 
+    // Try path-based lookup first (e.g., "Features/API" or "Features > API")
+    if (identifier.includes("/") || identifier.includes(">")) {
+      const pathMatch = findSectionByPath(tree, identifier);
+      if (pathMatch) {
+        return {
+          found: true,
+          sectionContent: pathMatch.content,
+          sectionStart: pathMatch.startOffset,
+          sectionEnd: pathMatch.endOffset,
+          confidence: 1.0,
+          reasoning: `Found section at path "${identifier}"`,
+          method: "structure_path",
+        };
+      }
+    }
+
+    // Try title-based lookup
+    const titleMatch = findSectionByTitle(tree, identifier);
+    if (titleMatch) {
+      return {
+        found: true,
+        sectionContent: titleMatch.content,
+        sectionStart: titleMatch.startOffset,
+        sectionEnd: titleMatch.endOffset,
+        confidence: 1.0,
+        reasoning: `Found heading matching "${identifier}"`,
+        method: "structure_title",
+      };
+    }
+
+    // Check all matching sections
+    const matchingResults = findMatchingSections(sections, identifier);
+    if (matchingResults.length > 0 && matchingResults[0].score >= 0.7) {
+      const best = matchingResults[0];
+      return {
+        found: true,
+        sectionContent: best.section.content,
+        sectionStart: best.section.startOffset,
+        sectionEnd: best.section.endOffset,
+        confidence: best.score,
+        reasoning: `Structural match: "${best.section.title || "content"}" (score: ${best.score.toFixed(2)})`,
+        method: "structure_match",
+      };
+    }
+  }
+
+  // ============================================
+  // Level 5: Fuzzy Matching
+  // ============================================
+  if (!identificationMethod || identificationMethod === "semantic") {
+    const sections = parseDocumentStructure(content);
+    const fuzzyResult = fuzzyMatchSections(sections, identifier, 0.6);
+
+    if (fuzzyResult && fuzzyResult.score >= 0.6) {
+      return {
+        found: true,
+        sectionContent: fuzzyResult.section.content,
+        sectionStart: fuzzyResult.section.startOffset,
+        sectionEnd: fuzzyResult.section.endOffset,
+        confidence: fuzzyResult.score,
+        reasoning: `Fuzzy match: "${fuzzyResult.section.title || "content"}" (similarity: ${(fuzzyResult.score * 100).toFixed(0)}%)`,
+        method: "fuzzy_match",
+      };
+    }
+  }
+
+  // ============================================
+  // Level 6: Semantic Embeddings (if fileId provided)
+  // ============================================
+  if (fileId && (!identificationMethod || identificationMethod === "semantic")) {
+    try {
+      const chunks = await get_file_chunks(fileId);
+      if (chunks.length > 0) {
+        // Generate embedding for the query
+        const queryEmbedding = await generateEmbedding(identifier);
+
+        // Find most similar chunk
+        let bestChunk: { chunk: typeof chunks[0]; score: number } | null = null;
+
+        for (const chunk of chunks) {
+          // We need to get the embedding for this chunk
+          // For now, generate embedding on the fly (could be optimized with stored embeddings)
+          const chunkEmbedding = await generateEmbedding(chunk.text);
+          const score = cosineSimilarity(queryEmbedding, chunkEmbedding);
+
+          if (!bestChunk || score > bestChunk.score) {
+            bestChunk = { chunk, score };
+          }
+        }
+
+        if (bestChunk && bestChunk.score >= 0.5) {
+          return {
+            found: true,
+            sectionContent: bestChunk.chunk.text,
+            sectionStart: bestChunk.chunk.startOffset,
+            sectionEnd: bestChunk.chunk.endOffset,
+            confidence: bestChunk.score,
+            reasoning: `Semantic match via embeddings (similarity: ${(bestChunk.score * 100).toFixed(0)}%)`,
+            method: "embeddings",
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("Semantic embedding search failed:", e);
+      // Continue to LLM fallback
+    }
+  }
+
+  // ============================================
+  // Level 7: LLM Fallback (improved with line numbers)
+  // ============================================
   try {
+    const formattedDoc = formatDocumentWithLineNumbers(content);
+
+    const response = await chatCompletion({
+      messages: [
+        { role: "system", content: SECTION_IDENTIFICATION_PROMPT },
+        {
+          role: "user",
+          content: `Document:\n\n${formattedDoc}\n\n---\n\nSection to find: "${identifier}"`,
+        },
+      ],
+      temperature: 0,
+      maxTokens: 500,
+    });
+
     let jsonStr = response.content.trim();
     const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {
@@ -1795,63 +1979,36 @@ async function identifySection(
 
     if (!result.found) {
       return {
-        found: false,
-        sectionContent: "",
-        sectionStart: -1,
-        sectionEnd: -1,
-        confidence: 0,
-        reasoning: result.reasoning,
+        ...notFound,
+        reasoning: result.reasoning || "LLM could not find section",
+        method: "llm_fallback",
       };
     }
 
-    // Find the section in the original content
-    const sectionIndex = content.indexOf(result.sectionContent);
-    if (sectionIndex === -1) {
-      // Try to find by start marker
-      const startIndex = content.indexOf(result.sectionStart);
-      if (startIndex !== -1) {
-        const endIndex = content.indexOf(result.sectionEnd, startIndex);
-        if (endIndex !== -1) {
-          return {
-            found: true,
-            sectionContent: content.slice(
-              startIndex,
-              endIndex + result.sectionEnd.length,
-            ),
-            sectionStart: startIndex,
-            sectionEnd: endIndex + result.sectionEnd.length,
-            confidence: result.confidence || 0.8,
-            reasoning: result.reasoning,
-          };
-        }
-      }
-
+    // Convert line numbers to offsets
+    const offsets = lineNumbersToOffsets(content, result.startLine, result.endLine);
+    if (!offsets) {
       return {
-        found: false,
-        sectionContent: "",
-        sectionStart: -1,
-        sectionEnd: -1,
-        confidence: 0,
-        reasoning: "Could not locate section boundaries in document",
+        ...notFound,
+        reasoning: `LLM returned invalid line numbers: ${result.startLine}-${result.endLine}`,
+        method: "llm_fallback",
       };
     }
 
     return {
       found: true,
-      sectionContent: result.sectionContent,
-      sectionStart: sectionIndex,
-      sectionEnd: sectionIndex + result.sectionContent.length,
-      confidence: result.confidence || 0.8,
-      reasoning: result.reasoning,
+      sectionContent: content.slice(offsets.start, offsets.end),
+      sectionStart: offsets.start,
+      sectionEnd: offsets.end,
+      confidence: result.confidence || 0.7,
+      reasoning: result.reasoning || "Found via LLM analysis",
+      method: "llm_fallback",
     };
-  } catch {
+  } catch (e) {
     return {
-      found: false,
-      sectionContent: "",
-      sectionStart: -1,
-      sectionEnd: -1,
-      confidence: 0,
-      reasoning: "Failed to parse section identification response",
+      ...notFound,
+      reasoning: `LLM fallback failed: ${e instanceof Error ? e.message : "Unknown error"}`,
+      method: "llm_fallback",
     };
   }
 }
@@ -1948,11 +2105,12 @@ export async function executeUpdateFileTool(
       content = stitchChunks(chunks);
     }
 
-    // Identify the section to update
+    // Identify the section to update (pass fileId for semantic matching)
     const sectionResult = await identifySection(
       content,
       params.sectionIdentifier,
       params.identificationMethod,
+      file.id,
     );
 
     if (!sectionResult.found) {
