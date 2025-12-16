@@ -211,7 +211,8 @@ Available tools:
 - summarize: Summarize a document. Params: {file: "filename"}
 - write: Create a new file. Params: {format: "md"|"pdf"|"docx", title: "title", content: "content", path: "optional/path"}
 - addNote: Create a quick note. Params: {content: "note content", title: "optional title"}
-- updateFile: Update an existing file. Params: {file: "filename", section: "section name", operation: "replace"|"insert_before"|"insert_after", newContent: "content"}
+- updateFile: Update an existing file. Params: {file: "filename", section: "section name OR special keyword", operation: "replace"|"insert_before"|"insert_after", newContent: "content"}
+  Special section keywords: "end"/"bottom" = append at end of file, "start"/"beginning" = prepend at start of file
 - webResearch: Search the web for information. Params: {query: "search query", maxResults: optional number}
 
 Analyze the assistant's response and respond with JSON:
@@ -278,13 +279,14 @@ export async function analyzeAssistantResponse(
 
   // Get last few messages for context
   const recentContext = conversationHistory
-    .slice(-4)
+    .slice(-10)
     .map(
       (m) =>
         `${m.role === "user" ? "User" : "Assistant"}: ${m.content.substring(0, 500)}`,
     )
     .join("\n\n");
 
+  console.log("[DEBUG-FLOW] analyzeAssistantResponse: sending to LLM...");
   const response = await chatCompletion({
     messages: [
       { role: "system", content: CONTINUATION_ROUTER_PROMPT + filesContext },
@@ -296,6 +298,7 @@ export async function analyzeAssistantResponse(
     temperature: 0,
     maxTokens: 1000, // Higher limit to capture content
   });
+  console.log("[DEBUG-FLOW] analyzeAssistantResponse: LLM raw response:", response.content);
 
   try {
     let jsonStr = response.content.trim();
@@ -303,8 +306,10 @@ export async function analyzeAssistantResponse(
     if (jsonMatch) {
       jsonStr = jsonMatch[1].trim();
     }
+    console.log("[DEBUG-FLOW] analyzeAssistantResponse: parsed JSON string:", jsonStr);
 
     const parsed = JSON.parse(jsonStr);
+    console.log("[DEBUG-FLOW] analyzeAssistantResponse: parsed object:", parsed);
 
     const tools: ToolCall[] = (parsed.tools || []).map(
       (t: { name: string; params?: Record<string, string> }) => ({
@@ -318,7 +323,8 @@ export async function analyzeAssistantResponse(
       tools,
       reasoning: parsed.reasoning || "",
     };
-  } catch {
+  } catch (e) {
+    console.log("[DEBUG-FLOW] analyzeAssistantResponse: PARSE ERROR:", e);
     return {
       shouldExecuteTool: false,
       tools: [],
@@ -1562,6 +1568,19 @@ Your task:
 2. Find the section that best matches the user's description
 3. Return the exact text boundaries of that section
 
+SPECIAL CASES:
+- If the user wants to insert at the END/BOTTOM of the document (e.g., "end", "bottom", "EOF", "final", "append", "after everything"):
+  - Set found: true
+  - Set sectionContent to the LAST paragraph or last few lines of the document
+  - Set sectionStart/sectionEnd to match that last content
+  - This allows insert_after to append content at the end of the file
+  - Use confidence 1.0 for clear end-of-file requests
+
+- If the user wants to insert at the BEGINNING/TOP (e.g., "start", "beginning", "top", "first"):
+  - Set found: true
+  - Set sectionContent to the FIRST paragraph or first few lines
+  - This allows insert_before to prepend content at the start
+
 Response format (JSON only):
 {
   "found": true/false,
@@ -1677,6 +1696,34 @@ async function identifySection(
   confidence: number;
   reasoning?: string;
 }> {
+  // Special handling for "end"/"bottom" keywords - append at end of document
+  const endKeywords = ["end", "bottom", "eof", "fim", "final", "末尾"];
+  if (endKeywords.includes(sectionIdentifier.toLowerCase().trim())) {
+    // Return the last character position for insert_after operations
+    const trimmedContent = content.trimEnd();
+    return {
+      found: true,
+      sectionContent: "",
+      sectionStart: trimmedContent.length,
+      sectionEnd: trimmedContent.length,
+      confidence: 1.0,
+      reasoning: `Special keyword "${sectionIdentifier}" - targeting end of document`,
+    };
+  }
+
+  // Special handling for "start"/"beginning" keywords - prepend at start of document
+  const startKeywords = ["start", "beginning", "top", "início", "inicio", "開始"];
+  if (startKeywords.includes(sectionIdentifier.toLowerCase().trim())) {
+    return {
+      found: true,
+      sectionContent: "",
+      sectionStart: 0,
+      sectionEnd: 0,
+      confidence: 1.0,
+      reasoning: `Special keyword "${sectionIdentifier}" - targeting start of document`,
+    };
+  }
+
   // Try header-based identification first for markdown
   if (!identificationMethod || identificationMethod === "header") {
     const headerPattern = new RegExp(
@@ -2675,10 +2722,20 @@ export async function orchestrateToolExecution(
   onStepUpdate?: ExecutionLogCallback,
   onStreamChunk?: LLMStreamCallback,
 ): Promise<OrchestratedResult> {
+  console.log("[DEBUG-FLOW] ========== orchestrateToolExecution START ==========");
+  console.log("[DEBUG-FLOW] Input:", {
+    projectId,
+    userMessage: userMessage.substring(0, 100) + (userMessage.length > 100 ? "..." : ""),
+    conversationHistoryLength: conversationHistory.length,
+    projectFilesCount: projectFiles.length,
+    projectFiles: projectFiles.slice(0, 5),
+  });
+
   const steps: ExecutionStep[] = [];
   const allResponses: string[] = [];
   const allToolCalls: ToolCall[] = [];
   const allToolResults: ToolResult[] = [];
+  const failedToolSignatures = new Set<string>(); // Track failed tool calls to prevent retry loops
 
   const updateStep = (step: ExecutionStep) => {
     const idx = steps.findIndex((s) => s.id === step.id);
@@ -2708,6 +2765,7 @@ export async function orchestrateToolExecution(
 
   while (iteration < MAX_ITERATIONS) {
     iteration++;
+    console.log(`[DEBUG-FLOW] ========== ITERATION ${iteration} ==========`);
     const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : "";
 
     // Step 1: Router-based tool detection (first iteration only, as a hint)
@@ -2733,11 +2791,17 @@ export async function orchestrateToolExecution(
           )
           .join("\n");
 
+        console.log("[DEBUG-FLOW] Calling routeMessage...");
         const routingResult = await routeMessage(
           userMessage,
           projectFiles,
           recentHistory,
         );
+        console.log("[DEBUG-FLOW] routeMessage result:", {
+          toolsCount: routingResult.tools.length,
+          tools: routingResult.tools.map(t => ({ tool: t.tool, params: t.params })),
+          clarification: routingResult.clarification,
+        });
 
         // Check if clarification is needed
         if (routingResult.clarification) {
@@ -2773,13 +2837,15 @@ export async function orchestrateToolExecution(
     }
 
     // Step 2: Execute router-detected tools (if any)
+    console.log("[DEBUG-FLOW] Router tools to execute:", routerToolCalls.length);
     for (const call of routerToolCalls) {
-      // Skip if already executed
+      // Skip if already executed or already failed with same params
       const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
       if (
         allToolCalls.some(
           (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
-        )
+        ) ||
+        failedToolSignatures.has(callKey)
       ) {
         continue;
       }
@@ -2798,9 +2864,16 @@ export async function orchestrateToolExecution(
       };
       updateStep(toolStep);
 
+      console.log("[DEBUG-FLOW] Executing router tool:", call.tool, call.params);
       const result = await executeTool(projectId, call, userMessage);
+      console.log("[DEBUG-FLOW] Router tool result:", { tool: call.tool, success: result.success, error: result.error });
       allToolResults.push(result);
       allToolCalls.push(call);
+
+      // Track failed tools to prevent retry loops
+      if (!result.success) {
+        failedToolSignatures.add(callKey);
+      }
 
       toolStep.status = result.success ? "completed" : "error";
       toolStep.endTime = new Date();
@@ -2832,11 +2905,101 @@ export async function orchestrateToolExecution(
     };
     updateStep(responseStep);
 
-    // Generate response without streaming first to check for tool calls
-    const llmResponse = await chatCompletion({ messages });
+    // Generate response with streaming, accumulating content to parse for tool calls after
+    console.log("[DEBUG-FLOW] Calling chatCompletion (streaming with accumulation)...");
+    
+    let llmResponse: { content: string };
+    if (onStreamChunk) {
+      // Stream to user while accumulating full response
+      // Filter out tool_call blocks so user doesn't see raw JSON
+      let streamBuffer = "";
+      let inToolCallBlock = false;
+      let toolCallBuffer = "";
+      
+      llmResponse = await chatCompletionStreaming({ messages }, (chunk, done) => {
+        if (done) {
+          // Flush any remaining buffer that's not a tool call
+          if (streamBuffer && !streamBuffer.includes("```tool_call")) {
+            onStreamChunk(streamBuffer, false);
+          }
+          // Don't signal done yet - we may have tools to execute
+          return;
+        }
+        
+        // Accumulate chunk
+        streamBuffer += chunk;
+        
+        // Process buffer to filter out tool_call blocks
+        while (streamBuffer.length > 0) {
+          if (inToolCallBlock) {
+            // Looking for closing ```
+            const closeIdx = streamBuffer.indexOf("```");
+            if (closeIdx !== -1) {
+              // Found closing, discard the tool call block
+              toolCallBuffer += streamBuffer.substring(0, closeIdx + 3);
+              streamBuffer = streamBuffer.substring(closeIdx + 3);
+              inToolCallBlock = false;
+              toolCallBuffer = "";
+              console.log("[DEBUG-FLOW] Filtered out tool_call block from stream");
+            } else {
+              // Still in tool call block, keep buffering
+              toolCallBuffer += streamBuffer;
+              streamBuffer = "";
+            }
+          } else {
+            // Looking for ```tool_call
+            const toolCallStart = streamBuffer.indexOf("```tool_call");
+            const tripleBacktick = streamBuffer.indexOf("```");
+            
+            if (toolCallStart !== -1) {
+              // Found tool_call block start
+              // Stream everything before it
+              if (toolCallStart > 0) {
+                onStreamChunk(streamBuffer.substring(0, toolCallStart), false);
+              }
+              streamBuffer = streamBuffer.substring(toolCallStart + 12); // Skip "```tool_call"
+              inToolCallBlock = true;
+              toolCallBuffer = "```tool_call";
+            } else if (tripleBacktick !== -1 && streamBuffer.length < tripleBacktick + 12) {
+              // We see ``` but don't have enough chars to know if it's tool_call
+              // Stream everything before the ```
+              if (tripleBacktick > 0) {
+                onStreamChunk(streamBuffer.substring(0, tripleBacktick), false);
+                streamBuffer = streamBuffer.substring(tripleBacktick);
+              }
+              // Keep buffering to see what comes after ```
+              break;
+            } else {
+              // No tool_call block in sight, safe to stream
+              // But keep last 11 chars in case "```tool_call" is split across chunks
+              const safeLength = Math.max(0, streamBuffer.length - 11);
+              if (safeLength > 0) {
+                onStreamChunk(streamBuffer.substring(0, safeLength), false);
+                streamBuffer = streamBuffer.substring(safeLength);
+              }
+              break;
+            }
+          }
+        }
+      });
+    } else {
+      // No streaming callback, use regular completion
+      llmResponse = await chatCompletion({ messages });
+    }
+    
+    console.log("[DEBUG-FLOW] LLM response received:", {
+      contentLength: llmResponse.content.length,
+      contentPreview: llmResponse.content.substring(0, 200) + (llmResponse.content.length > 200 ? "..." : ""),
+    });
 
-    // Step 5: Parse response for inline tool calls
+    // Step 5: Parse response for inline tool calls (after streaming completes)
     const parsed = parseToolCallsFromResponse(llmResponse.content);
+    console.log("[DEBUG-FLOW] parseToolCallsFromResponse result:", {
+      hasToolCalls: parsed.hasToolCalls,
+      toolCallsCount: parsed.toolCalls.length,
+      toolCalls: parsed.toolCalls.map(t => ({ tool: t.tool, params: t.params })),
+      textContentLength: parsed.textContent?.length || 0,
+    });
 
     if (parsed.hasToolCalls) {
       responseStep.status = "completed";
@@ -2844,21 +3007,19 @@ export async function orchestrateToolExecution(
       responseStep.label = `Found ${parsed.toolCalls.length} tool call(s)`;
       updateStep(responseStep);
 
-      // Stream the text content if callback provided
-      if (onStreamChunk && parsed.textContent) {
-        onStreamChunk(parsed.textContent, false);
-      }
+      // Note: Content already streamed above, no need to re-stream
 
       // Step 6: Execute inline tool calls from LLM response
       const inlineResults: ToolResult[] = [];
 
       for (const call of parsed.toolCalls) {
-        // Skip if already executed
+        // Skip if already executed or already failed with same params
         const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
         if (
           allToolCalls.some(
             (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
-          )
+          ) ||
+          failedToolSignatures.has(callKey)
         ) {
           continue;
         }
@@ -2878,10 +3039,17 @@ export async function orchestrateToolExecution(
         };
         updateStep(toolStep);
 
+        console.log("[DEBUG-FLOW] Executing inline tool:", call.tool, call.params);
         const result = await executeTool(projectId, call, userMessage);
+        console.log("[DEBUG-FLOW] Inline tool result:", { tool: call.tool, success: result.success, error: result.error });
         inlineResults.push(result);
         allToolResults.push(result);
         allToolCalls.push(call);
+
+        // Track failed tools to prevent retry loops
+        if (!result.success) {
+          failedToolSignatures.add(callKey);
+        }
 
         toolStep.status = result.success ? "completed" : "error";
         toolStep.endTime = new Date();
@@ -2918,6 +3086,8 @@ export async function orchestrateToolExecution(
 
         let finalResponse;
         if (onStreamChunk) {
+          // Add separator since initial response was already streamed
+          onStreamChunk("\n\n", false);
           finalResponse = await chatCompletionStreaming(
             { messages },
             onStreamChunk,
@@ -2931,10 +3101,8 @@ export async function orchestrateToolExecution(
         finalStep.label = "Response ready";
         updateStep(finalStep);
 
-        // Build combined response
-        const combinedResponse = parsed.textContent
-          ? `${parsed.textContent}\n\n${finalResponse.content}`
-          : finalResponse.content;
+        // Build combined response (initial response already streamed, this is the full content for storage)
+        const combinedResponse = `${llmResponse.content}\n\n${finalResponse.content}`;
 
         allResponses.push(combinedResponse);
         messages.push({ role: "assistant", content: finalResponse.content });
@@ -2950,32 +3118,66 @@ export async function orchestrateToolExecution(
       responseStep.label = "Response generated";
       updateStep(responseStep);
 
-      // Stream the assistant's response immediately so user sees it during planning
-      if (onStreamChunk) {
-        onStreamChunk(llmResponse.content, false);
-      }
+      // Note: Response already streamed above during generation
 
       // Add planning step for continuation analysis
       const planningStep: ExecutionStep = {
         id: `planning-${iteration}`,
         type: "routing",
         status: "running",
-        label: "Planning next steps...",
+        label: "Planning next moves...",
         startTime: new Date(),
       };
       updateStep(planningStep);
 
       // Run continuation analysis to check if assistant said "I will now..." without executing
+      console.log("[DEBUG-FLOW] ========== CONTINUATION ANALYSIS START ==========");
+      console.log("[DEBUG-FLOW] Calling analyzeAssistantResponse with:", {
+        responseLength: llmResponse.content.length,
+        responsePreview: llmResponse.content.substring(0, 300) + (llmResponse.content.length > 300 ? "..." : ""),
+        conversationHistoryLength: conversationHistory.length + 1,
+        projectFilesCount: projectFiles.length,
+      });
       const continuationResult = await analyzeAssistantResponse(
         llmResponse.content,
         [...conversationHistory, { role: "user", content: userMessage }],
         projectFiles,
       );
+      console.log("[DEBUG-FLOW] analyzeAssistantResponse result:", {
+        shouldExecuteTool: continuationResult.shouldExecuteTool,
+        toolsCount: continuationResult.tools.length,
+        tools: continuationResult.tools.map(t => ({ tool: t.tool, params: t.params })),
+        reasoning: continuationResult.reasoning,
+      });
 
       if (
         continuationResult.shouldExecuteTool &&
         continuationResult.tools.length > 0
       ) {
+        console.log("[DEBUG-FLOW] Continuation detected - will execute tools");
+        // Filter out tools that have already failed to prevent retry loops
+        const toolsToExecute = continuationResult.tools.filter((call) => {
+          const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
+          return !failedToolSignatures.has(callKey);
+        });
+
+        if (toolsToExecute.length === 0) {
+          // All requested tools have already failed - don't retry
+          planningStep.label = "Skipped (tools already failed)";
+          planningStep.status = "completed";
+          planningStep.endTime = new Date();
+          updateStep(planningStep);
+
+          // Signal streaming completion
+          if (onStreamChunk) {
+            onStreamChunk("", true);
+          }
+
+          allResponses.push(llmResponse.content);
+          messages.push({ role: "assistant", content: llmResponse.content });
+          break; // Exit the loop - don't keep retrying failed operations
+        }
+
         // Assistant committed to action - execute the tools
         planningStep.label = `Executing: ${continuationResult.reasoning}`;
         planningStep.status = "completed";
@@ -2983,8 +3185,11 @@ export async function orchestrateToolExecution(
         updateStep(planningStep);
 
         const continuationResults: ToolResult[] = [];
+        console.log("[DEBUG-FLOW] Continuation tools to execute:", toolsToExecute.length);
 
-        for (const call of continuationResult.tools) {
+        for (const call of toolsToExecute) {
+          const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
+
           const toolStep: ExecutionStep = {
             id: `continuation-tool-${call.tool}-${Date.now()}`,
             type: "tool",
@@ -2999,10 +3204,17 @@ export async function orchestrateToolExecution(
           };
           updateStep(toolStep);
 
+          console.log("[DEBUG-FLOW] Executing continuation tool:", call.tool, call.params);
           const result = await executeTool(projectId, call, userMessage);
+          console.log("[DEBUG-FLOW] Continuation tool result:", { tool: call.tool, success: result.success, error: result.error });
           continuationResults.push(result);
           allToolResults.push(result);
           allToolCalls.push(call);
+
+          // Track failed tools to prevent retry loops
+          if (!result.success) {
+            failedToolSignatures.add(callKey);
+          }
 
           toolStep.status = result.success ? "completed" : "error";
           toolStep.endTime = new Date();
@@ -3013,7 +3225,13 @@ export async function orchestrateToolExecution(
         }
 
         // Add tool results and generate final response
+        console.log("[DEBUG-FLOW] Continuation results summary:", {
+          total: continuationResults.length,
+          successful: continuationResults.filter(r => r.success).length,
+          failed: continuationResults.filter(r => !r.success).length,
+        });
         if (continuationResults.some((r) => r.success)) {
+          console.log("[DEBUG-FLOW] Some continuation tools succeeded - generating confirmation response");
           messages.push({ role: "assistant", content: llmResponse.content });
 
           const toolContext = formatToolResults(continuationResults);
@@ -3054,12 +3272,51 @@ export async function orchestrateToolExecution(
             content: confirmResponse.content,
           });
         } else {
-          // Tools failed
-          allResponses.push(llmResponse.content);
+          // ALL tools failed - add error context and break to prevent retry loops
+          console.log("[DEBUG-FLOW] All continuation tools failed - generating error response");
           messages.push({ role: "assistant", content: llmResponse.content });
+
+          const toolContext = formatToolResults(continuationResults);
+          messages.push({
+            role: "user",
+            content: `[System: Tool execution FAILED]\n\n${toolContext}\n\nDo NOT retry these operations. Explain the error to the user and suggest alternatives.`,
+          });
+
+          const errorStep: ExecutionStep = {
+            id: `error-response-${iteration}`,
+            type: "response",
+            status: "running",
+            label: "Explaining error...",
+            startTime: new Date(),
+          };
+          updateStep(errorStep);
+
+          let errorResponse;
+          if (onStreamChunk) {
+            onStreamChunk("\n\n", false);
+            errorResponse = await chatCompletionStreaming(
+              { messages },
+              onStreamChunk,
+            );
+          } else {
+            errorResponse = await chatCompletion({ messages });
+          }
+
+          errorStep.status = "completed";
+          errorStep.endTime = new Date();
+          errorStep.label = "Complete";
+          updateStep(errorStep);
+
+          const combinedResponse = `${llmResponse.content}\n\n${errorResponse.content}`;
+          allResponses.push(combinedResponse);
+          messages.push({ role: "assistant", content: errorResponse.content });
+
+          // Break the loop - don't keep retrying failed operations
+          break;
         }
       } else {
         // No continuation needed - complete planning step
+        console.log("[DEBUG-FLOW] No continuation needed - completing");
         planningStep.label = "Complete";
         planningStep.status = "completed";
         planningStep.endTime = new Date();
@@ -3087,10 +3344,12 @@ export async function orchestrateToolExecution(
 
       if (!stillHasToolCalls) {
         // No more tool calls, we're done
+        console.log("[DEBUG-FLOW] Breaking loop: no more tool calls in last response");
         break;
       }
     } else {
       // No tool calls in this iteration, we're done
+      console.log("[DEBUG-FLOW] Breaking loop: no tool calls in this iteration");
       break;
     }
   }
@@ -3100,6 +3359,17 @@ export async function orchestrateToolExecution(
     allResponses.length === 1
       ? allResponses[0]
       : allResponses[allResponses.length - 1]; // Use the last (most complete) response
+
+  console.log("[DEBUG-FLOW] ========== orchestrateToolExecution END ==========");
+  console.log("[DEBUG-FLOW] Final result:", {
+    responsesCount: allResponses.length,
+    finalResponseLength: finalResponse.length,
+    toolsUsedCount: allToolCalls.length,
+    toolsUsed: allToolCalls.map(t => t.tool),
+    toolResultsCount: allToolResults.length,
+    successfulTools: allToolResults.filter(r => r.success).length,
+    failedTools: allToolResults.filter(r => !r.success).length,
+  });
 
   return {
     responses: allResponses,
