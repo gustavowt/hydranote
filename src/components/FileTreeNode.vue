@@ -9,6 +9,8 @@
         expanded: node.expanded,
         'drag-over': isDragOver
       }"
+      :data-file-id="node.type === 'file' ? node.id : undefined"
+      :data-dir-path="node.type === 'directory' ? node.path : undefined"
       :draggable="node.type === 'file'"
       @click="handleClick"
       @contextmenu.prevent="handleContextMenu"

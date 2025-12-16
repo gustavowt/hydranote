@@ -133,7 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, reactive } from 'vue';
+import { ref, watch, computed, reactive, nextTick } from 'vue';
 import { IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
 import {
   layersOutline,
@@ -172,6 +172,7 @@ const loadingFiles = ref<Set<string>>(new Set());
 const projectFileTrees = ref<Record<string, ProjectFileTree>>({});
 const draggingNode = ref<FileTreeNodeType | null>(null);
 const dragOverProjectId = ref<string | null>(null);
+const treeContentRef = ref<HTMLElement | null>(null);
 
 // Context menu state
 const contextMenu = reactive({
@@ -197,6 +198,13 @@ watch(() => props.selectedProjectId, (newId) => {
   if (newId && !expandedProjects.value.has(newId)) {
     expandedProjects.value.add(newId);
     loadProjectFiles(newId);
+  }
+});
+
+// Watch for external file selection to auto-expand parent directories and scroll into view
+watch(() => props.selectedFileId, async (newFileId) => {
+  if (newFileId && props.selectedProjectId) {
+    await revealFile(props.selectedProjectId, newFileId);
   }
 });
 
@@ -570,6 +578,94 @@ function findFileInNodes(nodes: FileTreeNodeType[], fileId: string): boolean {
   return false;
 }
 
+// ============================================
+// Reveal File (expand parents + scroll into view)
+// ============================================
+
+/**
+ * Reveals a file in the tree by expanding its project and parent directories,
+ * then scrolling it into view.
+ */
+async function revealFile(projectId: string, fileId: string) {
+  // Ensure project is expanded
+  if (!expandedProjects.value.has(projectId)) {
+    expandedProjects.value.add(projectId);
+    expandedProjects.value = new Set(expandedProjects.value);
+  }
+  
+  // Ensure file tree is loaded
+  if (!projectFileTrees.value[projectId]) {
+    await loadProjectFiles(projectId);
+  }
+  
+  const tree = projectFileTrees.value[projectId];
+  if (!tree) return;
+  
+  // Find the file and expand all parent directories
+  const pathToFile = findPathToFile(tree.nodes, fileId);
+  if (pathToFile.length > 0) {
+    // Expand all parent directories
+    let needsUpdate = false;
+    for (const node of pathToFile) {
+      if (node.type === 'directory' && !node.expanded) {
+        node.expanded = true;
+        needsUpdate = true;
+      }
+    }
+    
+    if (needsUpdate) {
+      // Trigger reactivity update
+      projectFileTrees.value = { ...projectFileTrees.value };
+    }
+  }
+  
+  // Scroll the file into view after DOM update
+  await nextTick();
+  scrollFileIntoView(fileId);
+}
+
+/**
+ * Finds the path from root to the target file (including all parent directories).
+ * Returns an array of nodes from root to the file (not including the file itself).
+ */
+function findPathToFile(nodes: FileTreeNodeType[], targetId: string, currentPath: FileTreeNodeType[] = []): FileTreeNodeType[] {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      // Found the target, return the path to it
+      return currentPath;
+    }
+    
+    if (node.children && node.children.length > 0) {
+      // Search in children, adding current node to the path
+      const result = findPathToFile(node.children, targetId, [...currentPath, node]);
+      if (result.length > 0) {
+        return result;
+      }
+      // Also check if target is a direct child
+      if (node.children.some(c => c.id === targetId)) {
+        return [...currentPath, node];
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Scrolls the file element into view within the tree content area.
+ */
+function scrollFileIntoView(fileId: string) {
+  const fileElement = document.querySelector(`[data-file-id="${fileId}"]`);
+  if (fileElement) {
+    fileElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    
+    // Add a brief highlight animation
+    fileElement.classList.add('reveal-highlight');
+    setTimeout(() => {
+      fileElement.classList.remove('reveal-highlight');
+    }, 1500);
+  }
+}
+
 // Expose refresh method (only refreshes file trees, projects come from parent)
 async function refresh() {
   // Reload file trees for expanded projects
@@ -579,7 +675,7 @@ async function refresh() {
   }
 }
 
-defineExpose({ refresh });
+defineExpose({ refresh, revealFile });
 </script>
 
 <style scoped>
@@ -871,6 +967,22 @@ defineExpose({ refresh });
 
 .tree-content::-webkit-scrollbar-thumb:hover {
   background: var(--hn-border-strong);
+}
+
+/* Reveal highlight animation */
+:deep(.reveal-highlight) {
+  animation: revealPulse 1.5s ease-out;
+}
+
+@keyframes revealPulse {
+  0% {
+    background: var(--hn-teal-muted);
+    box-shadow: 0 0 0 2px var(--hn-teal);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
 }
 </style>
 

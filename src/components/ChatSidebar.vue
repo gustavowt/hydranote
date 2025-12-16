@@ -272,6 +272,7 @@ const emit = defineEmits<{
   (e: 'project-change', projectId: string): void;
   (e: 'collapse-change', collapsed: boolean): void;
   (e: 'file-updated', fileId: string, fileName: string): void;
+  (e: 'file-created', projectId: string, fileId: string, fileName: string): void;
   (e: 'projects-changed'): void;
 }>();
 
@@ -468,13 +469,16 @@ async function sendMessage(text?: string) {
     }
 
     // Check if any files were created (write tool) or notes added (addNote tool)
-    // and emit event to refresh the file tree
+    // and emit event to open the file in the editor and reveal it in the sidebar
     const fileCreationResults = result.toolResults.filter(
       (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
     );
     for (const fileResult of fileCreationResults) {
       if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
-        emit('file-updated', fileResult.metadata.fileId, fileResult.metadata.fileName);
+        const projectId = fileResult.metadata?.projectId || selectedProjectId.value;
+        if (projectId) {
+          emit('file-created', projectId, fileResult.metadata.fileId, fileResult.metadata.fileName);
+        }
       }
     }
 

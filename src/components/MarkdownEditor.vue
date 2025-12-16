@@ -10,17 +10,19 @@
         <span v-if="hasChanges" class="unsaved-indicator">•</span>
       </div>
       <div class="header-actions">
-        <ion-button 
-          v-if="hasChanges" 
-          fill="solid" 
-          size="small" 
-          class="save-btn"
-          @click="handleSave"
-          :disabled="saving"
-        >
-          <ion-icon slot="start" :icon="saveOutline" />
-          Save
-        </ion-button>
+        <div class="save-btn-wrapper">
+          <ion-button 
+            fill="solid" 
+            size="small" 
+            class="save-btn"
+            :class="{ visible: hasChanges }"
+            @click="handleSave"
+            :disabled="saving || !hasChanges"
+          >
+            <ion-icon slot="start" :icon="saveOutline" />
+            Save
+          </ion-button>
+        </div>
         <div class="mode-toggle">
           <button 
             :class="['mode-btn', { active: viewMode === 'edit' }]" 
@@ -492,9 +494,10 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
   margin-right: 32px;
+  height: 30px;
 }
 
 .mode-toggle {
@@ -504,6 +507,7 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   background: var(--hn-bg-elevated);
   border-radius: 6px;
   padding: 2px;
+  height: 30px;
 }
 
 .mode-btn {
@@ -533,19 +537,62 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   font-size: 14px;
 }
 
+/* Save Button Wrapper - prevents layout shift */
+.save-btn-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 75px;
+  height: 30px;
+  flex-shrink: 0;
+}
+
 .save-btn {
-  --background: var(--hn-green);
   --color: #ffffff;
   --border-radius: 6px;
   --padding-start: 10px;
-  --padding-end: 10px;
-  font-weight: 500;
+  --padding-end: 12px;
+  --padding-top: 0;
+  --padding-bottom: 0;
+  --box-shadow: none;
+  margin: 0;
+  font-weight: 600;
   font-size: 0.8rem;
-  height: 28px;
+  height: 30px;
+  min-height: 30px;
+  opacity: 0;
+  transform: scale(0.9);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.15s ease;
 }
 
-.save-btn:hover {
-  --background: var(--hn-green-light);
+.save-btn.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.save-btn::part(native) {
+  background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  box-shadow: 0 2px 6px rgba(63, 185, 80, 0.3);
+}
+
+.save-btn.visible:hover::part(native) {
+  background: linear-gradient(135deg, var(--hn-green-light) 0%, var(--hn-teal-light) 100%);
+  box-shadow: 0 3px 10px rgba(63, 185, 80, 0.4);
+}
+
+.save-btn.visible:hover {
+  transform: scale(1.02);
+}
+
+.save-btn.visible:active::part(native) {
+  background: linear-gradient(135deg, var(--hn-green-dark) 0%, var(--hn-teal-dark) 100%);
+  box-shadow: 0 1px 3px rgba(63, 185, 80, 0.2);
+}
+
+.save-btn.visible:active {
+  transform: scale(0.98);
 }
 
 .save-btn ion-icon {
