@@ -278,52 +278,119 @@ async function searchBrave(
 }
 
 /**
- * Search using DuckDuckGo (unofficial, HTML scraping)
+ * Search using DuckDuckGo (HTML scraping of lite version)
  */
 async function searchDuckDuckGo(
   query: string,
   maxResults: number
 ): Promise<WebSearchApiResult[]> {
-  // DuckDuckGo Instant Answer API (limited but works)
-  const params = new URLSearchParams({
+  // Use DuckDuckGo's HTML lite version which can be scraped
+  const formData = new URLSearchParams({
     q: query,
-    format: 'json',
-    no_html: '1',
-    skip_disambig: '1',
+    b: '', // Start from beginning
   });
   
-  const response = await fetchWithCorsHandling(`https://api.duckduckgo.com/?${params}`);
+  // DuckDuckGo HTML search requires POST
+  let response: Response;
+  
+  if (isElectronWithIPC()) {
+    // Use Electron IPC for the POST request
+    const result = await window.electronAPI!.web.fetch({
+      url: 'https://html.duckduckgo.com/html/',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      body: formData.toString(),
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'DuckDuckGo search failed');
+    }
+
+    response = new Response(result.body, {
+      status: result.status,
+      headers: new Headers(result.headers),
+    });
+  } else {
+    // Direct fetch for browser (may fail due to CORS)
+    response = await fetch('https://html.duckduckgo.com/html/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html',
+      },
+      body: formData,
+    });
+  }
   
   if (!response.ok) {
     throw new Error(`DuckDuckGo search failed: ${response.status}`);
   }
   
-  const data = await response.json();
+  const html = await response.text();
+  const results = parseDuckDuckGoResults(html, maxResults);
+  
+  return results;
+}
+
+/**
+ * Parse DuckDuckGo HTML search results
+ */
+function parseDuckDuckGoResults(html: string, maxResults: number): WebSearchApiResult[] {
   const results: WebSearchApiResult[] = [];
   
-  // Add abstract if available
-  if (data.AbstractURL && data.Abstract) {
-    results.push({
-      title: data.Heading || query,
-      url: data.AbstractURL,
-      snippet: data.Abstract,
-    });
-  }
-  
-  // Add related topics
-  if (data.RelatedTopics) {
-    for (const topic of data.RelatedTopics.slice(0, maxResults - results.length)) {
-      if (topic.FirstURL && topic.Text) {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    
+    // DuckDuckGo HTML results are in elements with class "result"
+    const resultElements = Array.from(doc.querySelectorAll('.result'));
+    
+    for (const element of resultElements) {
+      if (results.length >= maxResults) break;
+      
+      // Get the link element
+      const linkElement = element.querySelector('.result__a');
+      const snippetElement = element.querySelector('.result__snippet');
+      
+      if (linkElement) {
+        let url = linkElement.getAttribute('href') || '';
+        const title = linkElement.textContent?.trim() || '';
+        const snippet = snippetElement?.textContent?.trim() || '';
+        
+        // DuckDuckGo wraps URLs in a redirect, extract the actual URL
+        if (url.includes('uddg=')) {
+          try {
+            const urlParams = new URLSearchParams(url.split('?')[1]);
+            const decodedUrl = urlParams.get('uddg');
+            if (decodedUrl) {
+              url = decodeURIComponent(decodedUrl);
+            }
+          } catch {
+            // Keep original URL if decoding fails
+          }
+        }
+        
+        // Skip if no valid URL or it's an ad
+        if (!url || url.startsWith('/') || element.classList.contains('result--ad')) {
+          continue;
+        }
+        
         results.push({
-          title: topic.Text.split(' - ')[0] || topic.Text.substring(0, 50),
-          url: topic.FirstURL,
-          snippet: topic.Text,
+          title: title || url,
+          url,
+          snippet,
         });
       }
     }
+  } catch (error) {
+    console.warn('Failed to parse DuckDuckGo results:', error);
   }
   
-  return results.slice(0, maxResults);
+  return results;
 }
 
 /**
@@ -818,11 +885,30 @@ export async function testWebSearchConnection(): Promise<{
   }
   
   try {
-    const results = await searchWeb('test', 1);
+    // Use a common term that will definitely have results
+    const testQuery = settings.provider === 'duckduckgo' ? 'wikipedia' : 'test';
+    const results = await searchWeb(testQuery, 3);
+    
+    if (results.length === 0) {
+      return {
+        success: false,
+        message: `Search returned 0 results for "${testQuery}"`,
+        suggestions: [
+          'The search provider may be blocking requests',
+          'Try a different search provider',
+          'Check your internet connection',
+        ],
+      };
+    }
+    
+    // Show the first result as proof it's working
+    const firstResult = results[0];
+    const details = `First result: "${firstResult.title}" (${firstResult.url})`;
     
     return {
       success: true,
       message: `Connection successful! Found ${results.length} result(s).`,
+      details,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -909,4 +995,5 @@ export async function testWebSearchConnection(): Promise<{
     };
   }
 }
+
 
