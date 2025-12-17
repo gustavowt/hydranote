@@ -49,6 +49,7 @@
         @create-project="showCreateProjectModal = true"
         @delete-project="handleDeleteProject"
         @file-created="handleFileCreatedFromSidebar"
+        @file-moved="handleFileMoved"
       />
 
       <!-- Center: Markdown Editor -->
@@ -60,6 +61,7 @@
         @save="handleSaveExistingFile"
         @content-change="handleContentChange"
         @note-saved="handleNoteSaved"
+        @rename="handleRename"
       />
 
       <!-- Right Sidebar: Chat -->
@@ -148,6 +150,7 @@ import {
   getProject,
   get_project_files,
   updateFile,
+  renameFile,
   onSyncEvent,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
@@ -449,9 +452,63 @@ async function handleFileCreatedFromSidebar(projectId: string, file: ProjectFile
   currentProject.value = await getProject(projectId) || null;
   currentFile.value = file;
   editorInitialContent.value = file.content || '';
-  
+
   // Reveal the file in the sidebar (expand parents + scroll into view)
   await projectsTreeRef.value?.revealFile(projectId, file.id);
+}
+
+// Handle file moved between projects
+async function handleFileMoved(_sourceProjectId: string, targetProjectId: string, file: ProjectFile) {
+  // If the moved file was currently selected, update the selection to the new location
+  if (selectedFileId.value === file.id) {
+    selectedProjectId.value = targetProjectId;
+    currentProject.value = await getProject(targetProjectId) || null;
+    currentFile.value = file;
+    
+    // Update chat sidebar to the new project
+    chatSidebarRef.value?.selectProject(targetProjectId);
+  }
+  
+  // Reveal the file in its new location
+  await projectsTreeRef.value?.revealFile(targetProjectId, file.id);
+}
+
+// Handle file rename from editor
+async function handleRename(fileId: string, newName: string) {
+  try {
+    const renamedFile = await renameFile(fileId, newName);
+    
+    if (renamedFile) {
+      // Update local state if this is the currently selected file
+      if (currentFile.value && currentFile.value.id === fileId) {
+        currentFile.value = renamedFile;
+      }
+      
+      // Refresh the sidebar to show the new name
+      await projectsTreeRef.value?.refresh();
+      
+      // Reveal the file in its new location (path may have changed)
+      if (selectedProjectId.value) {
+        await projectsTreeRef.value?.revealFile(selectedProjectId.value, fileId);
+      }
+      
+      const toast = await toastController.create({
+        message: 'File renamed successfully',
+        duration: 2000,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to rename file',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
 }
 
 // Create project handler
