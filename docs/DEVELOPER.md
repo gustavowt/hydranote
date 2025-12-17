@@ -24,7 +24,7 @@ HydraNote is an AI-powered document indexing and interaction system built with:
 
 - **Frontend**: Ionic Vue (Vue 3 + TypeScript)
 - **Database**: DuckDB (in-browser, WASM with OPFS persistence)
-- **AI**: OpenAI API / Ollama (local LLMs)
+- **AI**: OpenAI API / Anthropic (Claude) / Google (Gemini) / Ollama (local LLMs)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
 - **Markdown**: marked + highlight.js + Mermaid (diagrams)
 - **File System Sync**: File System Access API (bidirectional sync with local directories)
@@ -113,6 +113,7 @@ These functions handle both database AND file system sync automatically:
 |----------|-------------|
 | `createFile(projectId, path, content, type)` | Create file (DB + FS sync) |
 | `updateFile(fileId, content)` | Update file content (DB + FS sync) |
+| `renameFile(fileId, newName)` | Rename file within same project (DB + FS sync) |
 | `deleteFile(fileId)` | Delete file (DB + FS sync) |
 | `moveFile(fileId, targetProjectId, targetDir?)` | Move file (DB + FS sync) |
 | `indexFileForSearch(projectId, fileId, content, type)` | Create chunks and embeddings |
@@ -130,23 +131,47 @@ Handles the AddNote tool pipeline for creating Markdown notes.
 | `generateNoteTitle(content)` | Generate a title from note content |
 | `titleToSlug(title)` | Convert title to URL-safe filename |
 | `decideNoteDirectory(projectId, title, metadata?)` | AI-decide best directory |
+| `decideNoteDirectoryWithDirs(projectId, title, dirs, metadata?)` | AI-decide directory (with pre-fetched dirs for parallel execution) |
 | `addNote(params)` | Full pipeline: format → title → directory → save → index |
 | `globalAddNote(params, onProgress?)` | Dashboard flow with project routing |
 | `decideTargetProject(content, tags?)` | AI-decide which project for a note |
 
-#### AddNote Pipeline (Phase 9)
+#### AddNote Pipeline (Phase 9 + Phase 13 Optimization)
 
+**Original Sequential Flow:**
 ```
 Raw Text → Format Note → Generate Title → Decide Directory → Persist → Index
+           (LLM #1)       (LLM #2)         (LLM #3)
 ```
 
-#### Global AddNote Pipeline (Phase 10)
+**Optimized Parallel Flow (Phase 13):**
+```
+                    ┌─── Format Note (LLM) ───┐
+Raw Text ──────────►├─── Generate Title (LLM) ├───► Decide Directory (LLM) → Persist → Index
+                    └─── Pre-fetch Dirs (DB) ─┘
+                         (PARALLEL)                    (SEQUENTIAL)
+```
 
+This reduces total time by running 2 LLM calls + 1 DB call in parallel instead of 3 sequential LLM calls.
+
+#### Global AddNote Pipeline (Phase 10 + Phase 13 Optimization)
+
+**Original Sequential Flow:**
 ```
 Raw Text → Decide Project* → Format Note → Generate Title → Decide Directory → Persist → Index
-                ↓
+              (LLM #1)        (LLM #2)       (LLM #3)         (LLM #4)
+```
+
+**Optimized Parallel Flow (Phase 13):**
+```
+                                          ┌─── Format Note (LLM) ───┐
+Raw Text → Decide Project* ──────────────►├─── Generate Title (LLM) ├───► Decide Directory → Persist → Index
+              (LLM #1)                    └─── Pre-fetch Dirs (DB) ─┘         (LLM #2)
+                ↓                              (PARALLEL)
         (* May require user confirmation - Phase 12)
 ```
+
+This reduces from 4 sequential LLM calls to 2 sequential phases (1 LLM + 2 parallel LLM calls + 1 LLM).
 
 ### Tool Service (`toolService.ts`)
 
@@ -418,6 +443,9 @@ Main layout orchestrating the three-panel workspace.
 @select-project="handleProjectSelect"
 @select-file="handleFileSelect"
 @create-project="showCreateProjectModal = true"
+@delete-project="handleDeleteProject"
+@file-created="handleFileCreatedFromSidebar"
+@file-moved="handleFileMoved"
 
 // MarkdownEditor events
 @save="handleSaveExistingFile"
@@ -489,6 +517,36 @@ clearContent()                // Clear editor
 focusEditor()                 // Focus textarea
 ```
 
+#### Events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `save` | `(content: string, file?: ProjectFile)` | Emitted when saving existing file |
+| `content-change` | `(content: string)` | Emitted on editor content change |
+| `note-saved` | `(result: GlobalAddNoteResult)` | Emitted after new note saved |
+| `rename` | `(fileId: string, newName: string)` | Emitted when file is renamed |
+
+#### Actions Menu
+
+The editor header includes a 3-dots menu (visible when editing an existing file) with the following actions:
+
+| Action | Description |
+|--------|-------------|
+| **Run AI Formatting** | Opens a modal for manually triggering AI formatting with optional custom instructions |
+| **Rename** | Enables inline editing of the file name in the header |
+
+**AI Formatting:**
+- Uses `formatNote()` from noteService
+- Combines user's additional instructions with settings-based formatting instructions
+- Replaces editor content with formatted result
+- Does not auto-save (allows user to review changes first)
+
+**Rename:**
+- Transforms the file title into an editable input field
+- Save button confirms the rename, Escape cancels
+- Emits `rename` event to parent for processing via `renameFile()` service
+- Sidebar is refreshed after successful rename
+
 ### ChatSidebar (`ChatSidebar.vue`)
 
 Collapsible AI chat panel with project context.
@@ -530,6 +588,27 @@ Collapsible hierarchical project/file navigator.
 refresh()                              // Reload projects and file trees
 revealFile(projectId, fileId)          // Expand parents and scroll file into view
 ```
+
+#### Drag and Drop
+
+Files can be dragged and dropped between projects or into directories:
+
+| Action | Result |
+|--------|--------|
+| Drag file to project header | Move file to project root |
+| Drag file to directory | Move file into that directory |
+
+**Events emitted:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `file-moved` | `(sourceProjectId, targetProjectId, file)` | File moved between projects |
+
+**Implementation notes:**
+- Source project ID is stored when drag starts for reliable cross-project moves
+- Both database and file system are updated via `moveFile()` in projectService
+- Target project is auto-expanded after move
+- File is revealed (scrolled into view) in its new location
 
 #### File Reveal Feature
 
@@ -971,12 +1050,23 @@ Stored in localStorage under `hydranote_llm_settings`:
 
 ```typescript
 interface LLMSettings {
-  provider: 'openai' | 'ollama';
+  provider: 'openai' | 'ollama' | 'anthropic' | 'google';
   openai: { apiKey, model, baseUrl? };
   ollama: { baseUrl, model };
+  anthropic: { apiKey, model };
+  google: { apiKey, model };
   noteSettings: { formatInstructions, defaultDirectory, autoGenerateTitle };
 }
 ```
+
+### Supported AI Providers
+
+| Provider | Models | Configuration |
+|----------|--------|---------------|
+| OpenAI | GPT-4.1, GPT-4.1 Mini/Nano, o3, o3-mini, GPT-4o, GPT-4o-mini | API Key + optional custom base URL |
+| Anthropic (Claude) | Claude Opus 4.5/4.1, Claude Sonnet 4, Claude 3.5 Sonnet/Haiku | API Key |
+| Google (Gemini) | Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0, Gemini 1.5 Pro/Flash | API Key |
+| Ollama | Llama, Mistral, and other local models | Local URL + model name |
 
 ### File System Settings
 
