@@ -2,21 +2,37 @@
   <ion-page>
     <ion-header :translucent="true" class="workspace-header">
       <ion-toolbar>
-        <ion-title>
+        <div class="header-container">
+          <!-- Left: Logo -->
           <div class="header-brand">
             <img src="/hydranote-logo.png" alt="HydraNote" class="logo" />
             <span>HydraNote</span>
           </div>
-        </ion-title>
-        <ion-buttons slot="end">
-          <ion-button @click="handleNewNote" class="add-note-btn">
-            <ion-icon slot="start" :icon="addOutline" />
-            New Note
-          </ion-button>
-          <ion-button @click="router.push('/settings')">
-            <ion-icon slot="icon-only" :icon="settingsOutline" />
-          </ion-button>
-        </ion-buttons>
+          
+          <!-- Center: Search Bar -->
+          <div class="header-search">
+            <SearchAutocomplete 
+              ref="searchAutocompleteRef"
+              @select-file="handleSearchSelectFile" 
+              @select-project="handleSearchSelectProject"
+            />
+            <span class="search-shortcut">
+              <kbd>{{ isMac ? '⌘' : 'Ctrl' }}</kbd>
+              <kbd>P</kbd>
+            </span>
+          </div>
+          
+          <!-- Right: Actions -->
+          <div class="header-actions">
+            <ion-button @click="handleNewNote" class="add-note-btn">
+              <ion-icon slot="start" :icon="addOutline" />
+              New Note
+            </ion-button>
+            <ion-button fill="clear" @click="router.push('/settings')">
+              <ion-icon slot="icon-only" :icon="settingsOutline" />
+            </ion-button>
+          </div>
+        </div>
       </ion-toolbar>
     </ion-header>
 
@@ -53,6 +69,7 @@
         :initial-project-id="selectedProjectId"
         @project-change="handleChatProjectChange"
         @file-updated="handleFileUpdated"
+        @file-created="handleFileCreatedFromChat"
         @projects-changed="handleProjectsChanged"
       />
     </div>
@@ -136,6 +153,7 @@ import {
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
 import ChatSidebar from '@/components/ChatSidebar.vue';
+import SearchAutocomplete from '@/components/SearchAutocomplete.vue';
 
 const router = useRouter();
 
@@ -143,6 +161,10 @@ const router = useRouter();
 const projectsTreeRef = ref<InstanceType<typeof ProjectsTreeSidebar> | null>(null);
 const markdownEditorRef = ref<InstanceType<typeof MarkdownEditor> | null>(null);
 const chatSidebarRef = ref<InstanceType<typeof ChatSidebar> | null>(null);
+const searchAutocompleteRef = ref<InstanceType<typeof SearchAutocomplete> | null>(null);
+
+// Detect Mac for keyboard shortcut display
+const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 
 // State
 const projects = ref<Project[]>([]);
@@ -163,6 +185,15 @@ const newProject = ref({
 // Sync event listener cleanup function
 let unsubscribeSyncEvent: (() => void) | null = null;
 
+// Keyboard shortcut handler for Cmd/Ctrl + P
+function handleGlobalKeydown(event: KeyboardEvent) {
+  // Check for Cmd+P (Mac) or Ctrl+P (Windows/Linux)
+  if ((event.metaKey || event.ctrlKey) && event.key === 'p') {
+    event.preventDefault();
+    searchAutocompleteRef.value?.focus();
+  }
+}
+
 onMounted(async () => {
   await initialize();
   await loadProjects();
@@ -174,6 +205,9 @@ onMounted(async () => {
       await handleProjectsChanged();
     }
   });
+  
+  // Add global keyboard shortcut listener
+  document.addEventListener('keydown', handleGlobalKeydown);
 });
 
 // Refresh projects and file trees when navigating back to this page
@@ -188,6 +222,9 @@ onUnmounted(() => {
     unsubscribeSyncEvent();
     unsubscribeSyncEvent = null;
   }
+  
+  // Remove global keyboard shortcut listener
+  document.removeEventListener('keydown', handleGlobalKeydown);
 });
 
 async function loadProjects() {
@@ -257,6 +294,31 @@ async function handleFileUpdated(fileId: string, _fileName: string) {
   await projectsTreeRef.value?.refresh();
 }
 
+// Handle file created from chat (write/addNote tools)
+async function handleFileCreatedFromChat(projectId: string, fileId: string, _fileName: string) {
+  // Refresh projects and file trees first
+  await loadProjects();
+  await projectsTreeRef.value?.refresh();
+  
+  // Select the project and file
+  selectedProjectId.value = projectId;
+  selectedFileId.value = fileId;
+  currentProject.value = await getProject(projectId) || null;
+  
+  // Load the file content
+  const files = await get_project_files(projectId);
+  const file = files.find(f => f.id === fileId);
+  
+  if (file) {
+    currentFile.value = file;
+    editorInitialContent.value = file.content || '';
+    markdownEditorRef.value?.setContent(file.content || '');
+  }
+  
+  // Reveal the file in the sidebar (expand parents + scroll into view)
+  await projectsTreeRef.value?.revealFile(projectId, fileId);
+}
+
 // New Note handler
 function handleNewNote() {
   // Clear current file and reset editor for a new note
@@ -279,6 +341,11 @@ async function handleSaveExistingFile(content: string, file?: ProjectFile) {
     if (updatedFile) {
       // Update local state
       currentFile.value = updatedFile;
+      
+      // Reveal the file in the sidebar (ensures visibility after save)
+      if (selectedProjectId.value) {
+        await projectsTreeRef.value?.revealFile(selectedProjectId.value, file.id);
+      }
       
       const toast = await toastController.create({
         message: 'Note saved!',
@@ -305,10 +372,13 @@ async function handleNoteSaved(result: GlobalAddNoteResult) {
   // Refresh file trees in projects sidebar
   await projectsTreeRef.value?.refresh();
   
-  // Optionally select the new project/file
-  if (result.projectId) {
+  // Select the new project/file and reveal it in the sidebar
+  if (result.projectId && result.fileId) {
     selectedProjectId.value = result.projectId;
     selectedFileId.value = result.fileId;
+    
+    // Reveal the file in the sidebar (expand parents + scroll into view)
+    await projectsTreeRef.value?.revealFile(result.projectId, result.fileId);
   }
 }
 
@@ -332,6 +402,45 @@ function handleDeleteProject(projectId: string) {
   }
 }
 
+// Search result selection handlers
+async function handleSearchSelectFile(file: { id: string; projectId: string; name: string; path: string; type: string; projectName: string }) {
+  // Select the project and file
+  selectedProjectId.value = file.projectId;
+  selectedFileId.value = file.id;
+  currentProject.value = await getProject(file.projectId) || null;
+  
+  // Load file content
+  const files = await get_project_files(file.projectId);
+  const projectFile = files.find(f => f.id === file.id);
+  
+  if (projectFile) {
+    currentFile.value = projectFile;
+    editorInitialContent.value = projectFile.content || '';
+    markdownEditorRef.value?.setContent(projectFile.content || '');
+  }
+  
+  // Update chat sidebar project
+  chatSidebarRef.value?.selectProject(file.projectId);
+  
+  // Reveal the file in the sidebar (expand parents + scroll into view)
+  await projectsTreeRef.value?.revealFile(file.projectId, file.id);
+}
+
+async function handleSearchSelectProject(project: Project) {
+  // Select the project
+  selectedProjectId.value = project.id;
+  currentProject.value = project;
+  
+  // Clear current file selection
+  selectedFileId.value = undefined;
+  currentFile.value = null;
+  editorInitialContent.value = '';
+  markdownEditorRef.value?.clearContent();
+  
+  // Update chat sidebar project
+  chatSidebarRef.value?.selectProject(project.id);
+}
+
 // Handle file created from sidebar
 async function handleFileCreatedFromSidebar(projectId: string, file: ProjectFile) {
   // Select the project and file
@@ -340,6 +449,9 @@ async function handleFileCreatedFromSidebar(projectId: string, file: ProjectFile
   currentProject.value = await getProject(projectId) || null;
   currentFile.value = file;
   editorInitialContent.value = file.content || '';
+  
+  // Reveal the file in the sidebar (expand parents + scroll into view)
+  await projectsTreeRef.value?.revealFile(projectId, file.id);
 }
 
 // Create project handler
@@ -386,12 +498,24 @@ async function handleCreateProject() {
   --background: var(--hn-bg-deep);
   --color: var(--hn-text-primary);
   --border-color: var(--hn-border-default);
+  --padding-start: 12px;
+  --padding-end: 12px;
+}
+
+/* Custom header container for proper centering */
+.header-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
 }
 
 .header-brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .header-brand .logo {
@@ -404,16 +528,80 @@ async function handleCreateProject() {
   font-size: 1.1rem;
 }
 
+/* Header Search - Centered */
+.header-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.search-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.search-shortcut kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--hn-text-muted);
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+/* Header Actions */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .add-note-btn {
-  --background: var(--hn-green);
+  --background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  --background-hover: linear-gradient(135deg, var(--hn-green-light) 0%, var(--hn-teal-light) 100%);
+  --background-activated: linear-gradient(135deg, var(--hn-green-dark) 0%, var(--hn-teal-dark) 100%);
   --color: #ffffff;
-  --border-radius: 6px;
-  margin-right: 8px;
-  font-weight: 500;
+  --border-radius: 8px;
+  --padding-start: 14px;
+  --padding-end: 16px;
+  --box-shadow: 0 2px 8px rgba(63, 185, 80, 0.25);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.2px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.add-note-btn::part(native) {
+  background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  box-shadow: 0 2px 8px rgba(63, 185, 80, 0.3);
+}
+
+.add-note-btn:hover::part(native) {
+  background: linear-gradient(135deg, var(--hn-green-light) 0%, var(--hn-teal-light) 100%);
+  box-shadow: 0 4px 12px rgba(63, 185, 80, 0.4);
 }
 
 .add-note-btn:hover {
-  --background: var(--hn-green-light);
+  transform: translateY(-1px);
+}
+
+.add-note-btn:active::part(native) {
+  background: linear-gradient(135deg, var(--hn-green-dark) 0%, var(--hn-teal-dark) 100%);
+  box-shadow: 0 1px 4px rgba(63, 185, 80, 0.2);
+}
+
+.add-note-btn:active {
+  transform: translateY(0);
 }
 
 /* Workspace Layout */
