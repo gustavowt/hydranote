@@ -328,6 +328,7 @@ export interface ToolResult {
   metadata?: {
     fileName?: string;
     fileId?: string;
+    projectId?: string;
     fileSize?: number;
     chunkCount?: number;
     truncated?: boolean;
@@ -761,7 +762,33 @@ export type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
 /**
  * Section identification method
  */
-export type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
+export type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic' | 'line_number';
+
+/**
+ * Document section for structural parsing
+ */
+export interface DocumentSection {
+  /** Section type */
+  type: 'heading' | 'paragraph' | 'list' | 'code' | 'blockquote';
+  /** Heading level (1-6) for heading type */
+  level?: number;
+  /** Section title (for headings) */
+  title?: string;
+  /** Normalized title (lowercase, trimmed) for matching */
+  normalizedTitle?: string;
+  /** Full content of the section including children */
+  content: string;
+  /** Start offset in original document */
+  startOffset: number;
+  /** End offset in original document */
+  endOffset: number;
+  /** Line number where section starts (1-based) */
+  startLine: number;
+  /** Line number where section ends (1-based) */
+  endLine: number;
+  /** Child sections (for nested headings) */
+  children?: DocumentSection[];
+}
 
 /**
  * UpdateFile tool input parameters

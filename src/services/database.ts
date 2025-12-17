@@ -698,3 +698,116 @@ export async function cleanExpiredWebCache(maxAgeMinutes: number = 60): Promise<
   return expiredIds.length;
 }
 
+// ============================================
+// Fuzzy Search Operations
+// ============================================
+
+export interface FuzzySearchResult {
+  fileId: string;
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  projectId: string;
+  projectName: string;
+  matchType: 'name' | 'content';
+  matchScore: number;
+  matchSnippet?: string;
+}
+
+/**
+ * Fuzzy search across all files in all projects
+ * Searches both file names and content using Jaro-Winkler similarity and ILIKE
+ */
+export async function fuzzySearchFiles(
+  query: string,
+  limit: number = 10
+): Promise<FuzzySearchResult[]> {
+  if (!query || query.trim().length === 0) return [];
+  
+  const conn = getConnection();
+  const escapedQuery = query.replace(/'/g, "''").toLowerCase();
+  const likePattern = `%${escapedQuery}%`;
+  
+  // Search file names with Jaro-Winkler similarity + ILIKE fallback
+  // Also search content with ILIKE
+  const result = await conn.query(`
+    WITH name_matches AS (
+      SELECT 
+        f.id as file_id,
+        f.name as file_name,
+        f.name as file_path,
+        f.type as file_type,
+        f.project_id,
+        p.name as project_name,
+        'name' as match_type,
+        GREATEST(
+          jaro_winkler_similarity(LOWER(f.name), '${escapedQuery}'),
+          CASE WHEN LOWER(f.name) LIKE '${likePattern}' THEN 0.7 ELSE 0 END
+        ) as match_score,
+        NULL as match_snippet
+      FROM files f
+      JOIN projects p ON p.id = f.project_id
+      WHERE LOWER(f.name) LIKE '${likePattern}'
+         OR jaro_winkler_similarity(LOWER(f.name), '${escapedQuery}') > 0.6
+    ),
+    content_matches AS (
+      SELECT 
+        f.id as file_id,
+        f.name as file_name,
+        f.name as file_path,
+        f.type as file_type,
+        f.project_id,
+        p.name as project_name,
+        'content' as match_type,
+        0.5 as match_score,
+        SUBSTRING(f.content, 
+          GREATEST(1, POSITION('${escapedQuery}' IN LOWER(f.content)) - 30),
+          100
+        ) as match_snippet
+      FROM files f
+      JOIN projects p ON p.id = f.project_id
+      WHERE f.content IS NOT NULL 
+        AND LOWER(f.content) LIKE '${likePattern}'
+        AND f.id NOT IN (SELECT file_id FROM name_matches)
+    ),
+    all_matches AS (
+      SELECT * FROM name_matches
+      UNION ALL
+      SELECT * FROM content_matches
+    )
+    SELECT DISTINCT ON (file_id)
+      file_id,
+      file_name,
+      file_path,
+      file_type,
+      project_id,
+      project_name,
+      match_type,
+      match_score,
+      match_snippet
+    FROM all_matches
+    ORDER BY file_id, match_score DESC, match_type ASC
+    LIMIT ${limit * 2}
+  `);
+  
+  const rows = result.toArray();
+  
+  // Map and sort by score
+  const results: FuzzySearchResult[] = rows.map((row: Record<string, unknown>) => ({
+    fileId: row.file_id as string,
+    fileName: row.file_name as string,
+    filePath: row.file_path as string,
+    fileType: row.file_type as string,
+    projectId: row.project_id as string,
+    projectName: row.project_name as string,
+    matchType: row.match_type as 'name' | 'content',
+    matchScore: row.match_score as number,
+    matchSnippet: row.match_snippet as string | undefined,
+  }));
+  
+  // Sort by score descending and limit
+  return results
+    .sort((a, b) => b.matchScore - a.matchScore)
+    .slice(0, limit);
+}
+

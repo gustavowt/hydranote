@@ -4,7 +4,8 @@
  */
 
 // Database
-export { initializeDatabase, getConnection, flushDatabase } from './database';
+export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles } from './database';
+export type { FuzzySearchResult } from './database';
 
 // Project Service
 export {
@@ -126,12 +127,24 @@ export {
   processDocument,
   isFileTypeSupported,
   getSupportedExtensions,
+  // Section identification helpers
+  parseDocumentStructure,
+  buildSectionTree,
+  findSectionByTitle,
+  findSectionByPath,
+  findMatchingSections,
+  fuzzyMatchSections,
+  getAllSectionTitles,
+  stringSimilarity,
+  parseLineNumberSpec,
+  getOffsetFromLineNumbers,
 } from './documentProcessor';
 
 // Embedding Service
 export {
   generateEmbedding,
   generateEmbeddingsForChunks,
+  cosineSimilarity,
 } from './embeddingService';
 
 // Note Service (Phase 9 + Phase 10)
