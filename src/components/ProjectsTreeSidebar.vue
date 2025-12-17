@@ -108,7 +108,7 @@
                   @select="(n) => handleFileSelect(project.id, n)"
                   @toggle="(n) => handleNodeToggle(project.id, n)"
                   @context-menu="(payload) => handleNodeContextMenu(project.id, payload)"
-                  @drag-start="handleDragStart"
+                  @drag-start="(node) => handleDragStart(project.id, node)"
                   @drop="(payload) => handleNodeDrop(project.id, payload)"
                 />
               </template>
@@ -164,6 +164,7 @@ const emit = defineEmits<{
   (e: 'collapse-change', collapsed: boolean): void;
   (e: 'delete-project', projectId: string): void;
   (e: 'file-created', projectId: string, file: ProjectFile): void;
+  (e: 'file-moved', sourceProjectId: string, targetProjectId: string, file: ProjectFile): void;
 }>();
 
 const isCollapsed = ref(false);
@@ -171,6 +172,7 @@ const expandedProjects = ref<Set<string>>(new Set());
 const loadingFiles = ref<Set<string>>(new Set());
 const projectFileTrees = ref<Record<string, ProjectFileTree>>({});
 const draggingNode = ref<FileTreeNodeType | null>(null);
+const draggingSourceProjectId = ref<string | null>(null);
 const dragOverProjectId = ref<string | null>(null);
 const treeContentRef = ref<HTMLElement | null>(null);
 
@@ -482,14 +484,18 @@ function findFilesInDirectory(nodes: FileTreeNodeType[], directoryPath: string):
 // Drag and Drop Handlers
 // ============================================
 
-function handleDragStart(node: FileTreeNodeType) {
+function handleDragStart(projectId: string, node: FileTreeNodeType) {
   draggingNode.value = node;
+  draggingSourceProjectId.value = projectId;
 }
 
 function handleProjectDragOver(event: DragEvent, projectId: string) {
-  dragOverProjectId.value = projectId;
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move';
+  // Only show drag-over effect if dragging a file to a different project
+  if (draggingNode.value && draggingSourceProjectId.value !== projectId) {
+    dragOverProjectId.value = projectId;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
   }
 }
 
@@ -502,53 +508,41 @@ function handleProjectDragLeave(projectId: string) {
 async function handleProjectDrop(event: DragEvent, targetProjectId: string) {
   dragOverProjectId.value = null;
   
-  if (!event.dataTransfer) return;
+  // Use stored dragging state (more reliable than dataTransfer)
+  const sourceNode = draggingNode.value;
+  const sourceProjectId = draggingSourceProjectId.value;
   
-  const data = event.dataTransfer.getData('application/json');
-  if (!data) return;
+  // Clear dragging state
+  draggingNode.value = null;
+  draggingSourceProjectId.value = null;
+  
+  // Validate we have what we need
+  if (!sourceNode || sourceNode.type !== 'file') {
+    return;
+  }
+  
+  if (!sourceProjectId || sourceProjectId === targetProjectId) {
+    return;
+  }
   
   try {
-    const sourceNode = JSON.parse(data) as FileTreeNodeType;
-    if (sourceNode.type !== 'file') return;
-    
-    // Find the source project
-    const sourceProjectId = findProjectContainingFile(sourceNode.id);
-    if (!sourceProjectId || sourceProjectId === targetProjectId) return;
-    
     // Move to target project root
-    await moveFile(sourceNode.id, targetProjectId, undefined);
+    const movedFile = await moveFile(sourceNode.id, targetProjectId, undefined);
     
     // Refresh both file trees
     delete projectFileTrees.value[sourceProjectId];
     delete projectFileTrees.value[targetProjectId];
     await loadProjectFiles(sourceProjectId);
-    await loadProjectFiles(targetProjectId);
-  } catch {
-    // Invalid data or move failed, ignore
-  }
-  
-  draggingNode.value = null;
-}
-
-async function handleNodeDrop(projectId: string, payload: DragDropEvent) {
-  if (!payload.sourceNode || payload.sourceNode.type !== 'file') return;
-  
-  const targetDirectory = payload.targetNode.path;
-  
-  // Find the source project
-  const sourceProjectId = findProjectContainingFile(payload.sourceNode.id);
-  if (!sourceProjectId) return;
-  
-  try {
-    await moveFile(payload.sourceNode.id, projectId, targetDirectory);
     
-    // Refresh file trees
-    delete projectFileTrees.value[sourceProjectId];
-    if (sourceProjectId !== projectId) {
-      delete projectFileTrees.value[projectId];
-      await loadProjectFiles(projectId);
+    // Ensure target project is expanded and loaded
+    if (!expandedProjects.value.has(targetProjectId)) {
+      expandedProjects.value.add(targetProjectId);
+      expandedProjects.value = new Set(expandedProjects.value);
     }
-    await loadProjectFiles(sourceProjectId);
+    await loadProjectFiles(targetProjectId);
+    
+    // Notify parent about the move
+    emit('file-moved', sourceProjectId, targetProjectId, movedFile);
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
@@ -557,8 +551,51 @@ async function handleNodeDrop(projectId: string, payload: DragDropEvent) {
     });
     await alert.present();
   }
+}
+
+async function handleNodeDrop(targetProjectId: string, payload: DragDropEvent) {
+  if (!payload.sourceNode || payload.sourceNode.type !== 'file') return;
   
+  const targetDirectory = payload.targetNode.path;
+  
+  // Use stored source project ID (more reliable) or fallback to lookup
+  const sourceProjectId = draggingSourceProjectId.value || findProjectContainingFile(payload.sourceNode.id);
+  
+  // Clear dragging state
   draggingNode.value = null;
+  draggingSourceProjectId.value = null;
+  
+  if (!sourceProjectId) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: 'Could not determine source project for the file.',
+      buttons: ['OK'],
+    });
+    await alert.present();
+    return;
+  }
+  
+  try {
+    const movedFile = await moveFile(payload.sourceNode.id, targetProjectId, targetDirectory);
+    
+    // Refresh file trees
+    delete projectFileTrees.value[sourceProjectId];
+    if (sourceProjectId !== targetProjectId) {
+      delete projectFileTrees.value[targetProjectId];
+      await loadProjectFiles(targetProjectId);
+    }
+    await loadProjectFiles(sourceProjectId);
+    
+    // Notify parent about the move
+    emit('file-moved', sourceProjectId, targetProjectId, movedFile);
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
 }
 
 function findProjectContainingFile(fileId: string): string | null {
