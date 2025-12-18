@@ -343,28 +343,85 @@ export async function deleteFile(fileId: string): Promise<void> {
 }
 
 /**
+ * Update only the file name (for renaming within the same project)
+ * This is simpler than updateFileProject since we don't need to update
+ * the project_id in chunks and embeddings tables.
+ */
+export async function updateFileName(fileId: string, newName: string): Promise<void> {
+  const conn = getConnection();
+  const escapedName = newName.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE files SET name = '${escapedName}', updated_at = CURRENT_TIMESTAMP 
+    WHERE id = '${fileId}'
+  `);
+  await flushDatabase();
+}
+
+/**
  * Update file's project and/or name (for moving files)
+ * 
+ * Due to DuckDB's strict FK constraint enforcement during updates,
+ * we delete and recreate the dependent records with the new project_id.
  */
 export async function updateFileProject(fileId: string, newProjectId: string, newName: string): Promise<void> {
   const conn = getConnection();
   const escapedName = newName.replace(/'/g, "''");
   
-  // Update file's project_id and name
+  // Helper to convert DuckDB timestamp to ISO string
+  const toISOString = (ts: unknown): string => {
+    if (ts instanceof Date) return ts.toISOString();
+    if (typeof ts === 'string') return ts;
+    if (typeof ts === 'number' || typeof ts === 'bigint') {
+      return new Date(Number(ts)).toISOString();
+    }
+    return new Date().toISOString();
+  };
+  
+  // First, gather all existing chunks and embeddings data
+  const chunksResult = await conn.query(`
+    SELECT * FROM chunks WHERE file_id = '${fileId}'
+  `);
+  const chunks = chunksResult.toArray();
+  
+  const embeddingsResult = await conn.query(`
+    SELECT * FROM embeddings WHERE file_id = '${fileId}'
+  `);
+  const embeddings = embeddingsResult.toArray();
+  
+  // Delete embeddings first (depends on chunks)
+  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
+  
+  // Delete chunks (depends on files)
+  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
+  
+  // Update the file's project_id and name
   await conn.query(`
     UPDATE files 
     SET project_id = '${newProjectId}', name = '${escapedName}', updated_at = CURRENT_TIMESTAMP 
     WHERE id = '${fileId}'
   `);
   
-  // Update chunks' project_id
-  await conn.query(`
-    UPDATE chunks SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
-  `);
+  // Re-insert chunks with new project_id
+  for (const chunk of chunks) {
+    const escapedText = (chunk.text as string).replace(/'/g, "''");
+    const createdAt = toISOString(chunk.created_at);
+    await conn.query(`
+      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
+      VALUES ('${chunk.id}', '${chunk.file_id}', '${newProjectId}', ${chunk.chunk_index}, '${escapedText}', ${chunk.start_offset}, ${chunk.end_offset}, '${createdAt}')
+    `);
+  }
   
-  // Update embeddings' project_id
-  await conn.query(`
-    UPDATE embeddings SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
-  `);
+  // Re-insert embeddings with new project_id
+  for (const embedding of embeddings) {
+    // Convert vector to regular array (DuckDB may return typed arrays like Float64Array)
+    const vectorArray = Array.from(embedding.vector as ArrayLike<number>);
+    const vectorStr = `[${vectorArray.join(', ')}]`;
+    const createdAt = toISOString(embedding.created_at);
+    await conn.query(`
+      INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
+      VALUES ('${embedding.id}', '${embedding.chunk_id}', '${embedding.file_id}', '${newProjectId}', ${vectorStr}::DOUBLE[], '${createdAt}')
+    `);
+  }
   
   await flushDatabase();
 }

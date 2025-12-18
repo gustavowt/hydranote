@@ -23,6 +23,7 @@ export {
   getFile,
   getFileWithChunks,
   updateFile,
+  renameFile,
   getProjectStats,
   deleteFile,
   moveFile,

@@ -15,6 +15,7 @@ import {
   getFile as dbGetFile,
   updateFileStatus,
   updateFileContent,
+  updateFileName as dbUpdateFileName,
   createChunks as dbCreateChunks,
   createEmbeddings as dbCreateEmbeddings,
   vectorSearch as dbVectorSearch,
@@ -506,6 +507,47 @@ export async function updateFile(fileId: string, content: string): Promise<Proje
     ...file,
     content,
     size: new Blob([content]).size,
+    updatedAt: new Date(),
+  };
+}
+
+/**
+ * Rename a file (update the file name/path within the same project)
+ * Handles database update and file system sync
+ */
+export async function renameFile(fileId: string, newName: string): Promise<ProjectFile | null> {
+  await ensureInitialized();
+  
+  // Get file info
+  const file = await dbGetFile(fileId);
+  if (!file) {
+    return null;
+  }
+  
+  // Get project name for file system sync
+  const project = await dbGetProject(file.projectId);
+  
+  // Get the directory from the old path (if any)
+  const oldPath = file.name;
+  const lastSlash = oldPath.lastIndexOf('/');
+  const directory = lastSlash > 0 ? oldPath.substring(0, lastSlash) : '';
+  
+  // Build new full path with same directory
+  const newFullPath = directory ? `${directory}/${newName}` : newName;
+  
+  // Update name in database
+  await dbUpdateFileName(fileId, newFullPath);
+  
+  // Sync to file system: delete old file, write new file
+  if (project && file.type === 'md' && file.content) {
+    await syncFileDelete(project.name, oldPath);
+    await syncFileToFileSystem(project.name, newFullPath, file.content);
+  }
+  
+  // Return updated file
+  return {
+    ...file,
+    name: newFullPath,
     updatedAt: new Date(),
   };
 }
