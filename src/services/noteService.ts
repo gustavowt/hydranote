@@ -839,10 +839,10 @@ export async function globalAddNote(
     confirmedNewProject,
   } = params;
 
-  // Initialize execution steps - updated labels for parallel execution
+  // Initialize execution steps
   let steps: NoteExecutionStep[] = [
     { id: "router", status: "pending", label: "Deciding target project" },
-    { id: "parallel", status: "pending", label: "Processing note (parallel)" },
+    { id: "parallel", status: "pending", label: "Formatting note" },
     { id: "directory", status: "pending", label: "Choosing directory" },
     { id: "save", status: "pending", label: "Saving note" },
     { id: "index", status: "pending", label: "Indexing for search" },
