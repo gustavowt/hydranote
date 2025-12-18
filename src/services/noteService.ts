@@ -34,7 +34,6 @@ export interface NoteExecutionStep {
 }
 
 export type NoteExecutionCallback = (steps: NoteExecutionStep[]) => void;
-import { MARKDOWN_FILE_CONFIG } from "../types";
 import { chatCompletion } from "./llmService";
 import {
   getNoteFormatInstructions,
@@ -313,6 +312,25 @@ export async function decideNoteDirectory(
   metadata?: NoteContextMetadata,
 ): Promise<DirectoryDecision> {
   const existingDirectories = await getProjectDirectories(projectId);
+  return decideNoteDirectoryWithDirs(
+    projectId,
+    noteTitle,
+    existingDirectories,
+    metadata,
+  );
+}
+
+/**
+ * Decide which directory to save the note in using LLM
+ * This version accepts pre-fetched directories for parallel execution optimization
+ * Phase 12: Enhanced with telemetry tracking for new directories
+ */
+export async function decideNoteDirectoryWithDirs(
+  projectId: string,
+  noteTitle: string,
+  existingDirectories: string[],
+  metadata?: NoteContextMetadata,
+): Promise<DirectoryDecision> {
   const systemPrompt = buildDecideDirectoryPrompt(existingDirectories);
 
   let context = `Note title: "${noteTitle}"`;
@@ -409,13 +427,12 @@ export async function indexNote(file: ProjectFile): Promise<void> {
 /**
  * Execute the full AddNote pipeline
  * Phase 12: Enhanced with telemetry tracking
+ * Phase 13: Optimized with parallel execution
  *
- * Pipeline steps:
- * 1. Format note - Transform raw text into structured markdown
- * 2. Generate filename - Create a title and slug
- * 3. Decide directory - Determine where to save the note
- * 4. Persist note - Save to database
- * 5. Index note - Create embeddings for search
+ * Pipeline steps (optimized for parallelism):
+ * Phase 1 (parallel): Format note, Generate title, Pre-fetch directories
+ * Phase 2 (sequential): Decide directory using pre-fetched data
+ * Phase 3 (sequential): Generate filename, Persist, Index
  */
 export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
   const { projectId, rawNoteText, contextMetadata } = params;
@@ -440,25 +457,31 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
       };
     }
 
-    // Step 1: Format the note
-    const formattedContent = await formatNote(rawNoteText, contextMetadata);
+    // Phase 1: Run format, title generation, and directory fetch in PARALLEL
+    // This reduces 3 sequential LLM calls to 2 parallel + 1 sequential
+    const [formattedContent, title, existingDirectories] = await Promise.all([
+      formatNote(rawNoteText, contextMetadata),
+      generateNoteTitle(rawNoteText), // Use raw text - works just as well for title
+      getProjectDirectories(projectId), // Pre-fetch directories
+    ]);
 
-    // Step 2: Generate title and filename
-    const title = await generateNoteTitle(formattedContent);
     const slug = titleToSlug(title);
 
-    // Step 3: Decide directory (telemetry tracked inside decideNoteDirectory)
-    const { targetDirectory, shouldCreateDirectory } =
-      await decideNoteDirectory(projectId, title, contextMetadata);
+    // Phase 2: Decide directory using pre-fetched directories (sequential LLM call)
+    const { targetDirectory } = await decideNoteDirectoryWithDirs(
+      projectId,
+      title,
+      existingDirectories,
+      contextMetadata,
+    );
 
-    // Step 4: Generate unique filename
+    // Phase 3: Generate unique filename, persist, and index (sequential)
     const fileName = await generateUniqueFileName(
       projectId,
       slug,
       targetDirectory,
     );
 
-    // Step 5: Persist the note
     const file = await persistNote(
       projectId,
       fileName,
@@ -466,7 +489,6 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
       formattedContent,
     );
 
-    // Step 6: Index the note for search
     await indexNote(file);
 
     // Update project status to indexed
@@ -509,6 +531,7 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
 
 /**
  * Add note with explicit title (skip title generation)
+ * Phase 13: Optimized with parallel execution
  */
 export async function addNoteWithTitle(
   projectId: string,
@@ -531,27 +554,29 @@ export async function addNoteWithTitle(
       };
     }
 
-    // Step 1: Format the note
-    const formattedContent = await formatNote(rawNoteText, contextMetadata);
-
-    // Step 2: Use provided title
     const slug = titleToSlug(title);
 
-    // Step 3: Decide directory
-    const { targetDirectory } = await decideNoteDirectory(
+    // Phase 1: Run format and directory fetch in PARALLEL
+    const [formattedContent, existingDirectories] = await Promise.all([
+      formatNote(rawNoteText, contextMetadata),
+      getProjectDirectories(projectId), // Pre-fetch directories
+    ]);
+
+    // Phase 2: Decide directory using pre-fetched directories
+    const { targetDirectory } = await decideNoteDirectoryWithDirs(
       projectId,
       title,
+      existingDirectories,
       contextMetadata,
     );
 
-    // Step 4: Generate unique filename
+    // Phase 3: Generate unique filename, persist, and index
     const fileName = await generateUniqueFileName(
       projectId,
       slug,
       targetDirectory,
     );
 
-    // Step 5: Persist the note
     const file = await persistNote(
       projectId,
       fileName,
@@ -559,7 +584,6 @@ export async function addNoteWithTitle(
       formattedContent,
     );
 
-    // Step 6: Index the note for search
     await indexNote(file);
 
     // Update project status to indexed
@@ -794,11 +818,12 @@ function updateStep(
 /**
  * Global add note pipeline - adds a note from the dashboard
  * Phase 12: Enhanced with confirmation flow and telemetry tracking
+ * Phase 13: Optimized with parallel execution
  *
- * Pipeline steps:
- * 1. Decide target project (or create new one - may require confirmation)
- * 2. Format the note content
- * 3. Generate title and filename
+ * Pipeline steps (optimized for parallelism):
+ * 1. Decide target project (sequential - cannot parallelize)
+ * 2. Format note, Generate title, Pre-fetch directories (PARALLEL)
+ * 3. Decide directory (sequential)
  * 4. Save note to project
  * 5. Index for search
  */
@@ -814,11 +839,10 @@ export async function globalAddNote(
     confirmedNewProject,
   } = params;
 
-  // Initialize execution steps
+  // Initialize execution steps - updated labels for parallel execution
   let steps: NoteExecutionStep[] = [
     { id: "router", status: "pending", label: "Deciding target project" },
-    { id: "format", status: "pending", label: "Formatting note" },
-    { id: "title", status: "pending", label: "Generating title" },
+    { id: "parallel", status: "pending", label: "Processing note (parallel)" },
     { id: "directory", status: "pending", label: "Choosing directory" },
     { id: "save", status: "pending", label: "Saving note" },
     { id: "index", status: "pending", label: "Indexing for search" },
@@ -1019,28 +1043,35 @@ export async function globalAddNote(
       }
     }
 
-    // Step 2: Format the note
-    steps = updateStep(steps, "format", { status: "running" }, onProgress);
-    const contextMetadata: NoteContextMetadata = tags ? { tags } : {};
-    const formattedContent = await formatNote(rawNoteText, contextMetadata);
-    steps = updateStep(steps, "format", { status: "completed" }, onProgress);
+    // Phase 13: Run format, title, and directory fetch in PARALLEL
+    steps = updateStep(
+      steps,
+      "parallel",
+      { status: "running", detail: "Formatting & generating title..." },
+      onProgress,
+    );
 
-    // Step 3: Generate title
-    steps = updateStep(steps, "title", { status: "running" }, onProgress);
-    const title = await generateNoteTitle(formattedContent);
+    const contextMetadata: NoteContextMetadata = tags ? { tags } : {};
+    const [formattedContent, title, existingDirectories] = await Promise.all([
+      formatNote(rawNoteText, contextMetadata),
+      generateNoteTitle(rawNoteText), // Use raw text - works just as well for title
+      getProjectDirectories(projectId), // Pre-fetch directories
+    ]);
+
     const slug = titleToSlug(title);
     steps = updateStep(
       steps,
-      "title",
+      "parallel",
       { status: "completed", detail: title },
       onProgress,
     );
 
-    // Step 4: Decide directory (telemetry tracked inside decideNoteDirectory)
+    // Step 3: Decide directory using pre-fetched directories
     steps = updateStep(steps, "directory", { status: "running" }, onProgress);
-    const { targetDirectory } = await decideNoteDirectory(
+    const { targetDirectory } = await decideNoteDirectoryWithDirs(
       projectId,
       title,
+      existingDirectories,
       contextMetadata,
     );
     steps = updateStep(
@@ -1050,7 +1081,7 @@ export async function globalAddNote(
       onProgress,
     );
 
-    // Step 5: Save the note
+    // Step 4: Save the note
     steps = updateStep(steps, "save", { status: "running" }, onProgress);
     const fileName = await generateUniqueFileName(
       projectId,
@@ -1070,7 +1101,7 @@ export async function globalAddNote(
       onProgress,
     );
 
-    // Step 6: Index the note
+    // Step 5: Index the note
     steps = updateStep(steps, "index", { status: "running" }, onProgress);
     await indexNote(file);
 

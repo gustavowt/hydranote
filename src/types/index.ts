@@ -211,7 +211,7 @@ export interface ManagedContext {
 /**
  * LLM Provider type
  */
-export type LLMProvider = 'openai' | 'ollama';
+export type LLMProvider = 'openai' | 'ollama' | 'anthropic' | 'google';
 
 /**
  * OpenAI configuration
@@ -231,12 +231,30 @@ export interface OllamaConfig {
 }
 
 /**
+ * Anthropic (Claude) configuration
+ */
+export interface AnthropicConfig {
+  apiKey: string;
+  model: string;
+}
+
+/**
+ * Google (Gemini) configuration
+ */
+export interface GoogleConfig {
+  apiKey: string;
+  model: string;
+}
+
+/**
  * Complete LLM settings
  */
 export interface LLMSettings {
   provider: LLMProvider;
   openai: OpenAIConfig;
   ollama: OllamaConfig;
+  anthropic: AnthropicConfig;
+  google: GoogleConfig;
   /** Note formatting settings (Phase 9) */
   noteSettings: NoteSettings;
 }
@@ -248,11 +266,19 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   provider: 'openai',
   openai: {
     apiKey: '',
-    model: 'gpt-4o-mini',
+    model: 'gpt-4.1-mini',
   },
   ollama: {
     baseUrl: 'http://localhost:11434',
     model: 'llama3.2',
+  },
+  anthropic: {
+    apiKey: '',
+    model: 'claude-sonnet-4-20250514',
+  },
+  google: {
+    apiKey: '',
+    model: 'gemini-2.5-flash',
   },
   noteSettings: {
     formatInstructions: '',

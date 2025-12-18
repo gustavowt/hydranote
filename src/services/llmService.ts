@@ -10,6 +10,8 @@ import type {
   LLMCompletionResponse,
   LLMStreamCallback,
   NoteSettings,
+  AnthropicConfig,
+  GoogleConfig,
 } from '../types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
 
@@ -55,10 +57,18 @@ export function saveSettings(settings: LLMSettings): void {
  */
 export function isConfigured(): boolean {
   const settings = loadSettings();
-  if (settings.provider === 'openai') {
-    return !!settings.openai.apiKey;
+  switch (settings.provider) {
+    case 'openai':
+      return !!settings.openai.apiKey;
+    case 'ollama':
+      return !!settings.ollama.baseUrl && !!settings.ollama.model;
+    case 'anthropic':
+      return !!settings.anthropic.apiKey;
+    case 'google':
+      return !!settings.google.apiKey;
+    default:
+      return false;
   }
-  return !!settings.ollama.baseUrl && !!settings.ollama.model;
 }
 
 // ============================================
@@ -102,11 +112,36 @@ export function getDefaultNoteDirectory(): string {
 // OpenAI API
 // ============================================
 
+/**
+ * Check if the model is an OpenAI reasoning model (o1, o3 series)
+ * Reasoning models have different API parameter requirements
+ */
+function isOpenAIReasoningModel(model: string): boolean {
+  const reasoningModels = ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o4-mini'];
+  return reasoningModels.some(rm => model.startsWith(rm));
+}
+
 async function callOpenAI(
   request: LLMCompletionRequest,
   config: LLMSettings['openai']
 ): Promise<LLMCompletionResponse> {
   const baseUrl = config.baseUrl || 'https://api.openai.com/v1';
+  const isReasoning = isOpenAIReasoningModel(config.model);
+  
+  // Build request body based on model type
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: request.messages,
+  };
+
+  if (isReasoning) {
+    // Reasoning models use max_completion_tokens and don't support temperature
+    body.max_completion_tokens = request.maxTokens ?? 16384;
+  } else {
+    // Standard models use max_tokens and support temperature
+    body.temperature = request.temperature ?? 0.7;
+    body.max_tokens = request.maxTokens ?? 4096;
+  }
   
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -114,12 +149,7 @@ async function callOpenAI(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages: request.messages,
-      temperature: request.temperature ?? 0.7,
-      max_tokens: request.maxTokens ?? 4096,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -183,6 +213,144 @@ async function callOllama(
 }
 
 // ============================================
+// Anthropic (Claude) API
+// ============================================
+
+async function callAnthropic(
+  request: LLMCompletionRequest,
+  config: AnthropicConfig
+): Promise<LLMCompletionResponse> {
+  // Convert messages to Anthropic format
+  // Anthropic requires system message to be passed separately
+  let systemPrompt = '';
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  
+  for (const msg of request.messages) {
+    if (msg.role === 'system') {
+      systemPrompt = msg.content;
+    } else {
+      messages.push({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    max_tokens: request.maxTokens ?? 4096,
+    messages,
+  };
+
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': config.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Anthropic API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  
+  // Extract text from content blocks
+  const content = data.content
+    ?.filter((block: { type: string }) => block.type === 'text')
+    .map((block: { text: string }) => block.text)
+    .join('') || '';
+
+  return {
+    content,
+    finishReason: data.stop_reason,
+    usage: data.usage ? {
+      promptTokens: data.usage.input_tokens,
+      completionTokens: data.usage.output_tokens,
+      totalTokens: data.usage.input_tokens + data.usage.output_tokens,
+    } : undefined,
+  };
+}
+
+// ============================================
+// Google (Gemini) API
+// ============================================
+
+async function callGoogle(
+  request: LLMCompletionRequest,
+  config: GoogleConfig
+): Promise<LLMCompletionResponse> {
+  // Convert messages to Gemini format
+  // Gemini uses 'user' and 'model' roles, and system prompt goes in systemInstruction
+  let systemInstruction = '';
+  const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+  
+  for (const msg of request.messages) {
+    if (msg.role === 'system') {
+      systemInstruction = msg.content;
+    } else {
+      contents.push({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      temperature: request.temperature ?? 0.7,
+      maxOutputTokens: request.maxTokens ?? 4096,
+    },
+  };
+
+  if (systemInstruction) {
+    body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Gemini API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  
+  // Extract text from response
+  const content = data.candidates?.[0]?.content?.parts
+    ?.map((part: { text: string }) => part.text)
+    .join('') || '';
+
+  return {
+    content,
+    finishReason: data.candidates?.[0]?.finishReason,
+    usage: data.usageMetadata ? {
+      promptTokens: data.usageMetadata.promptTokenCount || 0,
+      completionTokens: data.usageMetadata.candidatesTokenCount || 0,
+      totalTokens: data.usageMetadata.totalTokenCount || 0,
+    } : undefined,
+  };
+}
+
+// ============================================
 // Streaming API - OpenAI
 // ============================================
 
@@ -192,6 +360,23 @@ async function streamOpenAI(
   onChunk: LLMStreamCallback
 ): Promise<LLMCompletionResponse> {
   const baseUrl = config.baseUrl || 'https://api.openai.com/v1';
+  const isReasoning = isOpenAIReasoningModel(config.model);
+
+  // Build request body based on model type
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: request.messages,
+    stream: true,
+  };
+
+  if (isReasoning) {
+    // Reasoning models use max_completion_tokens and don't support temperature
+    body.max_completion_tokens = request.maxTokens ?? 16384;
+  } else {
+    // Standard models use max_tokens and support temperature
+    body.temperature = request.temperature ?? 0.7;
+    body.max_tokens = request.maxTokens ?? 4096;
+  }
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -199,13 +384,7 @@ async function streamOpenAI(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages: request.messages,
-      temperature: request.temperature ?? 0.7,
-      max_tokens: request.maxTokens ?? 4096,
-      stream: true,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -349,6 +528,215 @@ async function streamOllama(
 }
 
 // ============================================
+// Streaming API - Anthropic (Claude)
+// ============================================
+
+async function streamAnthropic(
+  request: LLMCompletionRequest,
+  config: AnthropicConfig,
+  onChunk: LLMStreamCallback
+): Promise<LLMCompletionResponse> {
+  // Convert messages to Anthropic format
+  let systemPrompt = '';
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  
+  for (const msg of request.messages) {
+    if (msg.role === 'system') {
+      systemPrompt = msg.content;
+    } else {
+      messages.push({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    max_tokens: request.maxTokens ?? 4096,
+    messages,
+    stream: true,
+  };
+
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': config.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Anthropic API error: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Response body is not readable');
+  }
+
+  const decoder = new TextDecoder();
+  let fullContent = '';
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        try {
+          const json = JSON.parse(trimmed.slice(6));
+          
+          // Handle content_block_delta events
+          if (json.type === 'content_block_delta' && json.delta?.text) {
+            fullContent += json.delta.text;
+            onChunk(json.delta.text, false);
+          }
+          
+          // Handle message_stop event
+          if (json.type === 'message_stop') {
+            onChunk('', true);
+            return {
+              content: fullContent,
+              finishReason: 'stop',
+            };
+          }
+        } catch {
+          // Skip malformed JSON lines
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  onChunk('', true);
+
+  return {
+    content: fullContent,
+    finishReason: 'stop',
+  };
+}
+
+// ============================================
+// Streaming API - Google (Gemini)
+// ============================================
+
+async function streamGoogle(
+  request: LLMCompletionRequest,
+  config: GoogleConfig,
+  onChunk: LLMStreamCallback
+): Promise<LLMCompletionResponse> {
+  // Convert messages to Gemini format
+  let systemInstruction = '';
+  const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+  
+  for (const msg of request.messages) {
+    if (msg.role === 'system') {
+      systemInstruction = msg.content;
+    } else {
+      contents.push({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      temperature: request.temperature ?? 0.7,
+      maxOutputTokens: request.maxTokens ?? 4096,
+    },
+  };
+
+  if (systemInstruction) {
+    body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:streamGenerateContent?alt=sse&key=${config.apiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Gemini API error: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Response body is not readable');
+  }
+
+  const decoder = new TextDecoder();
+  let fullContent = '';
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        try {
+          const json = JSON.parse(trimmed.slice(6));
+          
+          // Extract text from candidates
+          const text = json.candidates?.[0]?.content?.parts
+            ?.map((part: { text: string }) => part.text)
+            .join('') || '';
+          
+          if (text) {
+            fullContent += text;
+            onChunk(text, false);
+          }
+        } catch {
+          // Skip malformed JSON lines
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  onChunk('', true);
+
+  return {
+    content: fullContent,
+    finishReason: 'stop',
+  };
+}
+
+// ============================================
 // Main API
 // ============================================
 
@@ -360,21 +748,34 @@ export async function chatCompletion(
 ): Promise<LLMCompletionResponse> {
   const settings = loadSettings();
   
-  if (settings.provider === 'openai') {
-    if (!settings.openai.apiKey) {
-      throw new Error('OpenAI API key not configured. Please add your API key in Settings.');
-    }
-    return callOpenAI(request, settings.openai);
+  switch (settings.provider) {
+    case 'openai':
+      if (!settings.openai.apiKey) {
+        throw new Error('OpenAI API key not configured. Please add your API key in Settings.');
+      }
+      return callOpenAI(request, settings.openai);
+    
+    case 'ollama':
+      if (!settings.ollama.baseUrl) {
+        throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
+      }
+      return callOllama(request, settings.ollama);
+    
+    case 'anthropic':
+      if (!settings.anthropic.apiKey) {
+        throw new Error('Anthropic API key not configured. Please add your API key in Settings.');
+      }
+      return callAnthropic(request, settings.anthropic);
+    
+    case 'google':
+      if (!settings.google.apiKey) {
+        throw new Error('Google API key not configured. Please add your API key in Settings.');
+      }
+      return callGoogle(request, settings.google);
+    
+    default:
+      throw new Error(`Unknown LLM provider: ${settings.provider}`);
   }
-  
-  if (settings.provider === 'ollama') {
-    if (!settings.ollama.baseUrl) {
-      throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
-    }
-    return callOllama(request, settings.ollama);
-  }
-  
-  throw new Error(`Unknown LLM provider: ${settings.provider}`);
 }
 
 /**
@@ -387,21 +788,34 @@ export async function chatCompletionStreaming(
 ): Promise<LLMCompletionResponse> {
   const settings = loadSettings();
   
-  if (settings.provider === 'openai') {
-    if (!settings.openai.apiKey) {
-      throw new Error('OpenAI API key not configured. Please add your API key in Settings.');
-    }
-    return streamOpenAI(request, settings.openai, onChunk);
+  switch (settings.provider) {
+    case 'openai':
+      if (!settings.openai.apiKey) {
+        throw new Error('OpenAI API key not configured. Please add your API key in Settings.');
+      }
+      return streamOpenAI(request, settings.openai, onChunk);
+    
+    case 'ollama':
+      if (!settings.ollama.baseUrl) {
+        throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
+      }
+      return streamOllama(request, settings.ollama, onChunk);
+    
+    case 'anthropic':
+      if (!settings.anthropic.apiKey) {
+        throw new Error('Anthropic API key not configured. Please add your API key in Settings.');
+      }
+      return streamAnthropic(request, settings.anthropic, onChunk);
+    
+    case 'google':
+      if (!settings.google.apiKey) {
+        throw new Error('Google API key not configured. Please add your API key in Settings.');
+      }
+      return streamGoogle(request, settings.google, onChunk);
+    
+    default:
+      throw new Error(`Unknown LLM provider: ${settings.provider}`);
   }
-  
-  if (settings.provider === 'ollama') {
-    if (!settings.ollama.baseUrl) {
-      throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
-    }
-    return streamOllama(request, settings.ollama, onChunk);
-  }
-  
-  throw new Error(`Unknown LLM provider: ${settings.provider}`);
 }
 
 /**

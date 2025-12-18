@@ -147,7 +147,7 @@ export {
   cosineSimilarity,
 } from './embeddingService';
 
-// Note Service (Phase 9 + Phase 10)
+// Note Service (Phase 9 + Phase 10 + Phase 13 Optimization)
 export {
   formatNote,
   generateNoteTitle,
@@ -155,6 +155,7 @@ export {
   generateUniqueFileName,
   getProjectDirectories,
   decideNoteDirectory,
+  decideNoteDirectoryWithDirs, // Phase 13: For parallel execution optimization
   persistNote,
   indexNote,
   addNote,
