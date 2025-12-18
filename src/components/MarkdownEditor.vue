@@ -4,10 +4,40 @@
     <div class="editor-header">
       <div class="header-left">
         <ion-icon :icon="documentTextOutline" class="header-icon" />
-        <span class="header-title" :title="currentFile?.name || 'New Note'">
-          {{ displayFileName }}
-        </span>
-        <span v-if="hasChanges" class="unsaved-indicator">•</span>
+        <!-- Rename mode: editable input -->
+        <div v-if="isRenaming && currentFile" class="rename-container">
+          <input
+            ref="renameInputRef"
+            v-model="newFileName"
+            class="rename-input"
+            @keydown.enter="handleSaveRename"
+            @keydown.escape="handleCancelRename"
+          />
+          <ion-button 
+            fill="solid" 
+            size="small" 
+            class="rename-save-btn"
+            @click="handleSaveRename"
+            :disabled="!newFileName.trim() || newFileName === getFileNameWithoutExtension()"
+          >
+            <ion-icon slot="icon-only" :icon="checkmarkOutline" />
+          </ion-button>
+          <ion-button 
+            fill="clear" 
+            size="small" 
+            class="rename-cancel-btn"
+            @click="handleCancelRename"
+          >
+            <ion-icon slot="icon-only" :icon="closeOutline" />
+          </ion-button>
+        </div>
+        <!-- Normal mode: static title -->
+        <template v-else>
+          <span class="header-title" :title="currentFile?.name || 'New Note'">
+            {{ displayFileName }}
+          </span>
+          <span v-if="hasChanges" class="unsaved-indicator">•</span>
+        </template>
       </div>
       <div class="header-actions">
         <div class="save-btn-wrapper">
@@ -46,8 +76,71 @@
             <ion-icon :icon="eyeOutline" />
           </button>
         </div>
+        <!-- 3-dots Actions Menu -->
+        <button 
+          v-if="currentFile"
+          class="actions-menu-btn"
+          @click="showActionsMenu = true"
+          id="editor-actions-trigger"
+          title="More actions"
+        >
+          <ion-icon :icon="ellipsisVertical" />
+        </button>
+        <ion-popover
+          :is-open="showActionsMenu"
+          @didDismiss="showActionsMenu = false"
+          trigger="editor-actions-trigger"
+          trigger-action="click"
+          side="bottom"
+          alignment="end"
+        >
+          <ion-content class="actions-popover-content">
+            <ion-list lines="none">
+              <ion-item button @click="handleOpenFormatModal" detail="false">
+                <ion-icon :icon="sparklesOutline" slot="start" />
+                <ion-label>Run AI Formatting</ion-label>
+              </ion-item>
+              <ion-item button @click="handleStartRename" detail="false">
+                <ion-icon :icon="pencilOutline" slot="start" />
+                <ion-label>Rename</ion-label>
+              </ion-item>
+            </ion-list>
+          </ion-content>
+        </ion-popover>
       </div>
     </div>
+
+    <!-- AI Formatting Modal -->
+    <ion-modal :is-open="showFormatModal" @didDismiss="showFormatModal = false">
+      <ion-header>
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button @click="showFormatModal = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-title>AI Formatting</ion-title>
+          <ion-buttons slot="end">
+            <ion-button :strong="true" @click="handleRunFormatting" :disabled="formatting">
+              {{ formatting ? 'Formatting...' : 'Format' }}
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding format-modal-content">
+        <p class="format-description">
+          AI will format and improve your note's structure. Add any specific instructions below (optional):
+        </p>
+        <ion-textarea
+          v-model="formatInstructions"
+          placeholder="E.g., 'Use bullet points for lists', 'Add a summary section', 'Convert to formal tone'..."
+          :rows="5"
+          class="format-textarea"
+        />
+        <p class="format-note">
+          <ion-icon :icon="informationCircleOutline" />
+          Your default formatting settings from Settings will also be applied.
+        </p>
+      </ion-content>
+    </ion-modal>
 
     <!-- Editor Content -->
     <div class="editor-content">
@@ -134,6 +227,17 @@ import {
   IonIcon,
   IonButton,
   IonSpinner,
+  IonPopover,
+  IonContent,
+  IonList,
+  IonItem,
+  IonLabel,
+  IonModal,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonTextarea,
   toastController,
 } from '@ionic/vue';
 import {
@@ -147,10 +251,16 @@ import {
   folderOutline,
   checkmarkCircle,
   ellipseOutline,
+  ellipsisVertical,
+  sparklesOutline,
+  pencilOutline,
+  checkmarkOutline,
+  closeOutline,
+  informationCircleOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult } from '@/types';
 import type { NoteExecutionStep } from '@/services';
-import { globalAddNote } from '@/services';
+import { globalAddNote, formatNote, getNoteFormatInstructions } from '@/services';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -168,6 +278,7 @@ const emit = defineEmits<{
   (e: 'save', content: string, file?: ProjectFile): void;
   (e: 'content-change', content: string): void;
   (e: 'note-saved', result: GlobalAddNoteResult): void;
+  (e: 'rename', fileId: string, newName: string): void;
 }>();
 
 // Initialize mermaid with dark theme
@@ -224,6 +335,19 @@ const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
+
+// Actions menu state
+const showActionsMenu = ref(false);
+
+// AI Formatting state
+const showFormatModal = ref(false);
+const formatInstructions = ref('');
+const formatting = ref(false);
+
+// Rename state
+const isRenaming = ref(false);
+const newFileName = ref('');
+const renameInputRef = ref<HTMLInputElement | null>(null);
 
 const hasChanges = computed(() => content.value !== originalContent.value);
 const isNewNote = computed(() => !props.currentFile);
@@ -415,7 +539,137 @@ async function saveNewNote() {
   }
 }
 
+// ============================================
+// Actions Menu Handlers
+// ============================================
+
+function handleOpenFormatModal() {
+  showActionsMenu.value = false;
+  formatInstructions.value = '';
+  showFormatModal.value = true;
+}
+
+async function handleRunFormatting() {
+  if (!content.value.trim()) {
+    const toast = await toastController.create({
+      message: 'No content to format',
+      duration: 2000,
+      position: 'top',
+      color: 'warning',
+    });
+    await toast.present();
+    return;
+  }
+
+  formatting.value = true;
+  
+  try {
+    // Get current settings instructions and merge with user's additional instructions
+    const settingsInstructions = getNoteFormatInstructions();
+    let combinedInstructions = settingsInstructions;
+    
+    if (formatInstructions.value.trim()) {
+      combinedInstructions = combinedInstructions 
+        ? `${settingsInstructions}\n\nAdditional instructions:\n${formatInstructions.value.trim()}`
+        : formatInstructions.value.trim();
+    }
+    
+    // Call formatNote with the combined instructions
+    const formattedContent = await formatNote(content.value, {
+      topic: combinedInstructions || undefined,
+    });
+    
+    // Update editor content
+    content.value = formattedContent;
+    
+    showFormatModal.value = false;
+    
+    // Save the file automatically after formatting
+    if (props.currentFile) {
+      emit('save', formattedContent, props.currentFile);
+      originalContent.value = formattedContent;
+    }
+    
+    const toast = await toastController.create({
+      message: 'Note formatted and saved',
+      duration: 2000,
+      position: 'top',
+      color: 'success',
+    });
+    await toast.present();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to format note',
+      duration: 3000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    formatting.value = false;
+  }
+}
+
+// ============================================
+// Rename Handlers
+// ============================================
+
+function getFileNameWithoutExtension(): string {
+  if (!props.currentFile) return '';
+  const name = props.currentFile.name;
+  const lastSlash = name.lastIndexOf('/');
+  const fileName = lastSlash >= 0 ? name.substring(lastSlash + 1) : name;
+  const lastDot = fileName.lastIndexOf('.');
+  return lastDot >= 0 ? fileName.substring(0, lastDot) : fileName;
+}
+
+function handleStartRename() {
+  showActionsMenu.value = false;
+  if (!props.currentFile) return;
+  
+  // Set initial value to current file name without extension
+  newFileName.value = getFileNameWithoutExtension();
+  isRenaming.value = true;
+  
+  // Focus the input after DOM updates
+  nextTick(() => {
+    renameInputRef.value?.focus();
+    renameInputRef.value?.select();
+  });
+}
+
+function handleCancelRename() {
+  isRenaming.value = false;
+  newFileName.value = '';
+}
+
+async function handleSaveRename() {
+  if (!props.currentFile || !newFileName.value.trim()) return;
+  
+  const trimmedName = newFileName.value.trim();
+  const currentName = getFileNameWithoutExtension();
+  
+  // No change
+  if (trimmedName === currentName) {
+    handleCancelRename();
+    return;
+  }
+  
+  // Add extension back
+  const extension = props.currentFile.type === 'md' ? '.md' : '';
+  const fullNewName = `${trimmedName}${extension}`;
+  
+  // Emit rename event to parent
+  emit('rename', props.currentFile.id, fullNewName);
+  
+  isRenaming.value = false;
+  newFileName.value = '';
+}
+
+// ============================================
 // Expose methods
+// ============================================
+
 function setContent(newContent: string) {
   content.value = newContent;
   originalContent.value = newContent;
@@ -535,6 +789,113 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .mode-btn ion-icon {
   font-size: 14px;
+}
+
+/* Actions Menu Button */
+.actions-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--hn-text-secondary);
+  transition: all 0.15s ease;
+}
+
+.actions-menu-btn:hover {
+  background: var(--hn-bg-hover);
+  color: var(--hn-text-primary);
+}
+
+.actions-menu-btn ion-icon {
+  font-size: 18px;
+}
+
+/* Actions Popover */
+.actions-popover-content {
+  --background: var(--hn-bg-surface);
+}
+
+.actions-popover-content ion-list {
+  padding: 4px 0;
+  background: transparent;
+}
+
+.actions-popover-content ion-item {
+  --background: transparent;
+  --background-hover: var(--hn-bg-hover);
+  --color: var(--hn-text-primary);
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --min-height: 40px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.actions-popover-content ion-item ion-icon {
+  font-size: 18px;
+  color: var(--hn-text-secondary);
+  margin-right: 10px;
+}
+
+.actions-popover-content ion-item:hover ion-icon {
+  color: var(--hn-teal);
+}
+
+/* Rename Container */
+.rename-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 100px;
+  max-width: 300px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--hn-text-primary);
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-teal);
+  border-radius: 6px;
+  outline: none;
+}
+
+.rename-input:focus {
+  border-color: var(--hn-teal-light);
+  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.2);
+}
+
+.rename-save-btn {
+  --background: var(--hn-green);
+  --background-hover: var(--hn-green-light);
+  --border-radius: 6px;
+  --padding-start: 8px;
+  --padding-end: 8px;
+  height: 30px;
+  min-height: 30px;
+  margin: 0;
+}
+
+.rename-cancel-btn {
+  --color: var(--hn-text-secondary);
+  --padding-start: 6px;
+  --padding-end: 6px;
+  height: 30px;
+  min-height: 30px;
+  margin: 0;
+}
+
+.rename-cancel-btn:hover {
+  --color: var(--hn-text-primary);
 }
 
 /* Save Button Wrapper - prevents layout shift */
@@ -975,6 +1336,68 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .step.completed .step-detail {
   color: var(--hn-green-light);
+}
+
+/* AI Formatting Modal */
+ion-modal ion-toolbar {
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --border-color: var(--hn-border-default);
+}
+
+ion-modal ion-content.format-modal-content {
+  --background: var(--hn-bg-deep);
+}
+
+.format-description {
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.format-textarea {
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
+  --border-radius: 8px;
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --padding-top: 12px;
+  --padding-bottom: 12px;
+  border: 1px solid var(--hn-border-default);
+  margin-bottom: 16px;
+}
+
+.format-textarea:focus-within {
+  border-color: var(--hn-teal);
+}
+
+.format-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--hn-text-muted);
+  font-size: 0.8rem;
+  padding: 10px 12px;
+  background: var(--hn-bg-surface);
+  border-radius: 6px;
+  border: 1px solid var(--hn-border-subtle);
+}
+
+.format-note ion-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  color: var(--hn-teal);
+  margin-top: 1px;
+}
+
+ion-modal ion-button {
+  --color: var(--hn-purple);
+}
+
+ion-modal ion-button[strong] {
+  --color: var(--hn-green);
 }
 </style>
 
