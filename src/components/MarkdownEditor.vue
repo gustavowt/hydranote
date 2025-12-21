@@ -96,11 +96,11 @@
         >
           <ion-content class="actions-popover-content">
             <ion-list lines="none">
-              <ion-item button @click="handleOpenFormatModal" detail="false">
+              <ion-item button @click="handleOpenFormatModal" :detail="false">
                 <ion-icon :icon="sparklesOutline" slot="start" />
                 <ion-label>Run AI Formatting</ion-label>
               </ion-item>
-              <ion-item button @click="handleStartRename" detail="false">
+              <ion-item button @click="handleStartRename" :detail="false">
                 <ion-icon :icon="pencilOutline" slot="start" />
                 <ion-label>Rename</ion-label>
               </ion-item>

@@ -169,6 +169,64 @@
               </ion-button>
             </div>
           </div>
+
+          <!-- Execution Plan Confirmation -->
+          <div v-if="pendingPlan && !pendingPlan.needsClarification" class="execution-plan">
+            <div class="plan-header">
+              <ion-icon :icon="listOutline" class="plan-icon" />
+              <div class="plan-title">
+                <span class="plan-label">Execution Plan</span>
+                <span v-if="pendingPlan.estimatedDuration" class="plan-duration">{{ pendingPlan.estimatedDuration }}</span>
+              </div>
+            </div>
+
+            <div class="plan-summary">
+              {{ pendingPlan.summary }}
+            </div>
+
+            <div class="plan-steps">
+              <div 
+                v-for="(step, index) in pendingPlan.steps" 
+                :key="step.id"
+                :class="['plan-step', step.status || 'pending']"
+              >
+                <span class="step-number">{{ index + 1 }}</span>
+                <span class="step-icon">{{ getToolIcon(step.tool) }}</span>
+                <div class="step-content">
+                  <span class="step-description">{{ step.description }}</span>
+                  <span v-if="step.detail && step.status === 'running'" class="step-detail">{{ step.detail }}</span>
+                </div>
+                <ion-spinner v-if="step.status === 'running'" name="dots" class="step-spinner-small" />
+                <ion-icon v-else-if="step.status === 'completed'" :icon="checkmarkCircle" class="step-status-icon done" />
+                <ion-icon v-else-if="step.status === 'failed'" :icon="closeCircle" class="step-status-icon error" />
+              </div>
+            </div>
+
+            <div v-if="!isExecutingPlan" class="plan-actions">
+              <ion-button
+                fill="outline"
+                size="small"
+                color="medium"
+                @click="handleCancelPlan"
+              >
+                <ion-icon slot="start" :icon="closeOutline" />
+                Cancel
+              </ion-button>
+              <ion-button
+                size="small"
+                color="primary"
+                @click="handleExecutePlan"
+              >
+                <ion-icon slot="start" :icon="playOutline" />
+                Execute Plan
+              </ion-button>
+            </div>
+
+            <div v-else class="plan-executing">
+              <ion-spinner name="crescent" />
+              <span>Executing step {{ currentPlanStep?.index !== undefined ? currentPlanStep.index + 1 : 1 }} of {{ currentPlanStep?.total || pendingPlan.steps.length }}...</span>
+            </div>
+          </div>
         </template>
       </div>
 
@@ -237,8 +295,10 @@ import {
   createOutline,
   checkmarkCircle,
   closeCircle,
+  listOutline,
+  playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, SupportedFileType, UpdateFilePreview, DiffLine } from '@/types';
+import type { Project, ChatMessage, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -247,13 +307,17 @@ import {
   buildSystemPrompt,
   buildGlobalSystemPrompt,
   isConfigured,
-  orchestrateToolExecution,
+  chatCompletionStreaming,
   get_project_files,
   applyFileUpdate,
   removePendingPreview,
   getAllProjects,
   getAllFilesForAutocomplete,
   ensureFileSystemPermission,
+  // Planner-Executor-Checker flow
+  createExecutionPlan,
+  runPlannerFlow,
+  getToolIcon,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
 import { folderOutline, addOutline } from 'ionicons/icons';
@@ -325,6 +389,11 @@ const isApplyingUpdate = ref(false);
 // Streaming state
 const executionSteps = ref<ExecutionStep[]>([]);
 const streamingContent = ref('');
+
+// Planner flow state
+const pendingPlan = ref<ExecutionPlan | null>(null);
+const isExecutingPlan = ref(false);
+const currentPlanStep = ref<{ step: PlanStep; index: number; total: number } | null>(null);
 
 // Get the current/last step to display (prioritize running, then last completed)
 const currentStep = computed(() => {
@@ -417,16 +486,6 @@ async function sendMessage(text?: string) {
   streamingContent.value = '';
 
   try {
-    // Build system prompt based on mode
-    const systemPrompt = isGlobalMode.value
-      ? await buildGlobalSystemPrompt()
-      : await buildSystemPrompt(selectedProjectId.value!);
-    
-    const conversationHistory = messages.value.slice(0, -1).map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
-    
     // Get file names based on mode
     let projectFileNames: string[];
     if (isGlobalMode.value) {
@@ -437,77 +496,86 @@ async function sendMessage(text?: string) {
       projectFileNames = files.map(f => f.name);
     }
 
-    // Streaming callback - updates streamingContent as chunks arrive
-    const handleStreamChunk = (chunk: string, done: boolean) => {
-      if (done) return;
-      streamingContent.value += chunk;
-      scrollToBottom();
-    };
+    // Build conversation context
+    const conversationContext = messages.value.slice(-6, -1)
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`)
+      .join('\n');
 
-    const result = await orchestrateToolExecution(
-      selectedProjectId.value, // undefined for global mode
+    // Phase 1: Create execution plan
+    const plan = await createExecutionPlan(
       messageText,
-      systemPrompt,
-      conversationHistory,
+      selectedProjectId.value,
       projectFileNames,
-      (steps) => {
-        executionSteps.value = [...steps];
-        scrollToBottom();
-      },
-      handleStreamChunk
+      conversationContext,
     );
 
-    // Check if there's an updateFile preview in the results
-    const updateFileResult = result.toolResults.find(
-      (r) => r.tool === 'updateFile' && r.success && (r as { preview?: UpdateFilePreview }).preview
-    );
-    if (updateFileResult) {
-      const preview = (updateFileResult as { preview?: UpdateFilePreview }).preview;
-      if (preview) {
-        activePreview.value = preview;
-      }
+    // Handle clarification request
+    if (plan.needsClarification) {
+      const clarificationMessage = addMessage(
+        sessionId.value,
+        'assistant',
+        plan.clarificationQuestion || 'I need more information to proceed. Could you please clarify your request?'
+      );
+      messages.value = [...messages.value, clarificationMessage];
+      isTyping.value = false;
+      await scrollToBottom();
+      return;
     }
 
-    // Check if any files were created (write tool) or notes added (addNote tool)
-    // and emit event to open the file in the editor and reveal it in the sidebar
-    const fileCreationResults = result.toolResults.filter(
-      (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
-    );
-    for (const fileResult of fileCreationResults) {
-      if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
-        const projectId = fileResult.metadata?.projectId || selectedProjectId.value;
-        if (projectId) {
-          emit('file-created', projectId, fileResult.metadata.fileId, fileResult.metadata.fileName);
+    // Handle empty plan (just a conversation - no tools needed)
+    if (plan.steps.length === 0) {
+      const systemPrompt = isGlobalMode.value
+        ? await buildGlobalSystemPrompt()
+        : await buildSystemPrompt(selectedProjectId.value!);
+      
+      // Build messages for LLM
+      const llmMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        { role: 'system', content: systemPrompt },
+        ...messages.value.slice(0, -1).map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+        { role: 'user', content: messageText },
+      ];
+
+      // Stream response directly
+      const response = await chatCompletionStreaming(
+        { messages: llmMessages },
+        (chunk: string, done: boolean) => {
+          if (done) return;
+          streamingContent.value += chunk;
+          scrollToBottom();
         }
-      }
-    }
+      );
 
-    // Check if any project-level or file-level changes occurred
-    // and emit event to refresh the project list and file tree
-    const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
-    const hasChanges = result.toolResults.some(
-      (r) => changeTools.includes(r.tool) && r.success
-    );
-    if (hasChanges) {
-      emit('projects-changed');
-    }
-
-    // Add the final assistant message(s) properly through addMessage
-    if (result.responses && result.responses.length > 1) {
-      for (const response of result.responses) {
-        const assistantMessage = addMessage(sessionId.value, 'assistant', response);
-        messages.value = [...messages.value, assistantMessage];
-      }
-    } else {
-      const assistantMessage = addMessage(sessionId.value, 'assistant', result.response);
+      const assistantMessage = addMessage(sessionId.value, 'assistant', response.content);
       messages.value = [...messages.value, assistantMessage];
+      isTyping.value = false;
+      streamingContent.value = '';
+      await scrollToBottom();
+      return;
     }
+
+    // Show plan summary to user
+    const planSummaryMessage = addMessage(
+      sessionId.value,
+      'assistant',
+      `I've created an execution plan:\n\n**${plan.summary}**\n\nPlease review the steps below and click "Execute Plan" to proceed.`
+    );
+    messages.value = [...messages.value, planSummaryMessage];
+
+    // Set pending plan for user confirmation
+    pendingPlan.value = plan;
+    
+    // Don't reset isTyping - keep it true while waiting for confirmation
+    // This prevents the user from sending another message
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to get response';
     const assistantMessage = addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
     messages.value = [...messages.value, assistantMessage];
-  } finally {
     isTyping.value = false;
+  } finally {
     executionSteps.value = [];
     streamingContent.value = '';
     await scrollToBottom();
@@ -668,6 +736,100 @@ function handleCancelUpdate() {
   }
   activePreview.value = null;
   scrollToBottom();
+}
+
+// Execution plan handlers
+function handleCancelPlan() {
+  if (pendingPlan.value) {
+    const cancelMessage = addMessage(
+      sessionId.value,
+      'assistant',
+      'Execution plan cancelled.'
+    );
+    messages.value = [...messages.value, cancelMessage];
+  }
+  pendingPlan.value = null;
+  isTyping.value = false;
+  scrollToBottom();
+}
+
+async function handleExecutePlan() {
+  if (!pendingPlan.value) return;
+
+  isExecutingPlan.value = true;
+  
+  try {
+    const result = await runPlannerFlow(
+      pendingPlan.value,
+      selectedProjectId.value,
+      {
+        onStepUpdate: (step, index, total) => {
+          // Update the step status in the pending plan for UI feedback
+          if (pendingPlan.value) {
+            const planStep = pendingPlan.value.steps.find(s => s.id === step.id);
+            if (planStep) {
+              planStep.status = step.status;
+              planStep.error = step.error;
+            }
+          }
+          currentPlanStep.value = { step, index, total };
+          scrollToBottom();
+        },
+      }
+    );
+
+    // Clear the pending plan
+    pendingPlan.value = null;
+    currentPlanStep.value = null;
+
+    // Add the final response
+    const assistantMessage = addMessage(sessionId.value, 'assistant', result.response);
+    messages.value = [...messages.value, assistantMessage];
+
+    // Check for file creations and emit events
+    const fileCreationResults = result.toolResults.filter(
+      (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
+    );
+    for (const fileResult of fileCreationResults) {
+      if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
+        const projectId = fileResult.metadata?.projectId || selectedProjectId.value;
+        if (projectId) {
+          emit('file-created', projectId, fileResult.metadata.fileId, fileResult.metadata.fileName);
+        }
+      }
+    }
+
+    // Check for project/file changes
+    const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
+    const hasChanges = result.toolResults.some(
+      (r) => changeTools.includes(r.tool) && r.success
+    );
+    if (hasChanges) {
+      emit('projects-changed');
+    }
+
+    // Check for updateFile previews
+    const updateFileResult = result.toolResults.find(
+      (r) => r.tool === 'updateFile' && r.success && (r as { preview?: UpdateFilePreview }).preview
+    );
+    if (updateFileResult) {
+      const preview = (updateFileResult as { preview?: UpdateFilePreview }).preview;
+      if (preview) {
+        activePreview.value = preview;
+      }
+    }
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to execute plan';
+    const assistantMessage = addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
+    messages.value = [...messages.value, assistantMessage];
+  } finally {
+    isExecutingPlan.value = false;
+    pendingPlan.value = null;
+    currentPlanStep.value = null;
+    isTyping.value = false;
+    await scrollToBottom();
+  }
 }
 
 function getDiffLineClass(type: DiffLine['type']): string {
@@ -1319,6 +1481,213 @@ defineExpose({ selectProject, selectGlobalMode });
 }
 
 .diff-content::-webkit-scrollbar-thumb {
+  background: var(--hn-border-default);
+  border-radius: 3px;
+}
+
+/* Execution Plan Styles */
+.execution-plan {
+  margin: 12px 0;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-strong);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.plan-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--hn-purple-dark), var(--hn-purple));
+  color: #ffffff;
+}
+
+.plan-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.plan-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.plan-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.9;
+}
+
+.plan-duration {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.plan-summary {
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  color: var(--hn-text-primary);
+  background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-default);
+  line-height: 1.5;
+}
+
+.plan-steps {
+  padding: 8px 0;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.plan-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  transition: background 0.15s ease;
+}
+
+.plan-step:hover {
+  background: var(--hn-bg-hover);
+}
+
+.plan-step.running {
+  background: rgba(138, 180, 248, 0.1);
+}
+
+.plan-step.completed {
+  opacity: 0.7;
+}
+
+.plan-step.failed {
+  background: rgba(255, 82, 82, 0.1);
+}
+
+.step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--hn-bg-deep);
+  color: var(--hn-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.plan-step.running .step-number {
+  background: var(--hn-purple);
+  color: #ffffff;
+}
+
+.plan-step.completed .step-number {
+  background: var(--hn-green);
+  color: #ffffff;
+}
+
+.plan-step.failed .step-number {
+  background: #ff5252;
+  color: #ffffff;
+}
+
+.step-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.step-detail {
+  font-size: 11px;
+  color: var(--hn-purple);
+  opacity: 0.9;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.step-description {
+  flex: 1;
+  color: var(--hn-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-spinner-small {
+  width: 14px;
+  height: 14px;
+  --color: var(--hn-purple-light);
+}
+
+.step-status-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.step-status-icon.done {
+  color: var(--hn-green);
+}
+
+.step-status-icon.error {
+  color: #ff5252;
+}
+
+.plan-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--hn-bg-surface);
+  border-top: 1px solid var(--hn-border-default);
+}
+
+.plan-actions ion-button {
+  --border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.plan-executing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--hn-bg-surface);
+  border-top: 1px solid var(--hn-border-default);
+  color: var(--hn-text-secondary);
+  font-size: 0.85rem;
+}
+
+.plan-executing ion-spinner {
+  width: 18px;
+  height: 18px;
+  --color: var(--hn-purple);
+}
+
+/* Plan steps scrollbar */
+.plan-steps::-webkit-scrollbar {
+  width: 6px;
+}
+
+.plan-steps::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.plan-steps::-webkit-scrollbar-thumb {
   background: var(--hn-border-default);
   border-radius: 3px;
 }
