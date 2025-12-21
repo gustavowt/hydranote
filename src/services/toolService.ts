@@ -77,344 +77,13 @@ export interface ExecutionStep {
 export type ExecutionLogCallback = (steps: ExecutionStep[]) => void;
 
 // ============================================
-// Router LLM
+// ARCHITECTURE NOTE:
+// The chat flow uses a Planner → Executor → Checker pattern:
+// 1. createExecutionPlan() - Creates a plan with tool sequence
+// 2. executePlan() - Executes tools with context passing between steps
+// 3. checkCompletion() - Validates all tasks are complete
+// 4. runPlannerFlow() - Orchestrates the full flow with re-planning support
 // ============================================
-
-const ROUTER_PROMPT = `You are a planning assistant. Analyze the user's request and create an execution plan with the tools needed.
-
-Available tools:
-- read: Read a specific file's full content. Use when user wants to see, open, view, or examine a file.
-- search: Semantic search across all documents. Use when user asks questions about content, wants to find specific information, or asks "what does it say about...". Keywords: search, find, buscar, encontrar, procure, o que diz sobre, what does it say about.
-- summarize: Create a summary of a document. Use when user wants a summary, overview, or TL;DR.
-- write: **CREATE A NEW FILE** in PDF, DOCX, or Markdown format. Use when user wants to CREATE, WRITE, GENERATE, or PRODUCE a new file/document. This tool CREATES and SAVES files to the project. Keywords: create file, write file, generate file, make file, create document, generate PDF, write report, save as file, escreva, crie, gerar, criar arquivo, criar documento, gerar pdf, gerar docx, make a new file.
-- addNote: Create and save a quick note in the project. Use when user wants to save a quick note, take notes, or add information. Keywords: add note, take note, save note, criar nota, salvar nota, anotar, lembrete, remember this.
-- updateFile: Update or modify a specific section of an EXISTING file (Markdown or DOCX only). Use when user wants to edit, update, modify, or change an EXISTING file. Keywords: update, edit, modify, change, replace, insert, atualizar, editar, modificar.
-- createProject: Create a new project. Use when user wants to create, start, or set up a new project. Keywords: create project, new project, criar projeto, novo projeto.
-- moveFile: Move a file from one project to another. Use when user wants to move, transfer, or relocate a file between projects. Keywords: move file, transfer file, mover arquivo.
-- deleteFile: Delete a file from a project. Use when user wants to delete, remove, or discard a file. Keywords: delete file, remove file, apagar arquivo, deletar arquivo, excluir arquivo.
-- deleteProject: Delete an entire project and all its files. Use when user wants to delete, remove, or discard a project. Keywords: delete project, remove project, apagar projeto, deletar projeto, excluir projeto.
-- webResearch: Search the web for current/external information not in the project documents. Use when user needs information from the internet, current news, external references, latest updates, or information not available in indexed documents. Keywords: search the web, web search, google, look up online, find on internet, current news, latest info, external info, what's new about, recent updates, pesquisar na web, buscar online, pesquisa externa, notícias sobre.
-
-IMPORTANT: You can chain multiple tools for complex requests. Plan the sequence logically.
-
-Respond ONLY with a JSON object in one of these formats:
-1. Tools needed: {"tools": [{"name": "toolName", "params": {"paramName": "value"}}]}
-2. No tools needed: {"tools": []}
-3. Clarification needed: {"tools": [], "clarification": "your question to the user"}
-
-FALLBACK RULES - Use clarification when:
-- The user's intent is ambiguous or unclear
-- User references a file that doesn't exist in the project
-- User's request could be interpreted multiple ways
-- Not enough information to execute the request
-
-Examples:
-
-Single tool:
-- "Read the contract.pdf" → {"tools": [{"name": "read", "params": {"file": "contract.pdf"}}]}
-- "Summarize the agreement" → {"tools": [{"name": "summarize", "params": {"file": "agreement"}}]}
-- "Search for payment terms" → {"tools": [{"name": "search", "params": {"query": "payment terms"}}]}
-- "Buscar informações sobre contrato" → {"tools": [{"name": "search", "params": {"query": "contrato"}}]}
-- "O que diz sobre garantias?" → {"tools": [{"name": "search", "params": {"query": "garantias"}}]}
-- "What does it say about deadlines?" → {"tools": [{"name": "search", "params": {"query": "deadlines"}}]}
-
-File creation (write tool - CREATES files in the project):
-- "Create a new file called notes.md" → {"tools": [{"name": "write", "params": {"format": "md", "title": "notes"}}]}
-- "Create a table of contents at the root" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Table of Contents", "path": ""}}]}
-- "Create a file in the docs folder" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Document", "path": "docs"}}]}
-- "Write a report in docs/reports" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Report", "path": "docs/reports"}}]}
-- "Create a markdown file with the summary" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Summary"}}]}
-- "Generate a DOCX document" → {"tools": [{"name": "write", "params": {"format": "docx", "title": "Document"}}]}
-- "Crie um arquivo na raiz do projeto" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Documento", "path": ""}}]}
-- "Gerar um arquivo na pasta documentos" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Arquivo", "path": "documentos"}}]}
-- "Make a new file with this content" → {"tools": [{"name": "write", "params": {"format": "md", "title": "New File"}}]}
-- "Save this as a file" → {"tools": [{"name": "write", "params": {"format": "md", "title": "Saved Content"}}]}
-
-Notes:
-- "Add a note about the meeting" → {"tools": [{"name": "addNote", "params": {"content": "Meeting notes about the project..."}}]}
-- "Save this note: The deadline is next Friday" → {"tools": [{"name": "addNote", "params": {"content": "The deadline is next Friday"}}]}
-- "Criar nota: reunião com cliente amanhã" → {"tools": [{"name": "addNote", "params": {"content": "reunião com cliente amanhã"}}]}
-- "Take a note about the requirements" → {"tools": [{"name": "addNote", "params": {"content": "Requirements discussion..."}}]}
-- "Anotar: precisamos revisar o contrato" → {"tools": [{"name": "addNote", "params": {"content": "precisamos revisar o contrato"}}]}
-
-UpdateFile tool (editing existing files - Markdown/DOCX only):
-- "Update the introduction section in document.md" → {"tools": [{"name": "updateFile", "params": {"file": "document.md", "section": "introduction", "operation": "replace", "newContent": "..."}}]}
-- "Add a conclusion to the report.md" → {"tools": [{"name": "updateFile", "params": {"file": "report.md", "section": "end", "operation": "insert_after", "newContent": "..."}}]}
-- "Replace the 'Requirements' section with new text" → {"tools": [{"name": "updateFile", "params": {"file": "...", "section": "Requirements", "operation": "replace"}}]}
-- "Insert a new paragraph before the Summary in notes.md" → {"tools": [{"name": "updateFile", "params": {"file": "notes.md", "section": "Summary", "operation": "insert_before"}}]}
-- "Atualizar a seção de metodologia no documento" → {"tools": [{"name": "updateFile", "params": {"file": "documento.md", "section": "metodologia", "operation": "replace"}}]}
-- "Modificar o parágrafo sobre prazos" → {"tools": [{"name": "updateFile", "params": {"file": "...", "section": "prazos", "operation": "replace"}}]}
-- "Change the deadline information in project.docx" → {"tools": [{"name": "updateFile", "params": {"file": "project.docx", "section": "deadline", "operation": "replace"}}]}
-
-Multiple tools (complex queries):
-- "Read both the contract and the proposal" → {"tools": [{"name": "read", "params": {"file": "contract"}}, {"name": "read", "params": {"file": "proposal"}}]}
-- "Compare the two reports" → {"tools": [{"name": "read", "params": {"file": "report1"}}, {"name": "read", "params": {"file": "report2"}}]}
-- "Summarize all my documents" → {"tools": [{"name": "summarize", "params": {"file": "doc1"}}, {"name": "summarize", "params": {"file": "doc2"}}]}
-- "Read the contract and tell me about payment terms" → {"tools": [{"name": "read", "params": {"file": "contract"}}]}
-
-Chained read + write operations:
-- "Read the last 2 files and create a summary PDF" → {"tools": [{"name": "read", "params": {"file": "file1"}}, {"name": "read", "params": {"file": "file2"}}, {"name": "write", "params": {"format": "pdf", "title": "Summary"}}]}
-- "Summarize document and save as DOCX" → {"tools": [{"name": "summarize", "params": {"file": "document"}}, {"name": "write", "params": {"format": "docx", "title": "Document Summary"}}]}
-
-Project management (global mode):
-- "Create a new project called Research" → {"tools": [{"name": "createProject", "params": {"name": "Research"}}]}
-- "Create project 'Work Notes' with description 'Daily work notes'" → {"tools": [{"name": "createProject", "params": {"name": "Work Notes", "description": "Daily work notes"}}]}
-- "Criar um novo projeto chamado Estudos" → {"tools": [{"name": "createProject", "params": {"name": "Estudos"}}]}
-
-File operations:
-- "Move notes.md from Personal to Work" → {"tools": [{"name": "moveFile", "params": {"file": "notes.md", "fromProject": "Personal", "toProject": "Work"}}]}
-- "Delete old-notes.md" → {"tools": [{"name": "deleteFile", "params": {"file": "old-notes.md"}}]}
-- "Remove the file report.pdf from Project X" → {"tools": [{"name": "deleteFile", "params": {"file": "report.pdf", "project": "Project X"}}]}
-- "Apagar arquivo teste.md" → {"tools": [{"name": "deleteFile", "params": {"file": "teste.md"}}]}
-
-Project deletion (ALWAYS include confirm: "yes" when user explicitly asks to delete):
-- "Delete the project Old Stuff" → {"tools": [{"name": "deleteProject", "params": {"project": "Old Stuff", "confirm": "yes"}}]}
-- "Remove project called Temp" → {"tools": [{"name": "deleteProject", "params": {"project": "Temp", "confirm": "yes"}}]}
-- "Yes, delete project X" → {"tools": [{"name": "deleteProject", "params": {"project": "X", "confirm": "yes"}}]}
-- "Deletar projeto Teste" → {"tools": [{"name": "deleteProject", "params": {"project": "Teste", "confirm": "yes"}}]}
-- "Sim, apagar o projeto" → {"tools": [{"name": "deleteProject", "params": {"project": "...", "confirm": "yes"}}]}
-
-Web research (searching the internet for current/external information):
-- "Search the web for Vue 3 best practices" → {"tools": [{"name": "webResearch", "params": {"query": "Vue 3 best practices"}}]}
-- "What's the latest news about AI?" → {"tools": [{"name": "webResearch", "params": {"query": "latest AI news"}}]}
-- "Look up information about TypeScript 5 features" → {"tools": [{"name": "webResearch", "params": {"query": "TypeScript 5 new features"}}]}
-- "Find on internet how to configure Vite" → {"tools": [{"name": "webResearch", "params": {"query": "Vite configuration guide"}}]}
-- "Pesquisar na web sobre Ionic Capacitor" → {"tools": [{"name": "webResearch", "params": {"query": "Ionic Capacitor"}}]}
-- "Buscar online notícias sobre tecnologia" → {"tools": [{"name": "webResearch", "params": {"query": "technology news"}}]}
-
-Chaining web research with notes:
-- "Search the web for React hooks and save as a note" → {"tools": [{"name": "webResearch", "params": {"query": "React hooks"}}, {"name": "addNote", "params": {"content": "..."}}]}
-
-No tools (use existing context or conversation flow):
-- "Explain the previous answer" → {"tools": []}
-- "Thanks" → {"tools": []}
-- "Hello" → {"tools": []}
-- "Done" → {"tools": []}
-- "Ok" → {"tools": []}
-- "Yes" → {"tools": []}
-- "I uploaded the files" → {"tools": []}
-- "What documents/files do I have?" → {"tools": []} (files are listed in system prompt)
-- "List my files" → {"tools": []} (files are listed in system prompt)
-- "Quais arquivos eu tenho?" → {"tools": []} (files are listed in system prompt)
-
-IMPORTANT: Short acknowledgments ("done", "ok", "yes", "pronto", "feito") after assistant asked for upload or action should NOT trigger clarification - proceed without tools.
-
-Clarification needed (FALLBACK - only when truly ambiguous):
-- "Read it" (no file specified AND no context) → {"tools": [], "clarification": "Which file would you like me to read?"}
-- "Find something" (completely vague) → {"tools": [], "clarification": "What would you like me to search for in the documents?"}
-- "Do something with the files" → {"tools": [], "clarification": "I can read, search, summarize, or generate documents. What would you like me to do?"}
-- "Faça algo" (unclear) → {"tools": [], "clarification": "O que você gostaria que eu fizesse? Posso ler, buscar, resumir ou criar documentos."}`;
-
-// ============================================
-// Continuation Router (Sequential Message Handler)
-// ============================================
-
-/**
- * Prompt for analyzing if tools should be executed after an assistant response
- * Called after the main LLM responds to check if the response implies pending tool execution
- */
-const CONTINUATION_ROUTER_PROMPT = `You are a tool execution analyzer. Your job is to analyze the assistant's latest response and determine if any tools should NOW be executed.
-
-Context: The assistant has access to tools but sometimes it describes what it WILL do instead of actually executing the tool. Your job is to detect when the assistant has committed to an action and extract the tool call that should be executed.
-
-Available tools:
-- read: Read a file's content. Params: {file: "filename"}
-- search: Search documents. Params: {query: "search query"}
-- summarize: Summarize a document. Params: {file: "filename"}
-- write: Create a new file. Params: {format: "md"|"pdf"|"docx", title: "title", content: "content", path: "optional/path"}
-- addNote: Create a quick note. Params: {content: "note content", title: "optional title"}
-- updateFile: Update an existing file. Params: {file: "filename", section: "section name OR special keyword", operation: "replace"|"insert_before"|"insert_after", newContent: "content"}
-  Special section keywords: "end"/"bottom" = append at end of file, "start"/"beginning" = prepend at start of file
-- webResearch: Search the web for information. Params: {query: "search query", maxResults: optional number}
-
-Analyze the assistant's response and respond with JSON:
-{
-  "shouldExecuteTool": boolean,
-  "tools": [{"name": "toolName", "params": {"key": "value"}}],
-  "reasoning": "brief explanation"
-}
-
-Rules:
-1. If assistant says "I will now...", "Let me...", "I'll add...", "I'll create...", "Proceeding to...", "Now, I will...", "Let's proceed", "Let's create", "Let's do that" → Extract the tool and params
-2. If assistant already showed tool results or said "Done", "Created", "Added", "has been updated", "successfully created", "has been saved" → No tools needed
-3. If assistant is asking a question like "Should I proceed?", "Would you like me to...", "Do you want me to..." → No tools needed (asking for confirmation)
-4. For updateFile: Extract the file name, section identifier, operation, and the NEW CONTENT the assistant wrote/composed
-5. For write: Extract format, title, and the FULL CONTENT the assistant composed
-
-IMPORTANT: 
-- Extract the ACTUAL content from the assistant's message
-- If they wrote out new content to add to a file, include ALL of it in newContent
-- Look for markdown content blocks that the assistant composed
-
-Example 1 - Assistant committing to update a file:
-Assistant: "Now, I will add a new section at the end of the file to explain its contents.\n\n## About This File\n\nThis file contains instructions for..."
-→ {"shouldExecuteTool": true, "tools": [{"name": "updateFile", "params": {"file": "document.md", "section": "end", "operation": "insert_after", "newContent": "## About This File\n\nThis file contains instructions for..."}}], "reasoning": "Assistant committed to adding section with specific content"}
-
-Example 2 - Assistant already completed:
-Assistant: "I've added the new section to the file. The file has been updated successfully."
-→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Action already completed"}
-
-Example 3 - Assistant asking for confirmation:
-Assistant: "Here's what I'll add:\n\n## Summary\n...\n\nShould I proceed?"
-→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Assistant is asking for confirmation, not committing to action"}
-
-Example 4 - Assistant committing to action with "Let's proceed":
-Assistant: "I'll create a new Markdown file named 'meeting-notes' with the content you provided. Let's proceed with that."
-→ {"shouldExecuteTool": true, "tools": [{"name": "write", "params": {"format": "md", "title": "meeting-notes", "content": "the content provided"}}], "reasoning": "Assistant is committing to create a file with 'Let's proceed'"}
-
-Example 5 - Assistant just explaining:
-Assistant: "The file contains documentation about server monitoring and database management."
-→ {"shouldExecuteTool": false, "tools": [], "reasoning": "Informational response only"}`;
-
-/**
- * Result from continuation analysis
- */
-export interface ContinuationResult {
-  shouldExecuteTool: boolean;
-  tools: ToolCall[];
-  reasoning: string;
-}
-
-/**
- * Analyze assistant response to determine if tools should be executed
- * Called after LLM generates a response to check for uncommitted tool actions
- */
-export async function analyzeAssistantResponse(
-  assistantResponse: string,
-  conversationHistory: Array<{ role: string; content: string }>,
-  projectFiles: string[],
-): Promise<ContinuationResult> {
-  const filesContext =
-    projectFiles.length > 0
-      ? `\n\nAvailable files in project: ${projectFiles.join(", ")}`
-      : "\n\nNo files in project yet.";
-
-  // Get last few messages for context
-  const recentContext = conversationHistory
-    .slice(-10)
-    .map(
-      (m) =>
-        `${m.role === "user" ? "User" : "Assistant"}: ${m.content.substring(0, 500)}`,
-    )
-    .join("\n\n");
-
-  console.log("[DEBUG-FLOW] analyzeAssistantResponse: sending to LLM...");
-  const response = await chatCompletion({
-    messages: [
-      { role: "system", content: CONTINUATION_ROUTER_PROMPT + filesContext },
-      {
-        role: "user",
-        content: `Recent conversation:\n${recentContext}\n\n---\n\nLatest assistant response to analyze:\n${assistantResponse}`,
-      },
-    ],
-    temperature: 0,
-    maxTokens: 1000, // Higher limit to capture content
-  });
-  console.log("[DEBUG-FLOW] analyzeAssistantResponse: LLM raw response:", response.content);
-
-  try {
-    let jsonStr = response.content.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-    console.log("[DEBUG-FLOW] analyzeAssistantResponse: parsed JSON string:", jsonStr);
-
-    const parsed = JSON.parse(jsonStr);
-    console.log("[DEBUG-FLOW] analyzeAssistantResponse: parsed object:", parsed);
-
-    const tools: ToolCall[] = (parsed.tools || []).map(
-      (t: { name: string; params?: Record<string, string> }) => ({
-        tool: t.name as ToolName,
-        params: t.params || {},
-      }),
-    );
-
-    return {
-      shouldExecuteTool: parsed.shouldExecuteTool || false,
-      tools,
-      reasoning: parsed.reasoning || "",
-    };
-  } catch (e) {
-    console.log("[DEBUG-FLOW] analyzeAssistantResponse: PARSE ERROR:", e);
-    return {
-      shouldExecuteTool: false,
-      tools: [],
-      reasoning: "Failed to parse continuation analysis",
-    };
-  }
-}
-
-/**
- * Result from routing a message
- */
-export interface RoutingResult {
-  tools: ToolCall[];
-  clarification?: string;
-}
-
-/**
- * Route user message through router LLM to determine tool usage
- */
-export async function routeMessage(
-  userMessage: string,
-  projectFiles: string[],
-  conversationContext?: string,
-): Promise<RoutingResult> {
-  const filesContext =
-    projectFiles.length > 0
-      ? `\n\nAvailable files in project: ${projectFiles.join(", ")}`
-      : "\n\nNo files uploaded yet.";
-
-  const contextInfo = conversationContext
-    ? `\n\nRecent conversation context:\n${conversationContext}`
-    : "";
-  console.log("Routing message with context:", contextInfo);
-
-  const response = await chatCompletion({
-    messages: [
-      { role: "system", content: ROUTER_PROMPT + filesContext + contextInfo },
-      { role: "user", content: userMessage },
-    ],
-    temperature: 0,
-    maxTokens: 300,
-  });
-
-  try {
-    // Extract JSON from response (handle markdown code blocks)
-    let jsonStr = response.content.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    const parsed = JSON.parse(jsonStr);
-
-    // Check for clarification request
-    if (parsed.clarification && typeof parsed.clarification === "string") {
-      return {
-        tools: [],
-        clarification: parsed.clarification,
-      };
-    }
-
-    if (!parsed.tools || !Array.isArray(parsed.tools)) {
-      return { tools: [] };
-    }
-
-    const tools = parsed.tools.map(
-      (t: { name: string; params?: Record<string, string> }) => ({
-        tool: t.name as ToolName,
-        params: t.params || {},
-      }),
-    );
-
-    return { tools };
-  } catch {
-    // If parsing fails, no tools needed
-    return { tools: [] };
-  }
-}
 
 // ============================================
 // Read Tool Implementation
@@ -1524,6 +1193,7 @@ export async function executeWebResearchTool(
     const result = await webResearch(query, {
       maxResults: params.maxResults,
       maxChunks: params.maxChunks,
+      onProgress: params.onProgress,
     });
 
     if (result.error) {
@@ -2441,6 +2111,42 @@ export async function executeTool(
   projectId: string | undefined,
   call: ToolCall,
   userMessage?: string,
+  onProgress?: (status: string) => void,
+): Promise<ToolResult> {
+  console.log(`[TOOL:${call.tool}] ========== START ==========`);
+  console.log(`[TOOL:${call.tool}] projectId:`, projectId);
+  console.log(`[TOOL:${call.tool}] params:`, JSON.stringify(call.params, null, 2));
+  
+  let result: ToolResult;
+  const startTime = Date.now();
+  
+  try {
+    result = await executeToolInternal(projectId, call, userMessage, onProgress);
+  } catch (error) {
+    console.error(`[TOOL:${call.tool}] EXCEPTION:`, error);
+    result = {
+      success: false,
+      tool: call.tool,
+      error: error instanceof Error ? error.message : "Unknown error occurred",
+    };
+  }
+  
+  const duration = Date.now() - startTime;
+  console.log(`[TOOL:${call.tool}] Result - success:`, result.success);
+  if (!result.success) {
+    console.log(`[TOOL:${call.tool}] Error:`, result.error);
+  }
+  console.log(`[TOOL:${call.tool}] Duration: ${duration}ms`);
+  console.log(`[TOOL:${call.tool}] ========== END ==========`);
+  
+  return result;
+}
+
+async function executeToolInternal(
+  projectId: string | undefined,
+  call: ToolCall,
+  userMessage?: string,
+  onProgress?: (status: string) => void,
 ): Promise<ToolResult> {
   switch (call.tool) {
     case "read": {
@@ -2705,6 +2411,7 @@ export async function executeTool(
         maxChunks: call.params.maxChunks
           ? parseInt(call.params.maxChunks)
           : undefined,
+        onProgress,
       });
 
     default:
@@ -2774,25 +2481,40 @@ export interface ParsedToolCalls {
  * Looks for ```tool_call blocks and extracts the JSON
  */
 export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
+  console.log("[PARSE] Parsing response for tool_call blocks...");
+  console.log("[PARSE] Content length:", content.length);
+  
   const toolCalls: ToolCall[] = [];
 
   // Pattern to match ```tool_call ... ``` blocks
   const toolCallPattern = /```tool_call\s*\n?([\s\S]*?)```/g;
 
+  // Check if content contains the pattern at all
+  const hasPattern = content.includes("```tool_call");
+  console.log("[PARSE] Contains ```tool_call pattern:", hasPattern);
+
   let match;
+  let matchCount = 0;
   while ((match = toolCallPattern.exec(content)) !== null) {
+    matchCount++;
     const jsonStr = match[1].trim();
+    console.log(`[PARSE] Match ${matchCount} - Raw JSON:`, jsonStr.substring(0, 200));
     try {
       const parsed = JSON.parse(jsonStr);
+      console.log(`[PARSE] Match ${matchCount} - Parsed tool:`, parsed.tool);
       if (parsed.tool && typeof parsed.tool === "string") {
         toolCalls.push({
           tool: parsed.tool as ToolName,
           params: parsed.params || {},
         });
+        console.log(`[PARSE] Match ${matchCount} - Added to toolCalls`);
+      } else {
+        console.log(`[PARSE] Match ${matchCount} - Missing or invalid tool property`);
       }
-    } catch {
+    } catch (e) {
       // Invalid JSON in tool call block, skip it
-      console.warn("Failed to parse tool call JSON:", jsonStr);
+      console.warn(`[PARSE] Match ${matchCount} - Failed to parse JSON:`, e);
+      console.warn(`[PARSE] Match ${matchCount} - JSON string was:`, jsonStr);
     }
   }
 
@@ -2802,6 +2524,10 @@ export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
     .replace(/\n{3,}/g, "\n\n") // Clean up excessive newlines
     .trim();
 
+  console.log("[PARSE] Total matches found:", matchCount);
+  console.log("[PARSE] Valid tool calls:", toolCalls.length);
+  console.log("[PARSE] hasToolCalls:", toolCalls.length > 0);
+
   return {
     textContent,
     toolCalls,
@@ -2810,729 +2536,818 @@ export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
 }
 
 // ============================================
-// Orchestrated Execution
+// Planner → Executor → Checker Flow
 // ============================================
 
-export interface OrchestratedResult {
-  /** All responses from the assistant (may be multiple for multi-step requests) */
-  responses: string[];
-  /** Final concatenated response */
-  response: string;
-  toolsUsed: ToolCall[];
-  toolResults: ToolResult[];
-  /** Whether a clarification was requested */
-  clarificationRequested?: boolean;
+import type {
+  ExecutionPlan,
+  PlanStep,
+  CompletedStep,
+  FailedStep,
+  ExecutionResult,
+  CompletionCheck,
+  PlanStepCallback,
+  ExecutePlanOptions,
+  PlannerFlowState,
+} from "../types";
+
+// ============================================
+// Planner Prompt
+// ============================================
+
+const PLANNER_PROMPT = `You are an AI execution planner. Analyze the user's request and create a detailed execution plan.
+
+Your job is to:
+1. Understand what the user wants to accomplish
+2. Break it down into specific tool calls that need to be executed IN ORDER
+3. Identify dependencies between steps (what needs to happen before what)
+4. Identify what context each step needs from previous steps
+
+Available tools:
+- read: Read a file's full content. Params: {file: "filename", project?: "project name"}
+- search: Semantic search across documents. Params: {query: "search query", project?: "project name"}
+- summarize: Create a summary of a document. Params: {file: "filename", project?: "project name"}
+- write: Create a NEW file (MD/PDF/DOCX). Params: {format: "md"|"pdf"|"docx", title: "filename", content: "content", path?: "directory", project?: "project name"}
+- addNote: Create and save a quick note. Params: {content: "note content", title?: "title", project?: "project name"}
+- updateFile: Update an existing file. Params: {file: "filename", section: "section to find", operation: "replace"|"insert_before"|"insert_after", newContent: "new content"}
+- createProject: Create a new project. Params: {name: "project name", description?: "description"}
+- moveFile: Move a file between projects. Params: {file: "filename", fromProject: "source", toProject: "destination"}
+- deleteFile: Delete a file. Params: {file: "filename", project?: "project name"}
+- deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
+- webResearch: Search the web for information. Params: {query: "search query", maxResults?: number}
+
+IMPORTANT RULES:
+1. Order matters! If creating a project then adding files, createProject MUST come first
+2. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
+3. For content generation (write/addNote), the Executor will generate content based on accumulated context
+4. If the user's request is ambiguous or missing critical info, set needsClarification: true
+
+Context propagation examples:
+- webResearch → write: The write step needs webResearchResults from the webResearch step
+- createProject → write: The write step needs projectId from createProject
+- search → addNote: The addNote step needs searchResults from search
+
+Respond ONLY with a JSON object:
+{
+  "summary": "Brief description of what will be done",
+  "needsClarification": false,
+  "clarificationQuestion": null,
+  "estimatedDuration": "~X seconds",
+  "steps": [
+    {
+      "id": "step-1",
+      "tool": "toolName",
+      "params": {"key": "value"},
+      "description": "Human readable description",
+      "dependsOn": [],
+      "contextNeeded": [],
+      "providesContext": ["contextKey1", "contextKey2"]
+    }
+  ]
 }
 
-/**
- * Completion check prompt - asks the LLM if the user's request is fully satisfied
- */
-const COMPLETION_CHECK_PROMPT = `Based on the conversation, is the user's original request FULLY completed?
-Consider: Did all requested actions finish? Were all requested outputs delivered?
+If clarification is needed:
+{
+  "summary": "",
+  "needsClarification": true,
+  "clarificationQuestion": "What specific question to ask the user?",
+  "steps": []
+}`;
 
-Respond with ONLY one word:
-- "COMPLETE" if everything the user asked for has been done
-- "INCOMPLETE" if there are still pending actions or outputs to deliver`;
+// ============================================
+// Checker Prompt
+// ============================================
+
+const CHECKER_PROMPT = `You are a completion checker. Your job is to verify if the user's original request has been fully satisfied.
+
+Compare the original request against the execution results and determine:
+1. What tasks were requested?
+2. What tasks were completed successfully?
+3. What tasks are still missing or failed?
+4. Should the system re-plan to complete missing tasks?
+
+Respond ONLY with a JSON object:
+{
+  "isComplete": boolean,
+  "completedTasks": ["task 1 description", "task 2 description"],
+  "missingTasks": ["missing task description"],
+  "shouldReplan": boolean,
+  "replanContext": "Context for replanning if needed",
+  "reasoning": "Brief explanation of your assessment"
+}
+
+Rules:
+- isComplete = true only if ALL user requests are satisfied
+- shouldReplan = true if there are missing tasks that can potentially be completed
+- shouldReplan = false if the missing tasks are due to user error or impossible requests
+- Be strict: if user asked for 3 files and only 2 were created, isComplete = false`;
+
+// ============================================
+// Planner Implementation
+// ============================================
 
 /**
- * Check if the user's request is complete
+ * Create an execution plan from a user message
  */
-async function isRequestComplete(
-  originalRequest: string,
-  conversationSoFar: Array<{ role: string; content: string }>,
-  toolResults: ToolResult[],
-): Promise<boolean> {
-  const context = conversationSoFar
-    .map((m) => `${m.role}: ${m.content}`)
-    .join("\n\n");
-  const toolSummary = toolResults
-    .map((r) => `${r.tool}: ${r.success ? "success" : "failed"}`)
-    .join(", ");
+export async function createExecutionPlan(
+  userMessage: string,
+  projectId: string | undefined,
+  projectFiles: string[],
+  conversationContext?: string,
+  replanContext?: string,
+): Promise<ExecutionPlan> {
+  const filesContext =
+    projectFiles.length > 0
+      ? `\n\nAvailable files in project: ${projectFiles.join(", ")}`
+      : "\n\nNo files uploaded yet.";
+
+  const contextInfo = conversationContext
+    ? `\n\nRecent conversation context:\n${conversationContext}`
+    : "";
+
+  const replanInfo = replanContext
+    ? `\n\n[REPLANNING] Previous execution was incomplete. Context:\n${replanContext}`
+    : "";
+
+  const projectInfo = projectId
+    ? `\n\nCurrent project ID: ${projectId}`
+    : "\n\nGlobal mode: No specific project selected. User may want to create a project first.";
 
   const response = await chatCompletion({
     messages: [
-      { role: "system", content: COMPLETION_CHECK_PROMPT },
       {
-        role: "user",
-        content: `Original request: "${originalRequest}"\n\nTools executed: ${toolSummary || "none"}\n\nConversation:\n${context}`,
+        role: "system",
+        content: PLANNER_PROMPT + filesContext + projectInfo + contextInfo + replanInfo,
       },
+      { role: "user", content: userMessage },
     ],
     temperature: 0,
-    maxTokens: 10,
+    maxTokens: 2000,
   });
 
-  return response.content.trim().toUpperCase().includes("COMPLETE");
+  try {
+    let jsonStr = response.content.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+
+    const parsed = JSON.parse(jsonStr);
+
+    const plan: ExecutionPlan = {
+      id: crypto.randomUUID(),
+      summary: parsed.summary || "",
+      steps: (parsed.steps || []).map((step: Partial<PlanStep>, index: number) => ({
+        id: step.id || `step-${index + 1}`,
+        tool: step.tool as ToolName,
+        params: step.params || {},
+        description: step.description || `Execute ${step.tool}`,
+        dependsOn: step.dependsOn || [],
+        contextNeeded: step.contextNeeded || [],
+        providesContext: step.providesContext || [],
+        status: "pending" as const,
+      })),
+      needsClarification: parsed.needsClarification || false,
+      clarificationQuestion: parsed.clarificationQuestion,
+      estimatedDuration: parsed.estimatedDuration,
+      originalQuery: userMessage,
+      createdAt: new Date(),
+    };
+
+    return plan;
+  } catch (error) {
+    console.error("[PLANNER] Failed to parse plan:", error, response.content);
+    
+    // Return a plan with clarification needed
+    return {
+      id: crypto.randomUUID(),
+      summary: "",
+      steps: [],
+      needsClarification: true,
+      clarificationQuestion: "I couldn't understand your request. Could you please rephrase what you'd like me to do?",
+      originalQuery: userMessage,
+      createdAt: new Date(),
+    };
+  }
+}
+
+// ============================================
+// Executor Implementation
+// ============================================
+
+/**
+ * Tool icon mapping for UI
+ */
+export function getToolIcon(tool: ToolName): string {
+  const icons: Record<ToolName, string> = {
+    read: "📖",
+    search: "🔍",
+    summarize: "📋",
+    write: "📝",
+    addNote: "📌",
+    updateFile: "✏️",
+    createProject: "📁",
+    moveFile: "📦",
+    deleteFile: "🗑️",
+    deleteProject: "🗑️",
+    webResearch: "🌐",
+  };
+  return icons[tool] || "⚙️";
 }
 
 /**
- * Execute the full tool-assisted chat flow with logging
- * Supports both router-based tool detection AND inline tool calls from LLM response
- * Also includes checkpoint analysis for sequential message handling (confirmations)
- * @param projectId - Project ID, or undefined for global mode
- * @param onStreamChunk - Optional callback for streaming response chunks
+ * Extract context from a tool result for subsequent steps
  */
-export async function orchestrateToolExecution(
-  projectId: string | undefined,
-  userMessage: string,
-  systemPrompt: string,
-  conversationHistory: Array<{ role: string; content: string }>,
-  projectFiles: string[],
-  onStepUpdate?: ExecutionLogCallback,
-  onStreamChunk?: LLMStreamCallback,
-): Promise<OrchestratedResult> {
-  console.log("[DEBUG-FLOW] ========== orchestrateToolExecution START ==========");
-  console.log("[DEBUG-FLOW] Input:", {
-    projectId,
-    userMessage: userMessage.substring(0, 100) + (userMessage.length > 100 ? "..." : ""),
-    conversationHistoryLength: conversationHistory.length,
-    projectFilesCount: projectFiles.length,
-    projectFiles: projectFiles.slice(0, 5),
+function extractContextFromResult(
+  tool: ToolName,
+  result: ToolResult,
+  params: Record<string, string>,
+): Record<string, unknown> {
+  const context: Record<string, unknown> = {};
+
+  if (!result.success) {
+    return context;
+  }
+
+  switch (tool) {
+    case "webResearch":
+      context.webResearchResults = result.data;
+      context.webResearchSources = result.metadata;
+      break;
+
+    case "createProject":
+      context.projectId = result.metadata?.projectId;
+      context.projectName = params.name;
+      break;
+
+    case "write":
+    case "addNote":
+      context.lastCreatedFileId = result.metadata?.fileId;
+      context.lastCreatedFileName = result.metadata?.fileName;
+      context.lastCreatedProjectId = result.metadata?.projectId;
+      break;
+
+    case "read":
+      context.fileContent = result.data;
+      context.readFileName = result.metadata?.fileName;
+      break;
+
+    case "search":
+      context.searchResults = result.data;
+      break;
+
+    case "summarize":
+      context.summary = result.data;
+      context.summarizedFileName = result.metadata?.fileName;
+      break;
+
+    default:
+      // Store generic result data
+      if (result.data) {
+        context[`${tool}Result`] = result.data;
+      }
+      if (result.metadata) {
+        Object.assign(context, result.metadata);
+      }
+  }
+
+  return context;
+}
+
+/**
+ * Enrich step params with context from previous steps
+ */
+function enrichParamsWithContext(
+  step: PlanStep,
+  accumulatedContext: Record<string, unknown>,
+): Record<string, string> {
+  const enrichedParams = { ...step.params };
+
+  // If step needs projectId and we have it from context
+  if (
+    !enrichedParams.project &&
+    !enrichedParams.projectId &&
+    accumulatedContext.projectId
+  ) {
+    enrichedParams.project = String(accumulatedContext.projectId);
+  }
+
+  // If step needs content from web research
+  if (
+    step.contextNeeded?.includes("webResearchResults") &&
+    accumulatedContext.webResearchResults &&
+    !enrichedParams.content
+  ) {
+    // For write/addNote, we'll generate content based on web research
+    enrichedParams._webContext = String(accumulatedContext.webResearchResults);
+  }
+
+  // If step needs search results
+  if (
+    step.contextNeeded?.includes("searchResults") &&
+    accumulatedContext.searchResults
+  ) {
+    enrichedParams._searchContext = String(accumulatedContext.searchResults);
+  }
+
+  return enrichedParams;
+}
+
+/**
+ * Generate content for write/addNote tools when content needs to be created
+ * based on accumulated context
+ */
+async function generateContentFromContext(
+  step: PlanStep,
+  accumulatedContext: Record<string, unknown>,
+  originalQuery: string,
+): Promise<string> {
+  // Build context for content generation
+  const contextParts: string[] = [];
+
+  if (accumulatedContext.webResearchResults) {
+    contextParts.push(`Web Research Results:\n${accumulatedContext.webResearchResults}`);
+  }
+
+  if (accumulatedContext.searchResults) {
+    contextParts.push(`Search Results:\n${accumulatedContext.searchResults}`);
+  }
+
+  if (accumulatedContext.fileContent) {
+    contextParts.push(`File Content:\n${accumulatedContext.fileContent}`);
+  }
+
+  if (accumulatedContext.summary) {
+    contextParts.push(`Summary:\n${accumulatedContext.summary}`);
+  }
+
+  if (contextParts.length === 0) {
+    // No context to generate from, use the step description
+    return step.params.content || step.description;
+  }
+
+  const response = await chatCompletion({
+    messages: [
+      {
+        role: "system",
+        content: `You are a content generator. Based on the provided context, create content for a ${step.tool === "write" ? "document" : "note"}.
+        
+The content should be well-structured, use appropriate markdown formatting, and be relevant to the user's original request.
+
+Original user request: ${originalQuery}
+Step description: ${step.description}
+Title: ${step.params.title || "Untitled"}
+
+Generate ONLY the content, no explanations or meta-commentary.`,
+      },
+      {
+        role: "user",
+        content: contextParts.join("\n\n---\n\n"),
+      },
+    ],
+    temperature: 0.7,
+    maxTokens: 4000,
   });
 
-  const steps: ExecutionStep[] = [];
-  const allResponses: string[] = [];
-  const allToolCalls: ToolCall[] = [];
-  const allToolResults: ToolResult[] = [];
-  const failedToolSignatures = new Set<string>(); // Track failed tool calls to prevent retry loops
+  return response.content;
+}
 
-  const updateStep = (step: ExecutionStep) => {
-    const idx = steps.findIndex((s) => s.id === step.id);
-    if (idx >= 0) {
-      steps[idx] = step;
-    } else {
-      steps.push(step);
-    }
-    onStepUpdate?.(steps);
+/**
+ * Execute a plan step by step with context passing
+ */
+export async function executePlan(
+  plan: ExecutionPlan,
+  projectId: string | undefined,
+  options: ExecutePlanOptions = {},
+): Promise<ExecutionResult> {
+  const { onStepUpdate, onStreamChunk, stopOnFailure = false } = options;
+
+  const startTime = Date.now();
+  const completedSteps: CompletedStep[] = [];
+  const failedSteps: FailedStep[] = [];
+  const accumulatedContext: Record<string, unknown> = {
+    projectId,
   };
 
-  // Build initial messages array
-  const messages: Array<{
-    role: "system" | "user" | "assistant";
-    content: string;
-  }> = [
-    { role: "system", content: systemPrompt },
-    ...conversationHistory.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    })),
-    { role: "user", content: userMessage },
-  ];
+  console.log("[EXECUTOR] Starting plan execution:", plan.id);
+  console.log("[EXECUTOR] Steps count:", plan.steps.length);
 
-  const MAX_ITERATIONS = 5;
-  let iteration = 0;
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i];
+    const stepStartTime = Date.now();
 
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
-    console.log(`[DEBUG-FLOW] ========== ITERATION ${iteration} ==========`);
-    const iterationSuffix = iteration > 1 ? ` (step ${iteration})` : "";
+    // Update step status to running
+    step.status = "running";
+    onStepUpdate?.(step, i, plan.steps.length);
 
-    // Step 1: Router-based tool detection (first iteration only, as a hint)
-    let routerToolCalls: ToolCall[] = [];
+    console.log(`[EXECUTOR] Step ${i + 1}/${plan.steps.length}: ${step.tool} - ${step.description}`);
 
-    if (iteration === 1) {
-      const routingStep: ExecutionStep = {
-        id: `routing-${iteration}`,
-        type: "routing",
-        status: "running",
-        label: `Analyzing request${iterationSuffix}...`,
-        startTime: new Date(),
-      };
-      updateStep(routingStep);
+    // Check dependencies
+    const unmetDependencies = (step.dependsOn || []).filter(
+      (depId) => !completedSteps.some((cs) => cs.stepId === depId),
+    );
 
-      try {
-        // Build conversation context from recent messages (last 4 exchanges)
-        const recentHistory = conversationHistory
-          .slice(-4)
-          .map(
-            (m) =>
-              `${m.role === "user" ? "User" : "Assistant"}: ${m.content.substring(0, 200)}${m.content.length > 200 ? "..." : ""}`,
-          )
-          .join("\n");
+    if (unmetDependencies.length > 0) {
+      console.log("[EXECUTOR] Unmet dependencies:", unmetDependencies);
+      
+      // Check if dependencies failed
+      const failedDeps = unmetDependencies.filter((depId) =>
+        failedSteps.some((fs) => fs.stepId === depId),
+      );
 
-        console.log("[DEBUG-FLOW] Calling routeMessage...");
-        const routingResult = await routeMessage(
-          userMessage,
-          projectFiles,
-          recentHistory,
-        );
-        console.log("[DEBUG-FLOW] routeMessage result:", {
-          toolsCount: routingResult.tools.length,
-          tools: routingResult.tools.map(t => ({ tool: t.tool, params: t.params })),
-          clarification: routingResult.clarification,
+      if (failedDeps.length > 0) {
+        step.status = "skipped";
+        step.error = `Skipped due to failed dependencies: ${failedDeps.join(", ")}`;
+        onStepUpdate?.(step, i, plan.steps.length);
+        
+        failedSteps.push({
+          stepId: step.id,
+          tool: step.tool,
+          error: step.error,
+          recoverable: false,
         });
-
-        // Check if clarification is needed
-        if (routingResult.clarification) {
-          routingStep.status = "completed";
-          routingStep.endTime = new Date();
-          routingStep.detail = "Clarification needed";
-          updateStep(routingStep);
-
-          return {
-            responses: [routingResult.clarification],
-            response: routingResult.clarification,
-            toolsUsed: [],
-            toolResults: [],
-            clarificationRequested: true,
-          };
-        }
-
-        routerToolCalls = routingResult.tools;
-
-        routingStep.status = "completed";
-        routingStep.endTime = new Date();
-        routingStep.detail =
-          routerToolCalls.length > 0
-            ? `Tools to execute: ${routerToolCalls.map((t) => t.tool).join(", ")}`
-            : "Proceeding to LLM";
-        updateStep(routingStep);
-      } catch {
-        routingStep.status = "completed";
-        routingStep.detail = "Proceeding to LLM";
-        routingStep.endTime = new Date();
-        updateStep(routingStep);
-      }
-    }
-
-    // Step 2: Execute router-detected tools (if any)
-    console.log("[DEBUG-FLOW] Router tools to execute:", routerToolCalls.length);
-    for (const call of routerToolCalls) {
-      // Skip if already executed or already failed with same params
-      const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-      if (
-        allToolCalls.some(
-          (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
-        ) ||
-        failedToolSignatures.has(callKey)
-      ) {
         continue;
       }
-
-      const toolStep: ExecutionStep = {
-        id: `tool-${call.tool}-${Date.now()}`,
-        type: "tool",
-        status: "running",
-        label: `Running ${call.tool}`,
-        detail:
-          call.params.file ||
-          call.params.fileName ||
-          call.params.query ||
-          call.params.title,
-        startTime: new Date(),
-      };
-      updateStep(toolStep);
-
-      console.log("[DEBUG-FLOW] Executing router tool:", call.tool, call.params);
-      const result = await executeTool(projectId, call, userMessage);
-      console.log("[DEBUG-FLOW] Router tool result:", { tool: call.tool, success: result.success, error: result.error });
-      allToolResults.push(result);
-      allToolCalls.push(call);
-
-      // Track failed tools to prevent retry loops
-      if (!result.success) {
-        failedToolSignatures.add(callKey);
-      }
-
-      toolStep.status = result.success ? "completed" : "error";
-      toolStep.endTime = new Date();
-      toolStep.detail = result.success
-        ? result.metadata?.fileName || "Done"
-        : result.error;
-      updateStep(toolStep);
     }
 
-    // Step 3: Add tool results to messages if any router tools were executed
-    if (routerToolCalls.length > 0) {
-      const successResults = allToolResults.filter((r) => r.success);
-      if (successResults.length > 0) {
-        const toolContext = formatToolResults(successResults);
-        messages.push({
-          role: "user",
-          content: `[System: Tool results]\n\n${toolContext}`,
-        });
-      }
-    }
+    try {
+      // Enrich params with context
+      const enrichedParams = enrichParamsWithContext(step, accumulatedContext);
 
-    // Step 4: Generate LLM response (without streaming initially to parse tool calls)
-    const responseStep: ExecutionStep = {
-      id: `response-${iteration}`,
-      type: "response",
-      status: "running",
-      label: `Generating response${iterationSuffix}...`,
-      startTime: new Date(),
-    };
-    updateStep(responseStep);
-
-    // Generate response with streaming, accumulating content to parse for tool calls after
-    console.log("[DEBUG-FLOW] Calling chatCompletion (streaming with accumulation)...");
-    
-    let llmResponse: { content: string };
-    if (onStreamChunk) {
-      // Stream to user while accumulating full response
-      // Filter out tool_call blocks so user doesn't see raw JSON
-      let streamBuffer = "";
-      let inToolCallBlock = false;
-      let toolCallBuffer = "";
-      
-      llmResponse = await chatCompletionStreaming({ messages }, (chunk, done) => {
-        if (done) {
-          // Flush any remaining buffer that's not a tool call
-          if (streamBuffer && !streamBuffer.includes("```tool_call")) {
-            onStreamChunk(streamBuffer, false);
-          }
-          // Don't signal done yet - we may have tools to execute
-          return;
-        }
-        
-        // Accumulate chunk
-        streamBuffer += chunk;
-        
-        // Process buffer to filter out tool_call blocks
-        while (streamBuffer.length > 0) {
-          if (inToolCallBlock) {
-            // Looking for closing ```
-            const closeIdx = streamBuffer.indexOf("```");
-            if (closeIdx !== -1) {
-              // Found closing, discard the tool call block
-              toolCallBuffer += streamBuffer.substring(0, closeIdx + 3);
-              streamBuffer = streamBuffer.substring(closeIdx + 3);
-              inToolCallBlock = false;
-              toolCallBuffer = "";
-              console.log("[DEBUG-FLOW] Filtered out tool_call block from stream");
-            } else {
-              // Still in tool call block, keep buffering
-              toolCallBuffer += streamBuffer;
-              streamBuffer = "";
-            }
-          } else {
-            // Looking for ```tool_call
-            const toolCallStart = streamBuffer.indexOf("```tool_call");
-            const tripleBacktick = streamBuffer.indexOf("```");
-            
-            if (toolCallStart !== -1) {
-              // Found tool_call block start
-              // Stream everything before it
-              if (toolCallStart > 0) {
-                onStreamChunk(streamBuffer.substring(0, toolCallStart), false);
-              }
-              streamBuffer = streamBuffer.substring(toolCallStart + 12); // Skip "```tool_call"
-              inToolCallBlock = true;
-              toolCallBuffer = "```tool_call";
-            } else if (tripleBacktick !== -1 && streamBuffer.length < tripleBacktick + 12) {
-              // We see ``` but don't have enough chars to know if it's tool_call
-              // Stream everything before the ```
-              if (tripleBacktick > 0) {
-                onStreamChunk(streamBuffer.substring(0, tripleBacktick), false);
-                streamBuffer = streamBuffer.substring(tripleBacktick);
-              }
-              // Keep buffering to see what comes after ```
-              break;
-            } else {
-              // No tool_call block in sight, safe to stream
-              // But keep last 11 chars in case "```tool_call" is split across chunks
-              const safeLength = Math.max(0, streamBuffer.length - 11);
-              if (safeLength > 0) {
-                onStreamChunk(streamBuffer.substring(0, safeLength), false);
-                streamBuffer = streamBuffer.substring(safeLength);
-              }
-              break;
-            }
-          }
-        }
-      });
-    } else {
-      // No streaming callback, use regular completion
-      llmResponse = await chatCompletion({ messages });
-    }
-    
-    console.log("[DEBUG-FLOW] LLM response received:", {
-      contentLength: llmResponse.content.length,
-      contentPreview: llmResponse.content.substring(0, 200) + (llmResponse.content.length > 200 ? "..." : ""),
-    });
-
-    // Step 5: Parse response for inline tool calls (after streaming completes)
-    const parsed = parseToolCallsFromResponse(llmResponse.content);
-    console.log("[DEBUG-FLOW] parseToolCallsFromResponse result:", {
-      hasToolCalls: parsed.hasToolCalls,
-      toolCallsCount: parsed.toolCalls.length,
-      toolCalls: parsed.toolCalls.map(t => ({ tool: t.tool, params: t.params })),
-      textContentLength: parsed.textContent?.length || 0,
-    });
-
-    if (parsed.hasToolCalls) {
-      responseStep.status = "completed";
-      responseStep.endTime = new Date();
-      responseStep.label = `Found ${parsed.toolCalls.length} tool call(s)`;
-      updateStep(responseStep);
-
-      // Note: Content already streamed above, no need to re-stream
-
-      // Step 6: Execute inline tool calls from LLM response
-      const inlineResults: ToolResult[] = [];
-
-      for (const call of parsed.toolCalls) {
-        // Skip if already executed or already failed with same params
-        const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-        if (
-          allToolCalls.some(
-            (t) => `${t.tool}-${JSON.stringify(t.params)}` === callKey,
-          ) ||
-          failedToolSignatures.has(callKey)
-        ) {
-          continue;
-        }
-
-        const toolStep: ExecutionStep = {
-          id: `inline-tool-${call.tool}-${Date.now()}`,
-          type: "tool",
-          status: "running",
-          label: `Executing ${call.tool}`,
-          detail:
-            call.params.file ||
-            call.params.fileName ||
-            call.params.query ||
-            call.params.title ||
-            call.params.content?.substring(0, 30),
-          startTime: new Date(),
-        };
-        updateStep(toolStep);
-
-        console.log("[DEBUG-FLOW] Executing inline tool:", call.tool, call.params);
-        const result = await executeTool(projectId, call, userMessage);
-        console.log("[DEBUG-FLOW] Inline tool result:", { tool: call.tool, success: result.success, error: result.error });
-        inlineResults.push(result);
-        allToolResults.push(result);
-        allToolCalls.push(call);
-
-        // Track failed tools to prevent retry loops
-        if (!result.success) {
-          failedToolSignatures.add(callKey);
-        }
-
-        toolStep.status = result.success ? "completed" : "error";
-        toolStep.endTime = new Date();
-        toolStep.detail = result.success
-          ? result.metadata?.fileName || "Done"
-          : result.error;
-        updateStep(toolStep);
-      }
-
-      // Step 7: Add inline tool results and get final response
-      if (inlineResults.length > 0) {
-        // Add assistant's partial response
-        messages.push({
-          role: "assistant",
-          content: parsed.textContent || "Executing tools...",
-        });
-
-        // Add tool results
-        const toolContext = formatToolResults(inlineResults);
-        messages.push({
-          role: "user",
-          content: `[System: Tool execution results]\n\n${toolContext}\n\nPlease summarize the results for the user.`,
-        });
-
-        // Generate final response with results
-        const finalStep: ExecutionStep = {
-          id: `final-response-${iteration}`,
-          type: "response",
-          status: "running",
-          label: "Summarizing results...",
-          startTime: new Date(),
-        };
-        updateStep(finalStep);
-
-        let finalResponse;
-        if (onStreamChunk) {
-          // Add separator since initial response was already streamed
-          onStreamChunk("\n\n", false);
-          finalResponse = await chatCompletionStreaming(
-            { messages },
-            onStreamChunk,
-          );
-        } else {
-          finalResponse = await chatCompletion({ messages });
-        }
-
-        finalStep.status = "completed";
-        finalStep.endTime = new Date();
-        finalStep.label = "Response ready";
-        updateStep(finalStep);
-
-        // Build combined response (initial response already streamed, this is the full content for storage)
-        const combinedResponse = `${llmResponse.content}\n\n${finalResponse.content}`;
-
-        allResponses.push(combinedResponse);
-        messages.push({ role: "assistant", content: finalResponse.content });
-      } else {
-        // No tools actually executed (maybe all were duplicates)
-        allResponses.push(parsed.textContent || llmResponse.content);
-        messages.push({ role: "assistant", content: llmResponse.content });
-      }
-    } else {
-      // No inline tool calls in response - mark response generation complete
-      responseStep.status = "completed";
-      responseStep.endTime = new Date();
-      responseStep.label = "Response generated";
-      updateStep(responseStep);
-
-      // Note: Response already streamed above during generation
-
-      // Add planning step for continuation analysis
-      const planningStep: ExecutionStep = {
-        id: `planning-${iteration}`,
-        type: "routing",
-        status: "running",
-        label: "Planning next moves...",
-        startTime: new Date(),
-      };
-      updateStep(planningStep);
-
-      // Run continuation analysis to check if assistant said "I will now..." without executing
-      console.log("[DEBUG-FLOW] ========== CONTINUATION ANALYSIS START ==========");
-      console.log("[DEBUG-FLOW] Calling analyzeAssistantResponse with:", {
-        responseLength: llmResponse.content.length,
-        responsePreview: llmResponse.content.substring(0, 300) + (llmResponse.content.length > 300 ? "..." : ""),
-        conversationHistoryLength: conversationHistory.length + 1,
-        projectFilesCount: projectFiles.length,
-      });
-      const continuationResult = await analyzeAssistantResponse(
-        llmResponse.content,
-        [...conversationHistory, { role: "user", content: userMessage }],
-        projectFiles,
-      );
-      console.log("[DEBUG-FLOW] analyzeAssistantResponse result:", {
-        shouldExecuteTool: continuationResult.shouldExecuteTool,
-        toolsCount: continuationResult.tools.length,
-        tools: continuationResult.tools.map(t => ({ tool: t.tool, params: t.params })),
-        reasoning: continuationResult.reasoning,
-      });
-
+      // For write/addNote, generate content if needed
       if (
-        continuationResult.shouldExecuteTool &&
-        continuationResult.tools.length > 0
+        (step.tool === "write" || step.tool === "addNote") &&
+        !enrichedParams.content &&
+        (enrichedParams._webContext || enrichedParams._searchContext)
       ) {
-        console.log("[DEBUG-FLOW] Continuation detected - will execute tools");
-        // Filter out tools that have already failed to prevent retry loops
-        const toolsToExecute = continuationResult.tools.filter((call) => {
-          const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-          return !failedToolSignatures.has(callKey);
+        console.log("[EXECUTOR] Generating content from context...");
+        enrichedParams.content = await generateContentFromContext(
+          step,
+          accumulatedContext,
+          plan.originalQuery,
+        );
+        // Clean up internal params
+        delete enrichedParams._webContext;
+        delete enrichedParams._searchContext;
+      }
+
+      // Resolve project ID for the step
+      let stepProjectId = projectId;
+      if (enrichedParams.project) {
+        // Could be a project ID or name, try to resolve
+        const resolvedId = await resolveProjectForTool(projectId, enrichedParams.project);
+        if (resolvedId) {
+          stepProjectId = resolvedId;
+        }
+      } else if (accumulatedContext.projectId && typeof accumulatedContext.projectId === "string") {
+        stepProjectId = accumulatedContext.projectId;
+      }
+
+      // Execute the tool
+      const toolCall: ToolCall = {
+        tool: step.tool,
+        params: enrichedParams,
+      };
+
+      // Create progress callback that updates step detail
+      const progressCallback = (status: string) => {
+        step.detail = status;
+        onStepUpdate?.(step, i, plan.steps.length);
+      };
+
+      const result = await executeTool(stepProjectId, toolCall, plan.originalQuery, progressCallback);
+
+      if (result.success) {
+        step.status = "completed";
+        
+        // Extract context for subsequent steps
+        const extractedContext = extractContextFromResult(step.tool, result, enrichedParams);
+        Object.assign(accumulatedContext, extractedContext);
+
+        completedSteps.push({
+          stepId: step.id,
+          tool: step.tool,
+          result,
+          extractedContext,
+          durationMs: Date.now() - stepStartTime,
         });
 
-        if (toolsToExecute.length === 0) {
-          // All requested tools have already failed - don't retry
-          planningStep.label = "Skipped (tools already failed)";
-          planningStep.status = "completed";
-          planningStep.endTime = new Date();
-          updateStep(planningStep);
+        console.log("[EXECUTOR] Step completed successfully. Extracted context:", Object.keys(extractedContext));
+      } else {
+        step.status = "failed";
+        step.error = result.error;
 
-          // Signal streaming completion
-          if (onStreamChunk) {
-            onStreamChunk("", true);
-          }
-
-          allResponses.push(llmResponse.content);
-          messages.push({ role: "assistant", content: llmResponse.content });
-          break; // Exit the loop - don't keep retrying failed operations
-        }
-
-        // Assistant committed to action - execute the tools
-        planningStep.label = `Executing: ${continuationResult.reasoning}`;
-        planningStep.status = "completed";
-        planningStep.endTime = new Date();
-        updateStep(planningStep);
-
-        const continuationResults: ToolResult[] = [];
-        console.log("[DEBUG-FLOW] Continuation tools to execute:", toolsToExecute.length);
-
-        for (const call of toolsToExecute) {
-          const callKey = `${call.tool}-${JSON.stringify(call.params)}`;
-
-          const toolStep: ExecutionStep = {
-            id: `continuation-tool-${call.tool}-${Date.now()}`,
-            type: "tool",
-            status: "running",
-            label: `Executing ${call.tool}`,
-            detail:
-              call.params.file ||
-              call.params.fileName ||
-              call.params.title ||
-              "Processing...",
-            startTime: new Date(),
-          };
-          updateStep(toolStep);
-
-          console.log("[DEBUG-FLOW] Executing continuation tool:", call.tool, call.params);
-          const result = await executeTool(projectId, call, userMessage);
-          console.log("[DEBUG-FLOW] Continuation tool result:", { tool: call.tool, success: result.success, error: result.error });
-          continuationResults.push(result);
-          allToolResults.push(result);
-          allToolCalls.push(call);
-
-          // Track failed tools to prevent retry loops
-          if (!result.success) {
-            failedToolSignatures.add(callKey);
-          }
-
-          toolStep.status = result.success ? "completed" : "error";
-          toolStep.endTime = new Date();
-          toolStep.detail = result.success
-            ? result.metadata?.fileName || "Done"
-            : result.error;
-          updateStep(toolStep);
-        }
-
-        // Add tool results and generate final response
-        console.log("[DEBUG-FLOW] Continuation results summary:", {
-          total: continuationResults.length,
-          successful: continuationResults.filter(r => r.success).length,
-          failed: continuationResults.filter(r => !r.success).length,
+        failedSteps.push({
+          stepId: step.id,
+          tool: step.tool,
+          error: result.error || "Unknown error",
+          recoverable: true,
         });
-        if (continuationResults.some((r) => r.success)) {
-          console.log("[DEBUG-FLOW] Some continuation tools succeeded - generating confirmation response");
-          messages.push({ role: "assistant", content: llmResponse.content });
 
-          const toolContext = formatToolResults(continuationResults);
-          messages.push({
-            role: "user",
-            content: `[System: Tool execution completed]\n\n${toolContext}\n\nBriefly confirm the action was completed.`,
-          });
+        console.log("[EXECUTOR] Step failed:", result.error);
 
-          const confirmStep: ExecutionStep = {
-            id: `confirm-response-${iteration}`,
-            type: "response",
-            status: "running",
-            label: "Confirming completion...",
-            startTime: new Date(),
-          };
-          updateStep(confirmStep);
-
-          let confirmResponse;
-          if (onStreamChunk) {
-            onStreamChunk("\n\n", false); // Add separator
-            confirmResponse = await chatCompletionStreaming(
-              { messages },
-              onStreamChunk,
-            );
-          } else {
-            confirmResponse = await chatCompletion({ messages });
-          }
-
-          confirmStep.status = "completed";
-          confirmStep.endTime = new Date();
-          confirmStep.label = "Complete";
-          updateStep(confirmStep);
-
-          const combinedResponse = `${llmResponse.content}\n\n${confirmResponse.content}`;
-          allResponses.push(combinedResponse);
-          messages.push({
-            role: "assistant",
-            content: confirmResponse.content,
-          });
-        } else {
-          // ALL tools failed - add error context and break to prevent retry loops
-          console.log("[DEBUG-FLOW] All continuation tools failed - generating error response");
-          messages.push({ role: "assistant", content: llmResponse.content });
-
-          const toolContext = formatToolResults(continuationResults);
-          messages.push({
-            role: "user",
-            content: `[System: Tool execution FAILED]\n\n${toolContext}\n\nDo NOT retry these operations. Explain the error to the user and suggest alternatives.`,
-          });
-
-          const errorStep: ExecutionStep = {
-            id: `error-response-${iteration}`,
-            type: "response",
-            status: "running",
-            label: "Explaining error...",
-            startTime: new Date(),
-          };
-          updateStep(errorStep);
-
-          let errorResponse;
-          if (onStreamChunk) {
-            onStreamChunk("\n\n", false);
-            errorResponse = await chatCompletionStreaming(
-              { messages },
-              onStreamChunk,
-            );
-          } else {
-            errorResponse = await chatCompletion({ messages });
-          }
-
-          errorStep.status = "completed";
-          errorStep.endTime = new Date();
-          errorStep.label = "Complete";
-          updateStep(errorStep);
-
-          const combinedResponse = `${llmResponse.content}\n\n${errorResponse.content}`;
-          allResponses.push(combinedResponse);
-          messages.push({ role: "assistant", content: errorResponse.content });
-
-          // Break the loop - don't keep retrying failed operations
+        if (stopOnFailure) {
+          console.log("[EXECUTOR] Stopping due to failure");
           break;
         }
-      } else {
-        // No continuation needed - complete planning step
-        console.log("[DEBUG-FLOW] No continuation needed - completing");
-        planningStep.label = "Complete";
-        planningStep.status = "completed";
-        planningStep.endTime = new Date();
-        updateStep(planningStep);
+      }
+    } catch (error) {
+      step.status = "failed";
+      step.error = error instanceof Error ? error.message : "Unknown error";
 
-        // Signal streaming completion (content already streamed earlier)
-        if (onStreamChunk) {
-          onStreamChunk("", true);
-        }
+      failedSteps.push({
+        stepId: step.id,
+        tool: step.tool,
+        error: step.error,
+        recoverable: false,
+      });
 
-        allResponses.push(llmResponse.content);
-        messages.push({ role: "assistant", content: llmResponse.content });
+      console.error("[EXECUTOR] Step error:", error);
+
+      if (stopOnFailure) {
+        break;
       }
     }
 
-    // Step 8: Check if more iterations needed (only if we had tool calls)
-    if (
-      (parsed.hasToolCalls || allToolCalls.length > 0) &&
-      iteration < MAX_ITERATIONS
-    ) {
-      // Check if the response still contains unfulfilled requests
-      const lastResponse = allResponses[allResponses.length - 1];
-      const stillHasToolCalls =
-        parseToolCallsFromResponse(lastResponse).hasToolCalls;
+    onStepUpdate?.(step, i, plan.steps.length);
+  }
 
-      if (!stillHasToolCalls) {
-        // No more tool calls, we're done
-        console.log("[DEBUG-FLOW] Breaking loop: no more tool calls in last response");
-        break;
+  // Generate final response
+  const finalResponse = generateFinalResponse(plan, completedSteps, failedSteps, accumulatedContext);
+
+  const executionResult: ExecutionResult = {
+    planId: plan.id,
+    completedSteps,
+    failedSteps,
+    accumulatedContext,
+    finalResponse,
+    totalDurationMs: Date.now() - startTime,
+    allSuccessful: failedSteps.length === 0,
+  };
+
+  console.log("[EXECUTOR] Execution complete:", {
+    completed: completedSteps.length,
+    failed: failedSteps.length,
+    duration: executionResult.totalDurationMs,
+  });
+
+  return executionResult;
+}
+
+/**
+ * Generate a final response summarizing the execution
+ */
+function generateFinalResponse(
+  plan: ExecutionPlan,
+  completedSteps: CompletedStep[],
+  failedSteps: FailedStep[],
+  context: Record<string, unknown>,
+): string {
+  const parts: string[] = [];
+
+  if (completedSteps.length > 0) {
+    parts.push("**Completed:**");
+    for (const step of completedSteps) {
+      const originalStep = plan.steps.find((s) => s.id === step.stepId);
+      const icon = getToolIcon(step.tool);
+      parts.push(`- ${icon} ${originalStep?.description || step.tool}`);
+      
+      // Add relevant details
+      if (step.result.metadata?.fileName) {
+        parts.push(`  → Created: ${step.result.metadata.fileName}`);
       }
-    } else {
-      // No tool calls in this iteration, we're done
-      console.log("[DEBUG-FLOW] Breaking loop: no tool calls in this iteration");
-      break;
     }
   }
 
-  // Combine all responses
-  const finalResponse =
-    allResponses.length === 1
-      ? allResponses[0]
-      : allResponses[allResponses.length - 1]; // Use the last (most complete) response
+  if (failedSteps.length > 0) {
+    parts.push("");
+    parts.push("**Failed:**");
+    for (const step of failedSteps) {
+      const originalStep = plan.steps.find((s) => s.id === step.stepId);
+      parts.push(`- ❌ ${originalStep?.description || step.tool}: ${step.error}`);
+    }
+  }
 
-  console.log("[DEBUG-FLOW] ========== orchestrateToolExecution END ==========");
-  console.log("[DEBUG-FLOW] Final result:", {
-    responsesCount: allResponses.length,
-    finalResponseLength: finalResponse.length,
-    toolsUsedCount: allToolCalls.length,
-    toolsUsed: allToolCalls.map(t => t.tool),
-    toolResultsCount: allToolResults.length,
-    successfulTools: allToolResults.filter(r => r.success).length,
-    failedTools: allToolResults.filter(r => !r.success).length,
+  if (completedSteps.length === plan.steps.length) {
+    parts.push("");
+    parts.push("✅ All tasks completed successfully!");
+  }
+
+  return parts.join("\n");
+}
+
+// ============================================
+// Checker Implementation
+// ============================================
+
+/**
+ * Check if the execution completed all user requests
+ */
+export async function checkCompletion(
+  originalQuery: string,
+  executionResult: ExecutionResult,
+  plan: ExecutionPlan,
+): Promise<CompletionCheck> {
+  // Build a summary of what was executed
+  const executedSummary = plan.steps.map((step) => {
+    const completed = executionResult.completedSteps.find((cs) => cs.stepId === step.id);
+    const failed = executionResult.failedSteps.find((fs) => fs.stepId === step.id);
+
+    if (completed) {
+      return `✓ ${step.description}: SUCCESS`;
+    } else if (failed) {
+      return `✗ ${step.description}: FAILED - ${failed.error}`;
+    } else {
+      return `- ${step.description}: NOT EXECUTED`;
+    }
+  }).join("\n");
+
+  const response = await chatCompletion({
+    messages: [
+      {
+        role: "system",
+        content: CHECKER_PROMPT,
+      },
+      {
+      role: "user",
+        content: `Original user request:
+${originalQuery}
+
+Planned steps:
+${plan.summary}
+
+Execution results:
+${executedSummary}
+
+Context accumulated:
+${JSON.stringify(Object.keys(executionResult.accumulatedContext))}
+
+Did we fully satisfy the user's request?`,
+      },
+    ],
+    temperature: 0,
+    maxTokens: 1000,
   });
 
+  try {
+    let jsonStr = response.content.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+
+    const parsed = JSON.parse(jsonStr);
+
+    return {
+      isComplete: parsed.isComplete ?? false,
+      completedTasks: parsed.completedTasks || [],
+      missingTasks: parsed.missingTasks || [],
+      shouldReplan: parsed.shouldReplan ?? false,
+      replanContext: parsed.replanContext,
+      reasoning: parsed.reasoning || "",
+    };
+  } catch (error) {
+    console.error("[CHECKER] Failed to parse check result:", error);
+    
+    // Default to complete if we can't parse (avoid infinite loops)
+    return {
+      isComplete: executionResult.allSuccessful,
+      completedTasks: executionResult.completedSteps.map((s) => s.tool),
+      missingTasks: executionResult.failedSteps.map((s) => s.tool),
+      shouldReplan: false,
+      reasoning: "Could not parse completion check result",
+    };
+  }
+}
+
+// ============================================
+// Main Planner Flow Orchestrator
+// ============================================
+
+/**
+ * Result from the full planner flow
+ */
+export interface PlannerFlowResult {
+  /** Final state of the flow */
+  state: PlannerFlowState;
+  /** Final response to show user */
+  response: string;
+  /** All tool results from execution */
+  toolResults: ToolResult[];
+  /** Whether the flow completed successfully */
+  success: boolean;
+}
+
+/**
+ * Run the complete Planner → Executor → Checker flow
+ * Called after user confirms the plan
+ */
+export async function runPlannerFlow(
+  plan: ExecutionPlan,
+  projectId: string | undefined,
+  options: ExecutePlanOptions = {},
+): Promise<PlannerFlowResult> {
+  const maxReplanAttempts = options.maxReplanAttempts ?? 2;
+  let replanAttempts = 0;
+  let currentPlan = plan;
+  let allToolResults: ToolResult[] = [];
+
+  const state: PlannerFlowState = {
+    phase: "executing",
+    plan: currentPlan,
+    replanAttempts: 0,
+  };
+
+  while (replanAttempts <= maxReplanAttempts) {
+    // Execute the plan
+    state.phase = "executing";
+    const executionResult = await executePlan(currentPlan, projectId, options);
+    state.executionResult = executionResult;
+
+    // Collect all tool results
+    allToolResults = [
+      ...allToolResults,
+      ...executionResult.completedSteps.map((cs) => cs.result),
+    ];
+
+    // Check completion
+    state.phase = "checking";
+    const completionCheck = await checkCompletion(
+      currentPlan.originalQuery,
+      executionResult,
+      currentPlan,
+    );
+    state.completionCheck = completionCheck;
+
+    if (completionCheck.isComplete) {
+      // All done!
+      state.phase = "complete";
   return {
-    responses: allResponses,
-    response: finalResponse,
-    toolsUsed: allToolCalls,
+        state,
+        response: executionResult.finalResponse,
     toolResults: allToolResults,
+        success: true,
+      };
+    }
+
+    if (!completionCheck.shouldReplan || replanAttempts >= maxReplanAttempts) {
+      // Can't or shouldn't replan
+      state.phase = "complete";
+      
+      let response = executionResult.finalResponse;
+      if (completionCheck.missingTasks.length > 0) {
+        response += `\n\n⚠️ Some tasks could not be completed:\n${completionCheck.missingTasks.map((t) => `- ${t}`).join("\n")}`;
+      }
+
+      return {
+        state,
+        response,
+        toolResults: allToolResults,
+        success: false,
+      };
+    }
+
+    // Replan
+    state.phase = "replanning";
+    replanAttempts++;
+    state.replanAttempts = replanAttempts;
+
+    console.log(`[FLOW] Replanning attempt ${replanAttempts}/${maxReplanAttempts}`);
+
+    // Get project files again (they may have changed)
+    const projectFiles = projectId
+      ? (await get_project_files(projectId)).map((f) => f.name)
+      : [];
+
+    currentPlan = await createExecutionPlan(
+      currentPlan.originalQuery,
+      projectId,
+      projectFiles,
+      undefined,
+      completionCheck.replanContext,
+    );
+
+    state.plan = currentPlan;
+
+    // If replan also needs clarification, we have a problem
+    if (currentPlan.needsClarification) {
+      state.phase = "complete";
+      state.error = currentPlan.clarificationQuestion;
+      return {
+        state,
+        response: currentPlan.clarificationQuestion || "I need more information to continue.",
+        toolResults: allToolResults,
+        success: false,
+      };
+    }
+  }
+
+  // Should never reach here, but just in case
+  state.phase = "complete";
+  return {
+    state,
+    response: state.executionResult?.finalResponse || "Execution completed.",
+    toolResults: allToolResults,
+    success: state.executionResult?.allSuccessful ?? false,
   };
 }

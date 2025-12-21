@@ -10,6 +10,7 @@ import type {
   WebChunk,
   WebResearchOptions,
   WebResearchResult,
+  WebResearchProgressCallback,
 } from '../types';
 import { DEFAULT_WEB_SEARCH_SETTINGS } from '../types';
 import {
@@ -24,6 +25,28 @@ import { generateEmbedding } from './embeddingService';
 import { chunkText } from './documentProcessor';
 
 const STORAGE_KEY = 'hydranote_web_search_settings';
+
+// ============================================
+// Safety Limits
+// ============================================
+
+const WEB_RESEARCH_TIMEOUT_MS = 30000; // 30 seconds total timeout
+const PAGE_FETCH_TIMEOUT_MS = 5000; // 5 seconds per page
+const MAX_CHUNKS_PER_PAGE = 5; // Limit chunks per page
+const MAX_CONTENT_LENGTH = 50000; // Max characters per page
+const CONCURRENT_FETCHES = 3; // Pages fetched in parallel
+
+/**
+ * Wrap a promise with a timeout
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error(errorMessage)), ms)
+    ),
+  ]);
+}
 
 // ============================================
 // Settings Management
@@ -529,18 +552,27 @@ export function extractTextFromHTML(html: string): string {
 }
 
 /**
- * Fetch and extract content from a web page
+ * Fetch and extract content from a web page with timeout
  */
 export async function fetchPageContent(url: string): Promise<WebPageContent> {
   try {
-    const response = await fetchWithCorsHandling(url);
+    const response = await withTimeout(
+      fetchWithCorsHandling(url),
+      PAGE_FETCH_TIMEOUT_MS,
+      `Timeout fetching page (${PAGE_FETCH_TIMEOUT_MS / 1000}s)`
+    );
     
     if (!response.ok) {
       throw new Error(`Failed to fetch ${url}: ${response.status}`);
     }
     
     const html = await response.text();
-    const content = extractTextFromHTML(html);
+    let content = extractTextFromHTML(html);
+    
+    // Truncate excessively long content
+    if (content.length > MAX_CONTENT_LENGTH) {
+      content = content.substring(0, MAX_CONTENT_LENGTH) + '\n\n[Content truncated]';
+    }
     
     // Extract title from HTML
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -563,21 +595,27 @@ export async function fetchPageContent(url: string): Promise<WebPageContent> {
 // ============================================
 
 /**
- * Process web content: chunk and generate embeddings
+ * Process web content: chunk and generate embeddings (with limits)
  */
 async function processWebContent(
   cacheId: string,
   content: string,
   url: string,
-  title: string
+  title: string,
+  onProgress?: WebResearchProgressCallback
 ): Promise<WebChunk[]> {
   // Use existing chunking function
   const textChunks = chunkText(content, cacheId, 'web');
   
+  // Limit chunks per page to prevent long processing times
+  const chunksToProcess = textChunks.slice(0, MAX_CHUNKS_PER_PAGE);
+  
   const webChunks: WebChunk[] = [];
   
-  for (let i = 0; i < textChunks.length; i++) {
-    const chunk = textChunks[i];
+  for (let i = 0; i < chunksToProcess.length; i++) {
+    const chunk = chunksToProcess[i];
+    
+    onProgress?.(`Generating embeddings (${i + 1}/${chunksToProcess.length})...`);
     
     // Generate embedding for this chunk
     const embedding = await generateEmbedding(chunk.text);
@@ -636,13 +674,17 @@ async function checkCache(
  */
 async function cacheSearchResults(
   query: string,
-  pages: WebPageContent[]
+  pages: WebPageContent[],
+  onProgress?: WebResearchProgressCallback
 ): Promise<string[]> {
   const queryHash = hashQuery(query);
   const cacheIds: string[] = [];
   
-  for (const page of pages) {
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
     const cacheId = crypto.randomUUID();
+    
+    onProgress?.(`Processing page ${i + 1}/${pages.length}: ${page.title.substring(0, 30)}...`);
     
     await createWebSearchCache({
       id: cacheId,
@@ -655,7 +697,7 @@ async function cacheSearchResults(
     });
     
     // Process and embed content
-    await processWebContent(cacheId, page.content, page.url, page.title);
+    await processWebContent(cacheId, page.content, page.url, page.title, onProgress);
     
     cacheIds.push(cacheId);
   }
@@ -670,115 +712,156 @@ async function cacheSearchResults(
 // ============================================
 
 /**
- * Perform web research with caching and vector filtering
+ * Internal web research implementation
  */
-export async function webResearch(
+async function webResearchInternal(
   query: string,
-  options?: WebResearchOptions
+  options: WebResearchOptions | undefined,
+  startTime: number
 ): Promise<WebResearchResult> {
-  const startTime = Date.now();
   const settings = loadWebSearchSettings();
+  const onProgress = options?.onProgress;
   
   const maxResults = options?.maxResults || settings.maxResults || 5;
   const maxChunks = options?.maxChunks || 10;
   const useCache = options?.useCache !== false;
   const cacheMaxAge = options?.cacheMaxAge || settings.cacheMaxAge || 60;
   
+  let cacheIds: string[] = [];
+  let fromCache = false;
+  const sources: Array<{ url: string; title: string }> = [];
+  
+  // Step 1: Check cache
+  onProgress?.('Checking cache...');
+  if (useCache) {
+    const cached = await checkCache(query, cacheMaxAge);
+    if (cached) {
+      cacheIds = cached.cacheIds;
+      fromCache = true;
+      
+      // Get source info from cache
+      const cachedEntries = await getWebSearchCache(hashQuery(query), cacheMaxAge);
+      for (const entry of cachedEntries) {
+        sources.push({ url: entry.url, title: entry.title });
+      }
+      onProgress?.('Found cached results');
+    }
+  }
+  
+  // Step 2: If not cached, perform search and fetch
+  if (cacheIds.length === 0) {
+    // Clean expired cache periodically
+    await cleanExpiredWebCache(cacheMaxAge);
+    
+    // Search web
+    onProgress?.('Searching the web...');
+    const searchResults = await searchWeb(query, maxResults);
+    
+    if (searchResults.length === 0) {
+      return {
+        query,
+        sources: [],
+        relevantContent: [],
+        fromCache: false,
+        searchTime: Date.now() - startTime,
+        error: 'No search results found',
+      };
+    }
+    
+    onProgress?.(`Found ${searchResults.length} results, fetching pages...`);
+    
+    // Fetch pages in parallel with concurrency limit
+    const pages: WebPageContent[] = [];
+    
+    for (let i = 0; i < searchResults.length; i += CONCURRENT_FETCHES) {
+      const batch = searchResults.slice(i, i + CONCURRENT_FETCHES);
+      
+      onProgress?.(`Fetching pages ${i + 1}-${Math.min(i + CONCURRENT_FETCHES, searchResults.length)} of ${searchResults.length}...`);
+      
+      const batchResults = await Promise.allSettled(
+        batch.map(result => fetchPageContent(result.url))
+      );
+      
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchResult = batchResults[j];
+        if (batchResult.status === 'fulfilled' && batchResult.value.content.length > 100) {
+          pages.push(batchResult.value);
+          sources.push({ 
+            url: batch[j].url, 
+            title: batch[j].title || batchResult.value.title 
+          });
+        }
+      }
+      
+      // Check if we've exceeded time budget (leave 5s for embedding)
+      if (Date.now() - startTime > WEB_RESEARCH_TIMEOUT_MS - 5000) {
+        onProgress?.('Time budget reached, using fetched pages...');
+        break;
+      }
+    }
+    
+    if (pages.length === 0) {
+      return {
+        query,
+        sources: [],
+        relevantContent: [],
+        fromCache: false,
+        searchTime: Date.now() - startTime,
+        error: 'Failed to fetch any search results',
+      };
+    }
+    
+    // Cache results
+    onProgress?.(`Processing ${pages.length} pages...`);
+    cacheIds = await cacheSearchResults(query, pages, onProgress);
+  }
+  
+  // Step 3: Vector search to find relevant chunks
+  onProgress?.('Finding relevant content...');
+  const queryEmbedding = await generateEmbedding(query);
+  const searchHits = await webVectorSearch(queryEmbedding, cacheIds, maxChunks);
+  
+  // Convert to WebChunk format
+  const relevantContent: WebChunk[] = searchHits.map(hit => ({
+    id: hit.chunkId,
+    cacheId: hit.cacheId,
+    url: hit.url,
+    title: hit.title,
+    text: hit.text,
+    chunkIndex: 0, // Not needed for results
+    embedding: [], // Not needed for results
+    score: hit.score,
+  }));
+  
+  onProgress?.('Done');
+  
+  return {
+    query,
+    sources,
+    relevantContent,
+    fromCache,
+    searchTime: Date.now() - startTime,
+  };
+}
+
+/**
+ * Perform web research with caching, vector filtering, and timeout protection
+ */
+export async function webResearch(
+  query: string,
+  options?: WebResearchOptions
+): Promise<WebResearchResult> {
+  const startTime = Date.now();
+  const onProgress = options?.onProgress;
+  
   try {
-    let cacheIds: string[] = [];
-    let fromCache = false;
-    const sources: Array<{ url: string; title: string }> = [];
-    
-    // Step 1: Check cache
-    if (useCache) {
-      const cached = await checkCache(query, cacheMaxAge);
-      if (cached) {
-        cacheIds = cached.cacheIds;
-        fromCache = true;
-        
-        // Get source info from cache
-        const cachedEntries = await getWebSearchCache(hashQuery(query), cacheMaxAge);
-        for (const entry of cachedEntries) {
-          sources.push({ url: entry.url, title: entry.title });
-        }
-      }
-    }
-    
-    // Step 2: If not cached, perform search and fetch
-    if (cacheIds.length === 0) {
-      // Clean expired cache periodically
-      await cleanExpiredWebCache(cacheMaxAge);
-      
-      // Search web
-      const searchResults = await searchWeb(query, maxResults);
-      
-      if (searchResults.length === 0) {
-        return {
-          query,
-          sources: [],
-          relevantContent: [],
-          fromCache: false,
-          searchTime: Date.now() - startTime,
-          error: 'No search results found',
-        };
-      }
-      
-      // Fetch pages
-      const pages: WebPageContent[] = [];
-      
-      for (const result of searchResults) {
-        try {
-          const page = await fetchPageContent(result.url);
-          if (page.content.length > 100) { // Skip empty/tiny pages
-            pages.push(page);
-            sources.push({ url: result.url, title: result.title || page.title });
-          }
-        } catch (error) {
-          // Continue with other pages if one fails
-          console.warn(`Failed to fetch ${result.url}:`, error);
-        }
-      }
-      
-      if (pages.length === 0) {
-        return {
-          query,
-          sources: [],
-          relevantContent: [],
-          fromCache: false,
-          searchTime: Date.now() - startTime,
-          error: 'Failed to fetch any search results',
-        };
-      }
-      
-      // Cache results
-      cacheIds = await cacheSearchResults(query, pages);
-    }
-    
-    // Step 3: Vector search to find relevant chunks
-    const queryEmbedding = await generateEmbedding(query);
-    const searchHits = await webVectorSearch(queryEmbedding, cacheIds, maxChunks);
-    
-    // Convert to WebChunk format
-    const relevantContent: WebChunk[] = searchHits.map(hit => ({
-      id: hit.chunkId,
-      cacheId: hit.cacheId,
-      url: hit.url,
-      title: hit.title,
-      text: hit.text,
-      chunkIndex: 0, // Not needed for results
-      embedding: [], // Not needed for results
-      score: hit.score,
-    }));
-    
-    return {
-      query,
-      sources,
-      relevantContent,
-      fromCache,
-      searchTime: Date.now() - startTime,
-    };
-    
+    return await withTimeout(
+      webResearchInternal(query, options, startTime),
+      WEB_RESEARCH_TIMEOUT_MS,
+      `Web research timed out after ${WEB_RESEARCH_TIMEOUT_MS / 1000} seconds`
+    );
   } catch (error) {
+    onProgress?.('Error');
     return {
       query,
       sources: [],
@@ -995,6 +1078,7 @@ export async function testWebSearchConnection(): Promise<{
     };
   }
 }
+
 
 
 

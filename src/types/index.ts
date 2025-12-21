@@ -1221,11 +1221,18 @@ export interface WebResearchToolParams {
   maxResults?: number;
   /** Maximum chunks to return after filtering (default: 10) */
   maxChunks?: number;
+  /** Callback for progress updates */
+  onProgress?: WebResearchProgressCallback;
 }
 
 /**
  * Web research options
  */
+/**
+ * Progress callback for web research status updates
+ */
+export type WebResearchProgressCallback = (status: string) => void;
+
 export interface WebResearchOptions {
   /** Maximum URLs to fetch (default: 5) */
   maxResults?: number;
@@ -1235,6 +1242,8 @@ export interface WebResearchOptions {
   useCache?: boolean;
   /** Override default cache age in minutes */
   cacheMaxAge?: number;
+  /** Callback for progress updates */
+  onProgress?: WebResearchProgressCallback;
 }
 
 /**
@@ -1252,5 +1261,167 @@ export interface WebResearchResult {
   /** Total search time in milliseconds */
   searchTime: number;
   /** Error message if search failed */
+  error?: string;
+}
+
+// ============================================
+// Execution Plan Types (Planner-Executor-Checker Flow)
+// ============================================
+
+/**
+ * Status of a plan step during execution
+ */
+export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+/**
+ * A single step in an execution plan
+ */
+export interface PlanStep {
+  /** Unique step identifier */
+  id: string;
+  /** Tool to execute */
+  tool: ToolName;
+  /** Tool parameters */
+  params: Record<string, string>;
+  /** Human-readable description of what this step does */
+  description: string;
+  /** IDs of steps that must complete before this one */
+  dependsOn?: string[];
+  /** Context keys this step needs from previous steps */
+  contextNeeded?: string[];
+  /** Context keys this step will provide to subsequent steps */
+  providesContext?: string[];
+  /** Current status during execution */
+  status?: PlanStepStatus;
+  /** Detailed status message (e.g., progress info) */
+  detail?: string;
+  /** Error message if step failed */
+  error?: string;
+}
+
+/**
+ * Execution plan created by the Planner
+ */
+export interface ExecutionPlan {
+  /** Unique plan identifier */
+  id: string;
+  /** Human-readable summary of the plan */
+  summary: string;
+  /** Ordered sequence of steps to execute */
+  steps: PlanStep[];
+  /** Whether clarification is needed from user */
+  needsClarification: boolean;
+  /** Question to ask user if clarification needed */
+  clarificationQuestion?: string;
+  /** Estimated duration (e.g., "~30 seconds") */
+  estimatedDuration?: string;
+  /** Original user message that triggered this plan */
+  originalQuery: string;
+  /** Timestamp when plan was created */
+  createdAt: Date;
+}
+
+/**
+ * Result of a completed step
+ */
+export interface CompletedStep {
+  /** Step ID */
+  stepId: string;
+  /** Tool that was executed */
+  tool: ToolName;
+  /** Tool result */
+  result: ToolResult;
+  /** Context extracted from this step for subsequent steps */
+  extractedContext: Record<string, unknown>;
+  /** Execution duration in milliseconds */
+  durationMs: number;
+}
+
+/**
+ * Result of a failed step
+ */
+export interface FailedStep {
+  /** Step ID */
+  stepId: string;
+  /** Tool that failed */
+  tool: ToolName;
+  /** Error message */
+  error: string;
+  /** Whether execution should continue despite this failure */
+  recoverable: boolean;
+}
+
+/**
+ * Result from the Executor after running a plan
+ */
+export interface ExecutionResult {
+  /** Plan ID that was executed */
+  planId: string;
+  /** Successfully completed steps */
+  completedSteps: CompletedStep[];
+  /** Failed steps */
+  failedSteps: FailedStep[];
+  /** Accumulated context from all steps */
+  accumulatedContext: Record<string, unknown>;
+  /** Final response to show user */
+  finalResponse: string;
+  /** Total execution time in milliseconds */
+  totalDurationMs: number;
+  /** Whether all steps completed successfully */
+  allSuccessful: boolean;
+}
+
+/**
+ * Result from the Continuation Checker
+ */
+export interface CompletionCheck {
+  /** Whether all requested tasks are complete */
+  isComplete: boolean;
+  /** List of completed task descriptions */
+  completedTasks: string[];
+  /** List of missing/incomplete task descriptions */
+  missingTasks: string[];
+  /** Whether the planner should re-plan */
+  shouldReplan: boolean;
+  /** Context to pass to planner if re-planning */
+  replanContext?: string;
+  /** Reasoning for the decision */
+  reasoning: string;
+}
+
+/**
+ * Callback for plan step updates during execution
+ */
+export type PlanStepCallback = (step: PlanStep, index: number, total: number) => void;
+
+/**
+ * Options for plan execution
+ */
+export interface ExecutePlanOptions {
+  /** Callback for step status updates */
+  onStepUpdate?: PlanStepCallback;
+  /** Callback for streaming content (for tools that stream) */
+  onStreamChunk?: LLMStreamCallback;
+  /** Whether to stop on first failure */
+  stopOnFailure?: boolean;
+  /** Maximum re-plan attempts */
+  maxReplanAttempts?: number;
+}
+
+/**
+ * State of the entire Planner-Executor-Checker flow
+ */
+export interface PlannerFlowState {
+  /** Current phase of the flow */
+  phase: 'planning' | 'awaiting_confirmation' | 'executing' | 'checking' | 'replanning' | 'complete' | 'cancelled';
+  /** Current execution plan (if created) */
+  plan?: ExecutionPlan;
+  /** Execution result (if executed) */
+  executionResult?: ExecutionResult;
+  /** Completion check result (if checked) */
+  completionCheck?: CompletionCheck;
+  /** Number of re-plan attempts */
+  replanAttempts: number;
+  /** Error if flow failed */
   error?: string;
 }

@@ -65,6 +65,7 @@ export {
   saveSettings,
   isConfigured,
   chatCompletion,
+  chatCompletionStreaming,
   prompt,
   chat,
   testConnection,
@@ -77,7 +78,6 @@ export {
 
 // Tool Service
 export {
-  routeMessage,
   executeReadTool,
   executeSearchTool,
   executeSummarizeTool,
@@ -92,19 +92,22 @@ export {
   executeTool,
   executeToolCalls,
   formatToolResults,
-  orchestrateToolExecution,
   // Inline tool call parser
   parseToolCallsFromResponse,
   // UpdateFile tool helpers
   getPendingPreview,
   removePendingPreview,
   applyFileUpdate,
-  // Continuation analyzer for sequential messages
-  analyzeAssistantResponse,
+  // Planner-Executor-Checker flow
+  createExecutionPlan,
+  executePlan,
+  checkCompletion,
+  runPlannerFlow,
+  getToolIcon,
 } from './toolService';
 
 // Export types from toolService
-export type { ExecutionStep, ExecutionLogCallback, RoutingResult, OrchestratedResult, ParsedToolCalls, ContinuationResult } from './toolService';
+export type { ExecutionStep, ExecutionLogCallback, ParsedToolCalls, PlannerFlowResult } from './toolService';
 
 // Document Generator Service
 export {
