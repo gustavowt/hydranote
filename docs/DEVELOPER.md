@@ -304,7 +304,7 @@ Step 3: write({title: "notes", content: "..."})
 
 ### Chat Service (`chatService.ts`)
 
-Manages chat sessions and context windows.
+Manages chat sessions, context windows, and **persistent chat history**.
 
 #### Key Functions
 
@@ -312,8 +312,25 @@ Manages chat sessions and context windows.
 |----------|-------------|
 | `buildSystemPrompt(projectId)` | Build system prompt with project context |
 | `manageContext(projectId, messages, query)` | Manage context window size |
-| `createChatSession(projectId)` | Create new chat session |
+| `createChatSession(projectId, title?)` | Create new chat session (persisted to DB) |
+| `getSessionHistory(projectId?)` | Get all chat sessions for a project/global |
+| `switchToSession(sessionId)` | Load and switch to a specific session |
+| `startNewSession(projectId?)` | Start a fresh chat session |
+| `addMessage(sessionId, role, content)` | Add message (persisted to DB) |
 | `prepareChatRequest(sessionId, message)` | Prepare API request with context |
+
+#### Chat History Persistence
+
+Chat sessions and messages are persisted to DuckDB with automatic retention:
+
+- **Maximum 20 sessions per project** (or global) - older sessions are pruned on new session creation
+- **Session titles** are auto-generated from the first user message
+- **Messages are saved** immediately to the database
+- **Session switching** allows users to browse and resume past conversations
+
+Database tables:
+- `chat_sessions`: Stores session metadata (id, project_id, title, timestamps)
+- `chat_messages`: Stores individual messages (id, session_id, role, content, timestamp)
 
 ### Telemetry Service (`telemetryService.ts`) - Phase 12
 
