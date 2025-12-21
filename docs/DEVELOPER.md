@@ -175,7 +175,7 @@ This reduces from 4 sequential LLM calls to 2 sequential phases (1 LLM + 2 paral
 
 ### Tool Service (`toolService.ts`)
 
-Handles tool routing and execution.
+Handles tool execution with a Planner → Executor → Checker architecture.
 
 #### Available Tools
 
@@ -188,24 +188,118 @@ Handles tool routing and execution.
 | `addNote` | Create and save notes | add note, save note, criar nota |
 | `updateFile` | Update sections in existing files | update, edit, modify, replace, insert |
 | `webResearch` | Search the web for information | web search, google, look up online, current news |
+| `createProject` | Create a new project (global mode) | create project, new project |
+| `moveFile` | Move file between projects (global mode) | move file, transfer |
+| `deleteFile` | Delete a file | delete file, remove file |
+| `deleteProject` | Delete a project (global mode) | delete project, remove project |
 
-#### Router Prompt
+#### Orchestration Flow (Planner → Executor → Checker)
 
-The router analyzes user messages and returns a JSON response:
+The chat system uses a three-phase execution pattern:
 
-```json
-{
-  "tools": [{"name": "toolName", "params": {"key": "value"}}]
+```
+User Message
+    |
+    v
+┌─────────────────────────────────────────┐
+│         PHASE 1: PLANNER                │
+│                                         │
+│  - Analyze user request                 │
+│  - Determine if clarification needed    │
+│  - Create ordered tool execution plan   │
+│  - Identify dependencies between steps  │
+└─────────────────────────────────────────┘
+    |
+    v
+Show Plan to User (with confirmation UI)
+    |
+    v (User clicks "Execute")
+┌─────────────────────────────────────────┐
+│         PHASE 2: EXECUTOR               │
+│                                         │
+│  For each step in plan:                 │
+│  1. Check dependencies (wait if needed) │
+│  2. Enrich params with context          │
+│  3. Execute tool                        │
+│  4. Extract context for next steps      │
+│  5. Pass context chain forward          │
+└─────────────────────────────────────────┘
+    |
+    v
+┌─────────────────────────────────────────┐
+│         PHASE 3: CHECKER                │
+│                                         │
+│  - Compare original request vs results  │
+│  - Verify all tasks completed           │
+│  - If incomplete: replan and re-execute │
+│  - If complete: return final response   │
+└─────────────────────────────────────────┘
+    |
+    v
+Final Response to User
+```
+
+**Key Features:**
+- User sees and confirms execution plan before tools run
+- Context passes between steps (e.g., web research → file creation)
+- Automatic re-planning if tasks are incomplete
+- Step-by-step progress UI during execution
+- Dependencies between steps are respected
+
+#### Key Functions
+
+| Function | Description |
+|----------|-------------|
+| `createExecutionPlan()` | Phase 1: Create plan from user message |
+| `executePlan()` | Phase 2: Execute plan with context passing |
+| `checkCompletion()` | Phase 3: Validate all tasks complete |
+| `runPlannerFlow()` | Full orchestration with re-planning |
+| `executeTool()` | Execute a single tool call |
+
+#### Types
+
+```typescript
+interface ExecutionPlan {
+  id: string;
+  summary: string;           // Human-readable plan description
+  steps: PlanStep[];         // Ordered sequence of tools
+  needsClarification: boolean;
+  clarificationQuestion?: string;
+}
+
+interface PlanStep {
+  id: string;
+  tool: ToolName;
+  params: Record<string, string>;
+  description: string;       // "Search the web for Vue 3 best practices"
+  dependsOn?: string[];      // IDs of steps that must complete first
+  contextNeeded?: string[];  // Context keys needed from previous steps
+  providesContext?: string[];// Context keys this step provides
+}
+
+interface ExecutionResult {
+  planId: string;
+  completedSteps: CompletedStep[];
+  failedSteps: FailedStep[];
+  accumulatedContext: Record<string, unknown>;
+  finalResponse: string;
 }
 ```
 
-Or for clarification:
+#### Context Chain Example
 
-```json
-{
-  "tools": [],
-  "clarification": "What would you like me to do?"
-}
+```
+Step 1: webResearch("Vue 3 composition API")
+  → Result: {chunks: [...], sources: [...]}
+  → Context: {webResearchResults: "...summary..."}
+
+Step 2: createProject("Vue Learning")
+  → Uses: (none)
+  → Context: {projectId: "abc123", projectName: "Vue Learning"}
+
+Step 3: write({title: "notes", content: "..."})
+  → Uses: webResearchResults (Step 1), projectId (Step 2)
+  → Generates content from web research context
 ```
 
 ### Chat Service (`chatService.ts`)
@@ -406,6 +500,26 @@ interface WebResearchToolParams {
   maxChunks?: number;      // Max chunks to return (default: 10)
 }
 ```
+
+#### Safety Limits & Progress Reporting
+
+The web research tool includes safeguards to prevent runaway operations:
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Global timeout | 30 seconds | Prevents indefinite hangs |
+| Page fetch timeout | 5 seconds | Skips slow pages |
+| Max chunks per page | 5 | Limits embedding generation |
+| Max content length | 50K chars | Truncates huge pages |
+| Concurrent fetches | 3 | Parallel page downloads |
+
+Progress is reported in real-time to the UI via callback, updating the step detail with:
+- "Checking cache..."
+- "Searching the web..."
+- "Fetching pages 1-3 of 5..."
+- "Processing page 1/3: Title..."
+- "Generating embeddings (2/5)..."
+- "Finding relevant content..."
 
 #### Caching
 
