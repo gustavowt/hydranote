@@ -184,6 +184,38 @@ async function createSchema(): Promise<void> {
   await connection.query(`
     CREATE INDEX IF NOT EXISTS idx_web_cache_fetched ON web_search_cache(fetched_at)
   `);
+
+  // Chat sessions table
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id VARCHAR PRIMARY KEY,
+      project_id VARCHAR,
+      title VARCHAR NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Chat messages table
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id VARCHAR PRIMARY KEY,
+      session_id VARCHAR NOT NULL,
+      role VARCHAR NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+    )
+  `);
+
+  // Create indexes for chat sessions
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)
+  `);
 }
 
 /**
@@ -866,5 +898,208 @@ export async function fuzzySearchFiles(
   return results
     .sort((a, b) => b.matchScore - a.matchScore)
     .slice(0, limit);
+}
+
+// ============================================
+// Chat Session Operations
+// ============================================
+
+export interface DBChatSession {
+  id: string;
+  projectId: string | null;
+  title: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface DBChatMessage {
+  id: string;
+  sessionId: string;
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  createdAt: Date;
+}
+
+/**
+ * Create a new chat session
+ */
+export async function createChatSession(session: DBChatSession): Promise<void> {
+  const conn = getConnection();
+  const escapedTitle = session.title.replace(/'/g, "''");
+  const projectIdValue = session.projectId ? `'${session.projectId}'` : 'NULL';
+  
+  await conn.query(`
+    INSERT INTO chat_sessions (id, project_id, title, created_at, updated_at)
+    VALUES ('${session.id}', ${projectIdValue}, '${escapedTitle}', '${session.createdAt.toISOString()}', '${session.updatedAt.toISOString()}')
+  `);
+  await flushDatabase();
+}
+
+/**
+ * Get a chat session by ID
+ */
+export async function getChatSession(sessionId: string): Promise<DBChatSession | null> {
+  const conn = getConnection();
+  const result = await conn.query(`SELECT * FROM chat_sessions WHERE id = '${sessionId}'`);
+  const rows = result.toArray();
+  if (rows.length === 0) return null;
+  
+  const row = rows[0];
+  return {
+    id: row.id as string,
+    projectId: row.project_id as string | null,
+    title: row.title as string,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
+  };
+}
+
+/**
+ * Get all chat sessions for a project (or global sessions if projectId is null)
+ */
+export async function getChatSessionsByProject(projectId: string | null, limit: number = 20): Promise<DBChatSession[]> {
+  const conn = getConnection();
+  const whereClause = projectId 
+    ? `WHERE project_id = '${projectId}'` 
+    : `WHERE project_id IS NULL`;
+  
+  const result = await conn.query(`
+    SELECT * FROM chat_sessions 
+    ${whereClause}
+    ORDER BY updated_at DESC
+    LIMIT ${limit}
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    projectId: row.project_id as string | null,
+    title: row.title as string,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
+  }));
+}
+
+/**
+ * Update chat session title and updated_at timestamp
+ */
+export async function updateChatSession(sessionId: string, title: string): Promise<void> {
+  const conn = getConnection();
+  const escapedTitle = title.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE chat_sessions 
+    SET title = '${escapedTitle}', updated_at = CURRENT_TIMESTAMP 
+    WHERE id = '${sessionId}'
+  `);
+  await flushDatabase();
+}
+
+/**
+ * Update chat session updated_at timestamp
+ */
+export async function touchChatSession(sessionId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    UPDATE chat_sessions 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = '${sessionId}'
+  `);
+  await flushDatabase();
+}
+
+/**
+ * Delete a chat session and all its messages
+ */
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const conn = getConnection();
+  
+  // Delete messages first (foreign key)
+  await conn.query(`DELETE FROM chat_messages WHERE session_id = '${sessionId}'`);
+  
+  // Delete the session
+  await conn.query(`DELETE FROM chat_sessions WHERE id = '${sessionId}'`);
+  
+  await flushDatabase();
+}
+
+/**
+ * Delete oldest chat sessions for a project, keeping only the most recent N sessions
+ */
+export async function pruneOldChatSessions(projectId: string | null, keepCount: number = 20): Promise<number> {
+  const conn = getConnection();
+  const whereClause = projectId 
+    ? `WHERE project_id = '${projectId}'` 
+    : `WHERE project_id IS NULL`;
+  
+  // Get sessions to delete (older than the keepCount most recent)
+  const result = await conn.query(`
+    SELECT id FROM chat_sessions
+    ${whereClause}
+    ORDER BY updated_at DESC
+    OFFSET ${keepCount}
+  `);
+  
+  const sessionsToDelete = result.toArray().map((row: Record<string, unknown>) => row.id as string);
+  
+  if (sessionsToDelete.length === 0) return 0;
+  
+  const idsStr = sessionsToDelete.map(id => `'${id}'`).join(', ');
+  
+  // Delete messages first
+  await conn.query(`DELETE FROM chat_messages WHERE session_id IN (${idsStr})`);
+  
+  // Delete sessions
+  await conn.query(`DELETE FROM chat_sessions WHERE id IN (${idsStr})`);
+  
+  await flushDatabase();
+  
+  return sessionsToDelete.length;
+}
+
+// ============================================
+// Chat Message Operations
+// ============================================
+
+/**
+ * Create a new chat message
+ */
+export async function createChatMessage(message: DBChatMessage): Promise<void> {
+  const conn = getConnection();
+  const escapedContent = message.content.replace(/'/g, "''");
+  
+  await conn.query(`
+    INSERT INTO chat_messages (id, session_id, role, content, created_at)
+    VALUES ('${message.id}', '${message.sessionId}', '${message.role}', '${escapedContent}', '${message.createdAt.toISOString()}')
+  `);
+  await flushDatabase();
+}
+
+/**
+ * Get all messages for a chat session
+ */
+export async function getChatMessages(sessionId: string): Promise<DBChatMessage[]> {
+  const conn = getConnection();
+  
+  const result = await conn.query(`
+    SELECT * FROM chat_messages 
+    WHERE session_id = '${sessionId}'
+    ORDER BY created_at ASC
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    sessionId: row.session_id as string,
+    role: row.role as 'system' | 'user' | 'assistant',
+    content: row.content as string,
+    createdAt: new Date(row.created_at as string),
+  }));
+}
+
+/**
+ * Delete all messages for a session
+ */
+export async function deleteChatMessages(sessionId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM chat_messages WHERE session_id = '${sessionId}'`);
+  await flushDatabase();
 }
 
