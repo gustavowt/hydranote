@@ -35,6 +35,7 @@ const PAGE_FETCH_TIMEOUT_MS = 5000; // 5 seconds per page
 const MAX_CHUNKS_PER_PAGE = 5; // Limit chunks per page
 const MAX_CONTENT_LENGTH = 50000; // Max characters per page
 const CONCURRENT_FETCHES = 3; // Pages fetched in parallel
+const CONCURRENT_EMBEDDINGS = 5; // Embeddings generated in parallel
 
 /**
  * Wrap a promise with a timeout
@@ -596,6 +597,7 @@ export async function fetchPageContent(url: string): Promise<WebPageContent> {
 
 /**
  * Process web content: chunk and generate embeddings (with limits)
+ * Uses concurrent embedding generation for better performance
  */
 async function processWebContent(
   cacheId: string,
@@ -611,35 +613,53 @@ async function processWebContent(
   const chunksToProcess = textChunks.slice(0, MAX_CHUNKS_PER_PAGE);
   
   const webChunks: WebChunk[] = [];
+  let processedCount = 0;
   
-  for (let i = 0; i < chunksToProcess.length; i++) {
-    const chunk = chunksToProcess[i];
+  // Process chunks in batches for concurrent embedding generation
+  for (let i = 0; i < chunksToProcess.length; i += CONCURRENT_EMBEDDINGS) {
+    const batch = chunksToProcess.slice(i, i + CONCURRENT_EMBEDDINGS);
     
-    onProgress?.(`Generating embeddings (${i + 1}/${chunksToProcess.length})...`);
+    onProgress?.(`Analyzing content (${Math.min(i + CONCURRENT_EMBEDDINGS, chunksToProcess.length)}/${chunksToProcess.length})...`);
     
-    // Generate embedding for this chunk
-    const embedding = await generateEmbedding(chunk.text);
+    // Generate embeddings concurrently for the batch
+    const embeddingResults = await Promise.allSettled(
+      batch.map(chunk => generateEmbedding(chunk.text))
+    );
     
-    const webChunk: WebChunk = {
-      id: crypto.randomUUID(),
-      cacheId,
-      url,
-      title,
-      text: chunk.text,
-      chunkIndex: i,
-      embedding,
-    };
-    
-    // Store in database
-    await createWebSearchChunk({
-      id: webChunk.id,
-      cacheId: webChunk.cacheId,
-      chunkIndex: webChunk.chunkIndex,
-      text: webChunk.text,
-      embedding: webChunk.embedding,
-    });
-    
-    webChunks.push(webChunk);
+    // Process results and store in database
+    for (let j = 0; j < batch.length; j++) {
+      const embeddingResult = embeddingResults[j];
+      if (embeddingResult.status !== 'fulfilled') {
+        // Skip failed embeddings
+        continue;
+      }
+      
+      const chunk = batch[j];
+      const embedding = embeddingResult.value;
+      const chunkIndex = i + j;
+      
+      const webChunk: WebChunk = {
+        id: crypto.randomUUID(),
+        cacheId,
+        url,
+        title,
+        text: chunk.text,
+        chunkIndex,
+        embedding,
+      };
+      
+      // Store in database
+      await createWebSearchChunk({
+        id: webChunk.id,
+        cacheId: webChunk.cacheId,
+        chunkIndex: webChunk.chunkIndex,
+        text: webChunk.text,
+        embedding: webChunk.embedding,
+      });
+      
+      webChunks.push(webChunk);
+      processedCount++;
+    }
   }
   
   return webChunks;

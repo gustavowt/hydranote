@@ -512,13 +512,14 @@ The web research tool includes safeguards to prevent runaway operations:
 | Max chunks per page | 5 | Limits embedding generation |
 | Max content length | 50K chars | Truncates huge pages |
 | Concurrent fetches | 3 | Parallel page downloads |
+| Concurrent embeddings | 5 | Parallel embedding generation |
 
 Progress is reported in real-time to the UI via callback, updating the step detail with:
 - "Checking cache..."
 - "Searching the web..."
 - "Fetching pages 1-3 of 5..."
 - "Processing page 1/3: Title..."
-- "Generating embeddings (2/5)..."
+- "Analyzing content (2/5)..."
 - "Finding relevant content..."
 
 #### Caching
