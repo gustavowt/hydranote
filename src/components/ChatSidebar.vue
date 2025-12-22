@@ -9,43 +9,71 @@
 
     <!-- Expanded Sidebar -->
     <template v-else>
-      <!-- Sidebar Header -->
-      <div class="sidebar-header">
-        <div class="header-top">
-          <ion-icon :icon="chatbubbleOutline" class="header-icon" />
-          <span class="header-title">Chat</span>
-        </div>
-        <ion-button 
-          fill="clear" 
-          size="small" 
-          class="collapse-btn"
-          @click="toggleCollapse"
-        >
-          <ion-icon slot="icon-only" :icon="chevronForwardOutline" />
-        </ion-button>
-      </div>
-
-      <!-- Project Selector -->
-      <div class="project-selector-container">
-        <div class="project-selector">
-          <ion-select 
-            v-model="selectedScope"
-            interface="popover"
-            placeholder="Select scope"
-            class="project-select"
-            @ionChange="handleScopeChange"
-          >
-            <ion-select-option value="__all__">
-              🌐 All Projects
-            </ion-select-option>
-            <ion-select-option 
-              v-for="project in projects" 
-              :key="project.id" 
-              :value="project.id"
+      <!-- Unified Compact Header -->
+      <div class="chat-header">
+        <!-- Left: Project/Scope selector -->
+        <div class="scope-selector" @click="showScopeDropdown = !showScopeDropdown">
+          <span class="scope-icon">{{ isGlobalMode ? '🌐' : '📁' }}</span>
+          <span class="scope-name">{{ currentScopeName }}</span>
+          <ion-icon :icon="chevronDownOutline" class="scope-chevron" />
+          
+          <!-- Scope Dropdown -->
+          <div v-if="showScopeDropdown" class="scope-dropdown" @click.stop>
+            <div 
+              class="scope-item" 
+              :class="{ active: isGlobalMode }"
+              @click="selectScope('__all__')"
             >
-              {{ project.name }}
-            </ion-select-option>
-          </ion-select>
+              <span class="scope-item-icon">🌐</span>
+              <span>All Projects</span>
+            </div>
+            <div class="scope-divider"></div>
+            <div 
+              v-for="project in projects" 
+              :key="project.id"
+              class="scope-item"
+              :class="{ active: selectedScope === project.id }"
+              @click="selectScope(project.id)"
+            >
+              <span class="scope-item-icon">📁</span>
+              <span>{{ project.name }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Action buttons -->
+        <div class="header-actions">
+          <button class="header-action-btn" @click.stop="handleNewChat" title="New Chat">
+            <ion-icon :icon="addOutline" />
+          </button>
+          <button class="header-action-btn" @click.stop="toggleHistoryDropdown" title="Chat History" :class="{ active: showHistoryDropdown }">
+            <ion-icon :icon="timeOutline" />
+          </button>
+          <button class="header-action-btn" @click.stop="toggleCollapse" title="Collapse">
+            <ion-icon :icon="chevronForwardOutline" />
+          </button>
+        </div>
+
+        <!-- History Panel (slides down) -->
+        <div v-if="showHistoryDropdown" class="history-panel">
+          <div class="history-panel-header">
+            <span class="history-panel-title">Recent Chats</span>
+          </div>
+          <div class="history-panel-list">
+            <div 
+              v-for="session in chatHistory" 
+              :key="session.id" 
+              class="history-panel-item"
+              :class="{ active: session.id === sessionId }"
+              @click="handleSwitchSession(session.id)"
+            >
+              <span class="history-item-title">{{ session.title }}</span>
+              <span class="history-item-date">{{ formatSessionDate(session.updatedAt) }}</span>
+            </div>
+            <div v-if="chatHistory.length === 0" class="history-empty">
+              No previous chats
+            </div>
+          </div>
         </div>
       </div>
 
@@ -298,7 +326,7 @@ import {
   listOutline,
   playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -318,9 +346,13 @@ import {
   createExecutionPlan,
   runPlannerFlow,
   getToolIcon,
+  // Chat history
+  getSessionHistory,
+  switchToSession,
+  startNewSession,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
-import { folderOutline, addOutline } from 'ionicons/icons';
+import { folderOutline, addOutline, timeOutline, chevronDownOutline } from 'ionicons/icons';
 
 // Special value for "All Projects" scope
 const ALL_PROJECTS_SCOPE = '__all__';
@@ -375,6 +407,14 @@ const inputContainerRef = ref<HTMLElement | null>(null);
 
 // Computed properties for mode detection
 const isGlobalMode = computed(() => selectedScope.value === ALL_PROJECTS_SCOPE);
+const currentScopeName = computed(() => {
+  if (isGlobalMode.value) return 'All Projects';
+  const project = props.projects.find(p => p.id === selectedScope.value);
+  return project?.name || 'Select Project';
+});
+
+// Scope dropdown state
+const showScopeDropdown = ref(false);
 
 // Autocomplete state
 const showAutocomplete = ref(false);
@@ -394,6 +434,11 @@ const streamingContent = ref('');
 const pendingPlan = ref<ExecutionPlan | null>(null);
 const isExecutingPlan = ref(false);
 const currentPlanStep = ref<{ step: PlanStep; index: number; total: number } | null>(null);
+
+// Chat history state
+const showHistoryDropdown = ref(false);
+const chatHistory = ref<ChatSession[]>([]);
+const currentSessionTitle = ref('New Chat');
 
 // Get the current/last step to display (prioritize running, then last completed)
 const currentStep = computed(() => {
@@ -447,11 +492,68 @@ async function loadSession() {
   const session = await getOrCreateSession(selectedProjectId.value);
   sessionId.value = session.id;
   messages.value = getMessages(session.id);
+  currentSessionTitle.value = session.title || 'New Chat';
   sessionReady.value = true;
+  
+  // Load chat history for this project/global
+  await loadChatHistory();
+}
+
+async function loadChatHistory() {
+  chatHistory.value = await getSessionHistory(selectedProjectId.value);
+}
+
+async function handleNewChat() {
+  showHistoryDropdown.value = false;
+  const session = await startNewSession(selectedProjectId.value);
+  sessionId.value = session.id;
+  messages.value = [];
+  currentSessionTitle.value = session.title || 'New Chat';
+  await loadChatHistory();
+}
+
+async function handleSwitchSession(targetSessionId: string) {
+  showHistoryDropdown.value = false;
+  const session = await switchToSession(targetSessionId);
+  if (session) {
+    sessionId.value = session.id;
+    messages.value = [...session.messages];
+    currentSessionTitle.value = session.title || 'New Chat';
+  }
+}
+
+function toggleHistoryDropdown() {
+  showHistoryDropdown.value = !showHistoryDropdown.value;
+}
+
+function formatSessionDate(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function handleScopeChange(event: CustomEvent) {
   const scope = event.detail.value;
+  selectedScope.value = scope;
+  
+  if (scope !== ALL_PROJECTS_SCOPE) {
+    emit('project-change', scope);
+  }
+  
+  loadSession();
+}
+
+function selectScope(scope: string) {
+  showScopeDropdown.value = false;
   selectedScope.value = scope;
   
   if (scope !== ALL_PROJECTS_SCOPE) {
@@ -477,8 +579,9 @@ async function sendMessage(text?: string) {
   inputMessage.value = '';
 
   // Add user message
-  const userMessage = addMessage(sessionId.value, 'user', messageText);
+  const userMessage = await addMessage(sessionId.value, 'user', messageText);
   messages.value = [...messages.value, userMessage];
+  currentSessionTitle.value = userMessage.content.substring(0, 50) + (userMessage.content.length > 50 ? '...' : '');
   
   await scrollToBottom();
   isTyping.value = true;
@@ -511,7 +614,7 @@ async function sendMessage(text?: string) {
 
     // Handle clarification request
     if (plan.needsClarification) {
-      const clarificationMessage = addMessage(
+      const clarificationMessage = await addMessage(
         sessionId.value,
         'assistant',
         plan.clarificationQuestion || 'I need more information to proceed. Could you please clarify your request?'
@@ -548,7 +651,7 @@ async function sendMessage(text?: string) {
         }
       );
 
-      const assistantMessage = addMessage(sessionId.value, 'assistant', response.content);
+      const assistantMessage = await addMessage(sessionId.value, 'assistant', response.content);
       messages.value = [...messages.value, assistantMessage];
       isTyping.value = false;
       streamingContent.value = '';
@@ -557,7 +660,7 @@ async function sendMessage(text?: string) {
     }
 
     // Show plan summary to user
-    const planSummaryMessage = addMessage(
+    const planSummaryMessage = await addMessage(
       sessionId.value,
       'assistant',
       `I've created an execution plan:\n\n**${plan.summary}**\n\nPlease review the steps below and click "Execute Plan" to proceed.`
@@ -572,7 +675,7 @@ async function sendMessage(text?: string) {
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to get response';
-    const assistantMessage = addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
+    const assistantMessage = await addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
     messages.value = [...messages.value, assistantMessage];
     isTyping.value = false;
   } finally {
@@ -692,7 +795,7 @@ async function handleApplyUpdate() {
     const result = await applyFileUpdate(activePreview.value.previewId);
     
     if (result.success) {
-      const successMessage = addMessage(
+      const successMessage = await addMessage(
         sessionId.value,
         'assistant',
         `File "${result.fileName}" has been updated successfully. The file has been re-indexed.`
@@ -702,21 +805,21 @@ async function handleApplyUpdate() {
       // Emit event to refresh the file in the editor if it's currently open
       emit('file-updated', previewFileId, previewFileName);
     } else {
-      const errorMessage = addMessage(
+      const errorMsg = await addMessage(
         sessionId.value,
         'assistant',
         `Failed to update file: ${result.error}`
       );
-      messages.value = [...messages.value, errorMessage];
+      messages.value = [...messages.value, errorMsg];
     }
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    const errorMessage = addMessage(
+    const errorStr = error instanceof Error ? error.message : 'Unknown error';
+    const errorMsg = await addMessage(
       sessionId.value,
       'assistant',
-      `Failed to apply update: ${errorMsg}`
+      `Failed to apply update: ${errorStr}`
     );
-    messages.value = [...messages.value, errorMessage];
+    messages.value = [...messages.value, errorMsg];
   } finally {
     activePreview.value = null;
     isApplyingUpdate.value = false;
@@ -724,10 +827,10 @@ async function handleApplyUpdate() {
   }
 }
 
-function handleCancelUpdate() {
+async function handleCancelUpdate() {
   if (activePreview.value) {
     removePendingPreview(activePreview.value.previewId);
-    const cancelMessage = addMessage(
+    const cancelMessage = await addMessage(
       sessionId.value,
       'assistant',
       'Update cancelled. No changes were made to the file.'
@@ -735,13 +838,13 @@ function handleCancelUpdate() {
     messages.value = [...messages.value, cancelMessage];
   }
   activePreview.value = null;
-  scrollToBottom();
+  await scrollToBottom();
 }
 
 // Execution plan handlers
-function handleCancelPlan() {
+async function handleCancelPlan() {
   if (pendingPlan.value) {
-    const cancelMessage = addMessage(
+    const cancelMessage = await addMessage(
       sessionId.value,
       'assistant',
       'Execution plan cancelled.'
@@ -750,7 +853,7 @@ function handleCancelPlan() {
   }
   pendingPlan.value = null;
   isTyping.value = false;
-  scrollToBottom();
+  await scrollToBottom();
 }
 
 async function handleExecutePlan() {
@@ -783,7 +886,7 @@ async function handleExecutePlan() {
     currentPlanStep.value = null;
 
     // Add the final response
-    const assistantMessage = addMessage(sessionId.value, 'assistant', result.response);
+    const assistantMessage = await addMessage(sessionId.value, 'assistant', result.response);
     messages.value = [...messages.value, assistantMessage];
 
     // Check for file creations and emit events
@@ -821,7 +924,7 @@ async function handleExecutePlan() {
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute plan';
-    const assistantMessage = addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
+    const assistantMessage = await addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
     messages.value = [...messages.value, assistantMessage];
   } finally {
     isExecutingPlan.value = false;
@@ -967,79 +1070,216 @@ defineExpose({ selectProject, selectGlobalMode });
   font-size: 12px;
 }
 
-/* Expanded Sidebar */
-.sidebar-header {
+/* Compact Chat Header */
+.chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 8px 12px 16px;
-  border-bottom: 1px solid var(--hn-border-default);
   background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-default);
+  position: relative;
   min-height: 48px;
   box-sizing: border-box;
 }
 
-.header-top {
+/* Scope Selector */
+.scope-selector {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--hn-bg-elevated);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  max-width: 180px;
+  min-width: 120px;
+  position: relative;
+  z-index: 10;
 }
 
-.header-icon {
-  font-size: 18px;
-  color: var(--hn-purple);
+.scope-selector:hover {
+  background: var(--hn-bg-hover);
+}
+
+.scope-icon {
+  font-size: 12px;
   flex-shrink: 0;
 }
 
-.header-title {
-  font-size: 0.85rem;
-  font-weight: 600;
+.scope-name {
+  font-size: 0.8rem;
+  font-weight: 500;
   color: var(--hn-text-primary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.collapse-btn {
-  --padding-start: 4px;
-  --padding-end: 4px;
-  --color: var(--hn-text-secondary);
-  margin: 0;
-  height: 28px;
+.scope-chevron {
+  font-size: 10px;
+  color: var(--hn-text-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+/* Scope Dropdown */
+.scope-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.scope-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--hn-text-primary);
+  transition: background 0.15s ease;
+}
+
+.scope-item:hover {
+  background: var(--hn-bg-hover);
+}
+
+.scope-item.active {
+  background: rgba(138, 180, 248, 0.12);
+  color: var(--hn-purple);
+}
+
+.scope-item-icon {
+  font-size: 14px;
+}
+
+.scope-divider {
+  height: 1px;
+  background: var(--hn-border-default);
+  margin: 4px 0;
+}
+
+/* Header Actions */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.header-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--hn-text-secondary);
+  transition: all 0.15s ease;
 }
 
-.collapse-btn:hover {
-  --color: var(--hn-text-primary);
+.header-action-btn:hover {
+  background: var(--hn-bg-hover);
+  color: var(--hn-text-primary);
 }
 
-/* Project Selector Container */
-.project-selector-container {
-  padding: 8px 16px;
+.header-action-btn.active {
+  background: rgba(138, 180, 248, 0.15);
+  color: var(--hn-purple);
+}
+
+.header-action-btn ion-icon {
+  font-size: 16px;
+}
+
+/* History Panel */
+.history-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--hn-bg-surface);
+  border-bottom: 1px solid var(--hn-border-strong);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  max-height: 240px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-panel-header {
+  padding: 8px 12px;
   border-bottom: 1px solid var(--hn-border-default);
 }
 
-.project-selector {
-  /* No extra margin needed */
+.history-panel-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--hn-text-muted);
 }
 
-.project-select {
-  --background: var(--hn-bg-elevated);
-  --color: var(--hn-text-primary);
-  --placeholder-color: var(--hn-text-secondary);
-  --padding-start: 12px;
-  --padding-end: 12px;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  width: 100%;
+.history-panel-list {
+  flex: 1;
+  overflow-y: auto;
 }
 
-.no-projects {
-  font-size: 0.85rem;
-  color: var(--hn-text-secondary);
+.history-panel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-left: 2px solid transparent;
+}
+
+.history-panel-item:hover {
+  background: var(--hn-bg-hover);
+}
+
+.history-panel-item.active {
+  background: rgba(138, 180, 248, 0.1);
+  border-left-color: var(--hn-purple);
+}
+
+.history-item-title {
+  font-size: 0.82rem;
+  color: var(--hn-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.history-item-date {
+  font-size: 0.7rem;
+  color: var(--hn-text-muted);
+  flex-shrink: 0;
+}
+
+.history-empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--hn-text-muted);
   font-style: italic;
-  margin-top: 8px;
 }
 
 /* Chat Content */

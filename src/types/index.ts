@@ -148,6 +148,8 @@ export interface ChatSession {
   id: string;
   /** Project ID - undefined means global session with access to all projects */
   projectId?: string;
+  /** Session title (auto-generated from first message or set manually) */
+  title: string;
   messages: ChatMessage[];
   createdAt: Date;
   updatedAt: Date;
