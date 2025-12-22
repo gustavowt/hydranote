@@ -12,6 +12,20 @@ import type {
 } from '../types';
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
 import { getProject, get_project_files, getProjectStats, searchProject, getAllProjects, searchAllProjects } from './projectService';
+import {
+  createChatSession as dbCreateSession,
+  getChatSession as dbGetSession,
+  getChatSessionsByProject as dbGetSessionsByProject,
+  updateChatSession as dbUpdateSession,
+  touchChatSession as dbTouchSession,
+  deleteChatSession as dbDeleteSession,
+  pruneOldChatSessions as dbPruneOldSessions,
+  createChatMessage as dbCreateMessage,
+  getChatMessages as dbGetMessages,
+  deleteChatMessages as dbDeleteMessages,
+  type DBChatSession,
+  type DBChatMessage,
+} from './database';
 
 // ============================================
 // System Prompt Builder
@@ -383,19 +397,48 @@ export function formatContextForPrompt(chunks: SearchResult[]): string {
 }
 
 // ============================================
-// Chat Session Management
+// Chat Session Management (with Database Persistence)
 // ============================================
 
+// In-memory cache for active sessions
 const activeSessions = new Map<string, ChatSession>();
 
-// Special key for global session
-const GLOBAL_SESSION_KEY = '__global__';
+// Maximum sessions to keep per project (for retention)
+const MAX_SESSIONS_PER_PROJECT = 20;
+
+/**
+ * Generate a title from the first user message
+ */
+function generateSessionTitle(content: string): string {
+  // Take first 50 chars of the message, truncate at word boundary
+  const maxLen = 50;
+  if (content.length <= maxLen) return content;
+  
+  const truncated = content.substring(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return lastSpace > 20 ? truncated.substring(0, lastSpace) + '...' : truncated + '...';
+}
+
+/**
+ * Convert DB session to in-memory session format
+ */
+function dbSessionToSession(dbSession: DBChatSession, messages: ChatMessage[] = []): ChatSession {
+  return {
+    id: dbSession.id,
+    projectId: dbSession.projectId ?? undefined,
+    title: dbSession.title,
+    messages,
+    createdAt: dbSession.createdAt,
+    updatedAt: dbSession.updatedAt,
+  };
+}
 
 /**
  * Create a new chat session for a project or global
  * @param projectId - Project ID, or undefined for global session
+ * @param title - Optional initial title (defaults to "New Chat")
  */
-export async function createChatSession(projectId?: string): Promise<ChatSession> {
+export async function createChatSession(projectId?: string, title?: string): Promise<ChatSession> {
   // Validate project if specified
   if (projectId) {
     const project = await getProject(projectId);
@@ -404,12 +447,30 @@ export async function createChatSession(projectId?: string): Promise<ChatSession
     }
   }
 
-  const session: ChatSession = {
+  const now = new Date();
+  const sessionTitle = title || 'New Chat';
+  
+  const dbSession: DBChatSession = {
     id: crypto.randomUUID(),
+    projectId: projectId ?? null,
+    title: sessionTitle,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Persist to database
+  await dbCreateSession(dbSession);
+  
+  // Prune old sessions to maintain retention limit
+  await dbPruneOldSessions(projectId ?? null, MAX_SESSIONS_PER_PROJECT);
+
+  const session: ChatSession = {
+    id: dbSession.id,
     projectId,
+    title: sessionTitle,
     messages: [],
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    createdAt: now,
+    updatedAt: now,
   };
 
   activeSessions.set(session.id, session);
@@ -417,27 +478,79 @@ export async function createChatSession(projectId?: string): Promise<ChatSession
 }
 
 /**
- * Get an existing chat session
+ * Get an existing chat session (from cache or database)
  */
-export function getChatSession(sessionId: string): ChatSession | null {
-  return activeSessions.get(sessionId) || null;
+export async function getChatSession(sessionId: string): Promise<ChatSession | null> {
+  // Check cache first
+  const cached = activeSessions.get(sessionId);
+  if (cached) return cached;
+  
+  // Load from database
+  const dbSession = await dbGetSession(sessionId);
+  if (!dbSession) return null;
+  
+  // Load messages
+  const dbMessages = await dbGetMessages(sessionId);
+  const messages: ChatMessage[] = dbMessages.map(m => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.createdAt,
+  }));
+  
+  const session = dbSessionToSession(dbSession, messages);
+  activeSessions.set(session.id, session);
+  return session;
+}
+
+/**
+ * Get all chat sessions for a project (or global)
+ */
+export async function getSessionHistory(projectId?: string): Promise<ChatSession[]> {
+  const dbSessions = await dbGetSessionsByProject(projectId ?? null, MAX_SESSIONS_PER_PROJECT);
+  return dbSessions.map(s => dbSessionToSession(s));
+}
+
+/**
+ * Load a session and make it the active one (switch to it)
+ */
+export async function switchToSession(sessionId: string): Promise<ChatSession | null> {
+  const session = await getChatSession(sessionId);
+  return session;
 }
 
 /**
  * Get or create chat session for a project (or global if projectId is undefined)
+ * Creates a new session if none exists, otherwise returns the most recent one
  * @param projectId - Project ID, or undefined for global session
  */
 export async function getOrCreateSession(projectId?: string): Promise<ChatSession> {
-  // Find existing session for this project (or global)
+  // Check cache first for an active session
   for (const session of activeSessions.values()) {
     if (projectId === undefined && session.projectId === undefined) {
-      // Looking for global session and found one
       return session;
     }
     if (projectId && session.projectId === projectId) {
-      // Looking for project session and found it
       return session;
     }
+  }
+  
+  // Check database for existing sessions
+  const existingSessions = await dbGetSessionsByProject(projectId ?? null, 1);
+  if (existingSessions.length > 0) {
+    // Load the most recent session
+    const dbSession = existingSessions[0];
+    const dbMessages = await dbGetMessages(dbSession.id);
+    const messages: ChatMessage[] = dbMessages.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.createdAt,
+    }));
+    
+    const session = dbSessionToSession(dbSession, messages);
+    activeSessions.set(session.id, session);
+    return session;
   }
   
   // Create new session
@@ -445,29 +558,51 @@ export async function getOrCreateSession(projectId?: string): Promise<ChatSessio
 }
 
 /**
- * Add a message to a chat session
+ * Add a message to a chat session (persisted to database)
  */
-export function addMessage(
+export async function addMessage(
   sessionId: string,
   role: ChatMessage['role'],
   content: string,
   contextChunks?: SearchResult[]
-): ChatMessage {
+): Promise<ChatMessage> {
   const session = activeSessions.get(sessionId);
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
   }
 
+  const now = new Date();
   const message: ChatMessage = {
     id: crypto.randomUUID(),
     role,
     content,
-    timestamp: new Date(),
+    timestamp: now,
     contextChunks,
   };
 
+  // Add to in-memory session
   session.messages.push(message);
-  session.updatedAt = new Date();
+  session.updatedAt = now;
+
+  // Persist message to database
+  const dbMessage: DBChatMessage = {
+    id: message.id,
+    sessionId,
+    role,
+    content,
+    createdAt: now,
+  };
+  await dbCreateMessage(dbMessage);
+  
+  // Update session title from first user message
+  if (role === 'user' && session.messages.filter(m => m.role === 'user').length === 1) {
+    const newTitle = generateSessionTitle(content);
+    session.title = newTitle;
+    await dbUpdateSession(sessionId, newTitle);
+  } else {
+    // Just touch the session to update timestamp
+    await dbTouchSession(sessionId);
+  }
 
   return message;
 }
@@ -481,21 +616,44 @@ export function getMessages(sessionId: string): ChatMessage[] {
 }
 
 /**
- * Clear a chat session
+ * Clear a chat session's messages
  */
-export function clearSession(sessionId: string): void {
+export async function clearSession(sessionId: string): Promise<void> {
   const session = activeSessions.get(sessionId);
   if (session) {
     session.messages = [];
     session.updatedAt = new Date();
   }
+  
+  // Clear from database
+  await dbDeleteMessages(sessionId);
 }
 
 /**
- * Delete a chat session
+ * Delete a chat session completely
  */
-export function deleteSession(sessionId: string): void {
+export async function deleteSession(sessionId: string): Promise<void> {
   activeSessions.delete(sessionId);
+  await dbDeleteSession(sessionId);
+}
+
+/**
+ * Start a new chat session (creates fresh session for the project/global)
+ */
+export async function startNewSession(projectId?: string): Promise<ChatSession> {
+  // Remove any existing active session for this project from cache
+  for (const [id, session] of activeSessions.entries()) {
+    if (projectId === undefined && session.projectId === undefined) {
+      activeSessions.delete(id);
+      break;
+    }
+    if (projectId && session.projectId === projectId) {
+      activeSessions.delete(id);
+      break;
+    }
+  }
+  
+  return createChatSession(projectId);
 }
 
 // ============================================
@@ -548,11 +706,11 @@ export async function prepareChatRequest(
 /**
  * Record assistant response
  */
-export function recordAssistantResponse(
+export async function recordAssistantResponse(
   sessionId: string,
   content: string,
   contextChunks?: SearchResult[]
-): ChatMessage {
+): Promise<ChatMessage> {
   return addMessage(sessionId, 'assistant', content, contextChunks);
 }
 

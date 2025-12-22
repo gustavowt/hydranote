@@ -57,6 +57,10 @@ export {
   deleteSession,
   prepareChatRequest,
   recordAssistantResponse,
+  // Chat history
+  getSessionHistory,
+  switchToSession,
+  startNewSession,
 } from './chatService';
 
 // LLM Service
