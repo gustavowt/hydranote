@@ -12,9 +12,10 @@ This document provides technical documentation for developers working on HydraNo
 6. [File System Sync](#file-system-sync)
 7. [Telemetry & Metrics](#telemetry--metrics)
 8. [Phase 12 Guardrails](#phase-12-guardrails)
-9. [Routing](#routing)
-10. [Configuration](#configuration)
-11. [File Structure](#file-structure)
+9. [File Version History](#file-version-history)
+10. [Routing](#routing)
+11. [Configuration](#configuration)
+12. [File Structure](#file-structure)
 
 ---
 
@@ -1306,6 +1307,121 @@ console.log(getRecentEvents(10));
 
 ---
 
+## File Version History
+
+HydraNote maintains a version history for each file, storing the last 10 versions with efficient diff-based storage.
+
+### Overview
+
+The version history system:
+- Stores up to 10 versions per file
+- Uses a hybrid storage strategy: full content for the first version, diffs for subsequent versions
+- Creates versions automatically on file create, update, and format operations
+- Allows users to restore any previous version from the UI
+
+### Storage Strategy
+
+- **First version**: Stored as full content
+- **Subsequent versions**: Stored as JSON-encoded patches (using diff-match-patch)
+- **Fallback**: If a patch is larger than full content, full content is stored instead
+- **Pruning**: When versions exceed 10, oldest versions are automatically removed
+
+### Version Sources
+
+| Source | Trigger | Description |
+|--------|---------|-------------|
+| `create` | `createFile()` | Initial file creation |
+| `update` | `updateFile()` | Manual save or content update |
+| `format` | AI Formatting | Stored before AI formatting is applied |
+| `restore` | Version restore | Stored before restoring to a previous version |
+
+### Database Schema
+
+```sql
+CREATE TABLE file_versions (
+  id VARCHAR PRIMARY KEY,
+  file_id VARCHAR NOT NULL,
+  version_number INTEGER NOT NULL,
+  is_full_content BOOLEAN NOT NULL,
+  content_or_patch TEXT NOT NULL,
+  source VARCHAR NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (file_id) REFERENCES files(id)
+)
+```
+
+### Version Service (`versionService.ts`)
+
+Handles version creation, reconstruction, and pruning.
+
+| Function | Description |
+|----------|-------------|
+| `createVersion(fileId, content, source)` | Create a new version |
+| `getVersionHistory(fileId)` | Get list of version metadata |
+| `reconstructVersion(fileId, versionNumber)` | Reconstruct content at a version |
+| `getVersionContent(fileId, versionNumber)` | Get content of a specific version |
+| `pruneVersions(fileId, keepCount)` | Remove old versions beyond limit |
+| `createInitialVersion(fileId, content)` | Create version on file creation |
+| `createUpdateVersion(fileId, content)` | Create version on file update |
+| `createFormatVersion(fileId, content)` | Create version before formatting |
+| `createRestoreVersion(fileId, content)` | Create version before restore |
+
+### Version Reconstruction
+
+To reconstruct a version:
+1. Load all versions from version 1 to the target version
+2. Start with the first version (must be full content)
+3. Apply each subsequent patch sequentially
+4. Return the final content
+
+```typescript
+import { getVersionContent, getVersionHistory } from '@/services';
+
+// Get list of versions for a file
+const versions = await getVersionHistory(fileId);
+
+// Reconstruct content at version 3
+const content = await getVersionContent(fileId, 3);
+```
+
+### UI Integration
+
+The version history is accessible via the MarkdownEditor's 3-dots menu:
+1. Click "Version History" to open the modal
+2. View list of versions with timestamps and source labels
+3. Click "Restore" to restore a previous version
+
+Restoring a version:
+1. Stores current content as a `restore` version
+2. Reconstructs the selected version content
+3. Updates the editor and saves the file
+
+### Types
+
+```typescript
+type VersionSource = 'create' | 'update' | 'format' | 'restore';
+
+interface FileVersion {
+  id: string;
+  fileId: string;
+  versionNumber: number;
+  isFullContent: boolean;
+  contentOrPatch: string;
+  source: VersionSource;
+  createdAt: Date;
+}
+
+interface FileVersionMeta {
+  id: string;
+  fileId: string;
+  versionNumber: number;
+  source: VersionSource;
+  createdAt: Date;
+}
+```
+
+---
+
 ## File Structure
 
 ```
@@ -1331,6 +1447,7 @@ src/
 │   ├── syncService.ts        # Bidirectional file system sync
 │   ├── telemetryService.ts   # Metrics tracking (Phase 12)
 │   ├── toolService.ts        # Tool routing/execution
+│   ├── versionService.ts     # File version history (diff-based)
 │   ├── webSearchService.ts   # Web research with caching and embeddings
 │   └── index.ts              # Service exports
 ├── types/
