@@ -47,17 +47,9 @@ import { chatCompletion, chatCompletionStreaming } from "./llmService";
 import { generateDocument } from "./documentGeneratorService";
 import { addNote, addNoteWithTitle } from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
-import { generateEmbedding, cosineSimilarity } from "./embeddingService";
 import {
-  parseDocumentStructure,
-  buildSectionTree,
-  findSectionByTitle,
-  findSectionByPath,
-  fuzzyMatchSections,
-  findMatchingSections,
   parseLineNumberSpec,
   getOffsetFromLineNumbers,
-  stringSimilarity,
 } from "./documentProcessor";
 
 // ============================================
@@ -1244,38 +1236,24 @@ export async function executeWebResearchTool(
 const pendingPreviews = new Map<string, UpdateFilePreview>();
 
 /**
- * Section identification prompt for LLM (improved - uses line numbers)
+ * Full file rewrite prompt for LLM
+ * Used for files under 50KB - simpler than section identification
  */
-const SECTION_IDENTIFICATION_PROMPT = `You are a document section identifier. Given a document with line numbers, identify the section to modify.
-
-IMPORTANT: The document is provided with line numbers in format "LINE_NUMBER|content".
-
-Your task:
-1. Analyze the document structure (headings, paragraphs, sections)
-2. Find the section that best matches the user's description
-3. Return LINE NUMBERS (more reliable than text content)
-
-Response format (JSON only):
-{
-  "found": true/false,
-  "startLine": <number>,
-  "endLine": <number>,
-  "confidence": 0.0-1.0,
-  "reasoning": "brief explanation"
-}
+const FULL_REWRITE_PROMPT = `You are a document editor. Given a document and an edit instruction, return the complete modified document.
 
 RULES:
-- startLine and endLine are 1-based line numbers from the document
-- For headings, include the heading line and all content until next same-level heading or end
-- For paragraphs, include all contiguous non-empty lines
-- confidence should be 0.9+ for clear matches, 0.6-0.8 for partial matches, <0.6 for uncertain
+1. Apply the requested edit precisely
+2. Preserve all content that should not be changed
+3. Maintain the document's formatting style (markdown headers, lists, etc.)
+4. Return ONLY the modified document content - no explanations, no markdown code blocks
+5. If the edit instruction is unclear, make a reasonable interpretation
 
-If section is not found:
-{
-  "found": false,
-  "confidence": 0,
-  "reasoning": "explanation of why not found"
-}`;
+The output should be the complete file content after applying the edit.`;
+
+/**
+ * File size threshold for full rewrite vs section-based editing (50KB)
+ */
+const FULL_REWRITE_THRESHOLD = 50 * 1024;
 
 /**
  * Generate diff lines between original and new content
@@ -1373,59 +1351,20 @@ interface SectionIdentificationResult {
   method?: string;
 }
 
-/**
- * Convert line numbers to character offsets
- */
-function lineNumbersToOffsets(
-  content: string,
-  startLine: number,
-  endLine: number,
-): { start: number; end: number } | null {
-  const lines = content.split("\n");
-
-  if (startLine < 1 || startLine > lines.length) return null;
-  if (endLine < startLine || endLine > lines.length) return null;
-
-  let start = 0;
-  for (let i = 0; i < startLine - 1; i++) {
-    start += lines[i].length + 1;
-  }
-
-  let end = start;
-  for (let i = startLine - 1; i <= endLine - 1; i++) {
-    end += lines[i].length;
-    if (i < endLine - 1) end += 1;
-  }
-
-  return { start, end };
-}
 
 /**
- * Format document with line numbers for LLM
- */
-function formatDocumentWithLineNumbers(content: string): string {
-  const lines = content.split("\n");
-  return lines.map((line, i) => `${String(i + 1).padStart(4)}|${line}`).join("\n");
-}
-
-/**
- * Identify section in document using multi-level cascade matching
+ * Identify section in document using simplified 3-level cascade matching
+ * Used only for large files (>50KB) - small files use full rewrite instead
  *
  * Cascade order:
  * 1. Special keywords (end, start, bottom, top)
  * 2. Line number specification (line:42, lines:10-25)
  * 3. Exact text match
- * 4. Structural parsing (markdown headers)
- * 5. Fuzzy matching (typo tolerance)
- * 6. Semantic embeddings (existing chunks)
- * 7. LLM fallback (line-number based)
  */
-async function identifySection(
+function identifySection(
   content: string,
   sectionIdentifier: string,
-  identificationMethod?: string,
-  fileId?: string,
-): Promise<SectionIdentificationResult> {
+): SectionIdentificationResult {
   const notFound: SectionIdentificationResult = {
     found: false,
     sectionContent: "",
@@ -1470,215 +1409,86 @@ async function identifySection(
   // ============================================
   // Level 2: Line Number Specification
   // ============================================
-  if (!identificationMethod || identificationMethod === "line_number") {
-    const lineSpec = parseLineNumberSpec(identifier);
-    if (lineSpec) {
-      const offsets = getOffsetFromLineNumbers(content, lineSpec.startLine, lineSpec.endLine);
-      if (offsets) {
-        return {
-          found: true,
-          sectionContent: content.slice(offsets.startOffset, offsets.endOffset),
-          sectionStart: offsets.startOffset,
-          sectionEnd: offsets.endOffset,
-          confidence: 1.0,
-          reasoning: `Line number specification: ${identifier}`,
-          method: "line_number",
-        };
-      }
+  const lineSpec = parseLineNumberSpec(identifier);
+  if (lineSpec) {
+    const offsets = getOffsetFromLineNumbers(content, lineSpec.startLine, lineSpec.endLine);
+    if (offsets) {
+      return {
+        found: true,
+        sectionContent: content.slice(offsets.startOffset, offsets.endOffset),
+        sectionStart: offsets.startOffset,
+        sectionEnd: offsets.endOffset,
+        confidence: 1.0,
+        reasoning: `Line number specification: ${identifier}`,
+        method: "line_number",
+      };
     }
   }
 
   // ============================================
   // Level 3: Exact Text Match
   // ============================================
-  if (!identificationMethod || identificationMethod === "exact_match") {
-    const exactIndex = content.indexOf(identifier);
-    if (exactIndex !== -1) {
-      return {
-        found: true,
-        sectionContent: identifier,
-        sectionStart: exactIndex,
-        sectionEnd: exactIndex + identifier.length,
-        confidence: 1.0,
-        reasoning: "Exact text match found",
-        method: "exact_match",
-      };
-    }
-  }
-
-  // ============================================
-  // Level 4: Structural Parsing (Markdown)
-  // ============================================
-  if (!identificationMethod || identificationMethod === "header") {
-    const sections = parseDocumentStructure(content);
-    const tree = buildSectionTree(sections);
-
-    // Try path-based lookup first (e.g., "Features/API" or "Features > API")
-    if (identifier.includes("/") || identifier.includes(">")) {
-      const pathMatch = findSectionByPath(tree, identifier);
-      if (pathMatch) {
-        return {
-          found: true,
-          sectionContent: pathMatch.content,
-          sectionStart: pathMatch.startOffset,
-          sectionEnd: pathMatch.endOffset,
-          confidence: 1.0,
-          reasoning: `Found section at path "${identifier}"`,
-          method: "structure_path",
-        };
-      }
-    }
-
-    // Try title-based lookup
-    const titleMatch = findSectionByTitle(tree, identifier);
-    if (titleMatch) {
-      return {
-        found: true,
-        sectionContent: titleMatch.content,
-        sectionStart: titleMatch.startOffset,
-        sectionEnd: titleMatch.endOffset,
-        confidence: 1.0,
-        reasoning: `Found heading matching "${identifier}"`,
-        method: "structure_title",
-      };
-    }
-
-    // Check all matching sections
-    const matchingResults = findMatchingSections(sections, identifier);
-    if (matchingResults.length > 0 && matchingResults[0].score >= 0.7) {
-      const best = matchingResults[0];
-      return {
-        found: true,
-        sectionContent: best.section.content,
-        sectionStart: best.section.startOffset,
-        sectionEnd: best.section.endOffset,
-        confidence: best.score,
-        reasoning: `Structural match: "${best.section.title || "content"}" (score: ${best.score.toFixed(2)})`,
-        method: "structure_match",
-      };
-    }
-  }
-
-  // ============================================
-  // Level 5: Fuzzy Matching
-  // ============================================
-  if (!identificationMethod || identificationMethod === "semantic") {
-    const sections = parseDocumentStructure(content);
-    const fuzzyResult = fuzzyMatchSections(sections, identifier, 0.6);
-
-    if (fuzzyResult && fuzzyResult.score >= 0.6) {
-      return {
-        found: true,
-        sectionContent: fuzzyResult.section.content,
-        sectionStart: fuzzyResult.section.startOffset,
-        sectionEnd: fuzzyResult.section.endOffset,
-        confidence: fuzzyResult.score,
-        reasoning: `Fuzzy match: "${fuzzyResult.section.title || "content"}" (similarity: ${(fuzzyResult.score * 100).toFixed(0)}%)`,
-        method: "fuzzy_match",
-      };
-    }
-  }
-
-  // ============================================
-  // Level 6: Semantic Embeddings (if fileId provided)
-  // ============================================
-  if (fileId && (!identificationMethod || identificationMethod === "semantic")) {
-    try {
-      const chunks = await get_file_chunks(fileId);
-      if (chunks.length > 0) {
-        // Generate embedding for the query
-        const queryEmbedding = await generateEmbedding(identifier);
-
-        // Find most similar chunk
-        let bestChunk: { chunk: typeof chunks[0]; score: number } | null = null;
-
-        for (const chunk of chunks) {
-          // We need to get the embedding for this chunk
-          // For now, generate embedding on the fly (could be optimized with stored embeddings)
-          const chunkEmbedding = await generateEmbedding(chunk.text);
-          const score = cosineSimilarity(queryEmbedding, chunkEmbedding);
-
-          if (!bestChunk || score > bestChunk.score) {
-            bestChunk = { chunk, score };
-          }
-        }
-
-        if (bestChunk && bestChunk.score >= 0.5) {
-          return {
-            found: true,
-            sectionContent: bestChunk.chunk.text,
-            sectionStart: bestChunk.chunk.startOffset,
-            sectionEnd: bestChunk.chunk.endOffset,
-            confidence: bestChunk.score,
-            reasoning: `Semantic match via embeddings (similarity: ${(bestChunk.score * 100).toFixed(0)}%)`,
-            method: "embeddings",
-          };
-        }
-      }
-    } catch (e) {
-      console.warn("Semantic embedding search failed:", e);
-      // Continue to LLM fallback
-    }
-  }
-
-  // ============================================
-  // Level 7: LLM Fallback (improved with line numbers)
-  // ============================================
-  try {
-    const formattedDoc = formatDocumentWithLineNumbers(content);
-
-    const response = await chatCompletion({
-      messages: [
-        { role: "system", content: SECTION_IDENTIFICATION_PROMPT },
-        {
-          role: "user",
-          content: `Document:\n\n${formattedDoc}\n\n---\n\nSection to find: "${identifier}"`,
-        },
-      ],
-      temperature: 0,
-      maxTokens: 500,
-    });
-
-    let jsonStr = response.content.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    const result = JSON.parse(jsonStr);
-
-    if (!result.found) {
-      return {
-        ...notFound,
-        reasoning: result.reasoning || "LLM could not find section",
-        method: "llm_fallback",
-      };
-    }
-
-    // Convert line numbers to offsets
-    const offsets = lineNumbersToOffsets(content, result.startLine, result.endLine);
-    if (!offsets) {
-      return {
-        ...notFound,
-        reasoning: `LLM returned invalid line numbers: ${result.startLine}-${result.endLine}`,
-        method: "llm_fallback",
-      };
-    }
-
+  const exactIndex = content.indexOf(identifier);
+  if (exactIndex !== -1) {
     return {
       found: true,
-      sectionContent: content.slice(offsets.start, offsets.end),
-      sectionStart: offsets.start,
-      sectionEnd: offsets.end,
-      confidence: result.confidence || 0.7,
-      reasoning: result.reasoning || "Found via LLM analysis",
-      method: "llm_fallback",
+      sectionContent: identifier,
+      sectionStart: exactIndex,
+      sectionEnd: exactIndex + identifier.length,
+      confidence: 1.0,
+      reasoning: "Exact text match found",
+      method: "exact_match",
     };
-  } catch (e) {
+  }
+
+  // Not found - return helpful error
+  return {
+    ...notFound,
+    reasoning: `Could not find "${identifier}" in the document. For large files, please use exact text, line numbers (e.g., "line:42" or "lines:10-25"), or keywords like "end"/"start".`,
+    method: "not_found",
+  };
+}
+
+/**
+ * Full file rewrite using LLM
+ * For files under 50KB, send entire content to LLM and let it apply the edit
+ */
+async function fullRewriteFile(
+  content: string,
+  editInstruction: string,
+  fileName: string,
+): Promise<{ success: boolean; newContent: string; error?: string }> {
+  try {
+    const response = await chatCompletion({
+      messages: [
+        { role: "system", content: FULL_REWRITE_PROMPT },
+        {
+          role: "user",
+          content: `File: ${fileName}\n\n---\n\n${content}\n\n---\n\nEdit instruction: ${editInstruction}`,
+        },
+      ],
+      temperature: 0.3,
+      maxTokens: 16000, // Allow for large output
+    });
+
+    // Clean up the response - remove any markdown code blocks if present
+    let newContent = response.content.trim();
+    
+    // Remove markdown code block wrapper if present
+    const codeBlockMatch = newContent.match(/^```(?:markdown|md)?\s*\n?([\s\S]*?)\n?```$/);
+    if (codeBlockMatch) {
+      newContent = codeBlockMatch[1];
+    }
+
     return {
-      ...notFound,
-      reasoning: `LLM fallback failed: ${e instanceof Error ? e.message : "Unknown error"}`,
-      method: "llm_fallback",
+      success: true,
+      newContent,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      newContent: "",
+      error: error instanceof Error ? error.message : "Failed to rewrite file",
     };
   }
 }
@@ -1730,7 +1540,9 @@ function applyUpdateOperation(
 
 /**
  * Execute the updateFile tool
- * Creates a preview of changes without applying them
+ * Routes by file size:
+ * - Files under 50KB: Full rewrite via LLM (simpler, more reliable)
+ * - Files over 50KB: Simplified 3-level cascade (keywords, line numbers, exact match)
  */
 export async function executeUpdateFileTool(
   projectId: string,
@@ -1775,90 +1587,73 @@ export async function executeUpdateFileTool(
       content = stitchChunks(chunks);
     }
 
-    // Identify the section to update (pass fileId for semantic matching)
-    const sectionResult = await identifySection(
-      content,
-      params.sectionIdentifier,
-      params.identificationMethod,
-      file.id,
-    );
+    let newFullContent: string;
+    let sectionContent = "";
+    let confidence = 1.0;
 
-    if (!sectionResult.found) {
-      return {
-        success: false,
-        tool: "updateFile",
-        error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ""}`,
-      };
-    }
+    // Route by file size
+    if (content.length < FULL_REWRITE_THRESHOLD) {
+      // ============================================
+      // Small files (<50KB): Full rewrite via LLM
+      // ============================================
+      const editInstruction = userMessage || params.newContent || params.sectionIdentifier;
+      
+      if (!editInstruction) {
+        return {
+          success: false,
+          tool: "updateFile",
+          error: "No edit instruction provided. Please describe what changes you want to make.",
+        };
+      }
 
-    // Generate new content if not provided (use LLM to generate based on user message)
-    let newContent = params.newContent;
-    if (!newContent && userMessage) {
-      // Get surrounding context from the document
-      const contextStart = Math.max(0, sectionResult.sectionStart - 500);
-      const contextEnd = Math.min(
-        content.length,
-        sectionResult.sectionEnd + 500,
+      const rewriteResult = await fullRewriteFile(content, editInstruction, file.name);
+      
+      if (!rewriteResult.success) {
+        return {
+          success: false,
+          tool: "updateFile",
+          error: rewriteResult.error || "Failed to apply edit",
+        };
+      }
+
+      newFullContent = rewriteResult.newContent;
+      sectionContent = "(full file rewrite)";
+    } else {
+      // ============================================
+      // Large files (>50KB): Simplified 3-level cascade
+      // ============================================
+      const sectionResult = identifySection(content, params.sectionIdentifier);
+
+      if (!sectionResult.found) {
+        return {
+          success: false,
+          tool: "updateFile",
+          error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ""}`,
+        };
+      }
+
+      sectionContent = sectionResult.sectionContent;
+      confidence = sectionResult.confidence;
+
+      // For large files, newContent must be provided explicitly
+      const newContent = params.newContent;
+      if (!newContent) {
+        return {
+          success: false,
+          tool: "updateFile",
+          error: "For large files (>50KB), you must provide the exact new content. Please include the 'newContent' parameter.",
+        };
+      }
+
+      // Apply the update operation
+      newFullContent = applyUpdateOperation(
+        content,
+        sectionResult.sectionStart,
+        sectionResult.sectionEnd,
+        newContent,
+        params.operation,
       );
-      const surroundingContext = content.slice(contextStart, contextEnd);
-
-      const operationDescription =
-        params.operation === "replace"
-          ? "replace the following section with improved/updated content"
-          : params.operation === "insert_before"
-            ? "create new content to insert BEFORE the following section"
-            : "create new content to insert AFTER the following section";
-
-      const generateResponse = await chatCompletion({
-        messages: [
-          {
-            role: "system",
-            content: `You are a professional content writer. Your task is to ${operationDescription} in a document.
-
-DOCUMENT: "${file.name}"
-
-SURROUNDING CONTEXT (for reference):
----
-${surroundingContext}
----
-
-SECTION TO ${params.operation.toUpperCase()}:
----
-${sectionResult.sectionContent}
----
-
-IMPORTANT INSTRUCTIONS:
-1. Generate ACTUAL, SUBSTANTIVE content - not placeholders or descriptions
-2. Match the style and tone of the existing document
-3. If asked for "more detail" or "expanded" content, write real detailed paragraphs with specific information
-4. Keep the same markdown formatting style (headers, lists, etc.)
-5. Output ONLY the new content - no explanations, no "Here is..." prefix
-6. The content should be ready to insert directly into the document`,
-          },
-          { role: "user", content: `User request: ${userMessage}` },
-        ],
-        temperature: 0.7,
-        maxTokens: 3000,
-      });
-      newContent = generateResponse.content;
     }
-
-    if (!newContent) {
-      return {
-        success: false,
-        tool: "updateFile",
-        error: "No new content provided for the update operation.",
-      };
-    }
-
-    // Apply the update operation to generate preview
-    const newFullContent = applyUpdateOperation(
-      content,
-      sectionResult.sectionStart,
-      sectionResult.sectionEnd,
-      newContent,
-      params.operation,
-    );
 
     // Generate diff
     const diffLines = generateDiffLines(content, newFullContent);
@@ -1871,14 +1666,14 @@ IMPORTANT INSTRUCTIONS:
       fileName: file.name,
       fileType: file.type as "md" | "docx",
       operation: params.operation,
-      identifiedSection: sectionResult.sectionContent,
-      originalContent: sectionResult.sectionContent,
-      newContent,
+      identifiedSection: sectionContent,
+      originalContent: sectionContent,
+      newContent: newFullContent,
       originalFullContent: content,
       newFullContent,
       diffLines,
       sectionFound: true,
-      confidence: sectionResult.confidence,
+      confidence,
       createdAt: new Date(),
     };
 
@@ -1907,7 +1702,7 @@ IMPORTANT INSTRUCTIONS:
 
 **Operation:** ${params.operation}
 **Section:** ${params.sectionIdentifier}
-**Confidence:** ${(sectionResult.confidence * 100).toFixed(0)}%
+**Confidence:** ${(confidence * 100).toFixed(0)}%
 
 \`\`\`diff
 ${diffDisplay}

@@ -407,7 +407,62 @@ interface AddNoteParams {
 
 ### UpdateFile Tool
 
-Updates or modifies specific sections of existing Markdown or DOCX files.
+Updates or modifies existing Markdown or DOCX files using a simplified approach.
+
+#### Architecture
+
+The tool uses two strategies based on file size:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    UpdateFile Called                         │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  File Size?     │
+                    └─────────────────┘
+                     /              \
+                    /                \
+            < 50KB                  > 50KB
+               │                       │
+               ▼                       ▼
+   ┌─────────────────────┐   ┌─────────────────────┐
+   │ Full File Rewrite   │   │ 3-Level Cascade     │
+   │ via LLM             │   │ (deterministic)     │
+   └─────────────────────┘   └─────────────────────┘
+               │                       │
+               ▼                       ▼
+         LLM applies              1. Keywords
+         edit directly            2. Line numbers
+                                  3. Exact match
+```
+
+#### Small Files (<50KB): Full Rewrite
+
+For most notes and documents, the entire file is sent to the LLM with the edit instruction. The LLM returns the complete modified file.
+
+**Benefits:**
+- Simpler, more reliable
+- LLM has full context
+- No section identification needed
+- Handles complex multi-section edits
+
+#### Large Files (>50KB): 3-Level Cascade
+
+For large files, uses deterministic matching only:
+
+| Level | Method | Example |
+|-------|--------|---------|
+| 1 | Special Keywords | `end`, `start`, `append`, `prepend` |
+| 2 | Line Numbers | `line:42`, `lines:10-25` |
+| 3 | Exact Match | Direct text lookup via `indexOf` |
+
+If no match is found, the tool fails with a helpful error asking for more specific input.
+
+**Special Keywords:**
+- End/append: `end`, `bottom`, `eof`, `fim`, `final`, `append`
+- Start/prepend: `start`, `beginning`, `top`, `prepend`
 
 #### Parameters
 
@@ -417,62 +472,15 @@ interface UpdateFileToolParams {
   fileName?: string;
   operation: 'replace' | 'insert_before' | 'insert_after';
   sectionIdentifier: string;
-  identificationMethod?: 'header' | 'exact_match' | 'semantic' | 'line_number';
-  newContent: string;
+  newContent?: string;  // Required for large files, optional for small files
 }
 ```
-
-#### Operations
-
-| Operation | Description |
-|-----------|-------------|
-| `replace` | Replace the identified section with new content |
-| `insert_before` | Insert new content before the identified section |
-| `insert_after` | Insert new content after the identified section |
-
-#### Section Identification Methods
-
-| Method | Description |
-|--------|-------------|
-| `header` | Match by markdown header (e.g., `## Section Name`) or DOCX heading |
-| `exact_match` | Find and replace exact text |
-| `semantic` | Use fuzzy matching and embeddings to locate the section |
-| `line_number` | Specify by line number (e.g., `line:42` or `lines:10-25`) |
-
-#### Multi-Level Cascade Matching
-
-The section identification uses a cascade of matching strategies for robustness:
-
-```
-1. Special Keywords → (end, start, bottom, top, append, prepend)
-2. Line Number Spec → (line:42, lines:10-25)
-3. Exact Text Match → (indexOf)
-4. Structural Parse  → (markdown headers with normalized matching)
-5. Fuzzy Match      → (Levenshtein distance, typo tolerance)
-6. Semantic Match   → (embedding similarity via chunks)
-7. LLM Fallback     → (line-number based response)
-```
-
-**Special Keywords:**
-- End/append: `end`, `bottom`, `eof`, `fim`, `final`, `append`
-- Start/prepend: `start`, `beginning`, `top`, `prepend`
-
-**Path-based Lookups:**
-- Support for hierarchical paths: `Features/API`, `Features > API`
-
-**Fuzzy Matching:**
-- Tolerates typos and partial matches
-- Uses Levenshtein distance with configurable threshold (default: 60%)
-
-**Semantic Embeddings:**
-- Leverages existing chunk embeddings for similarity matching
-- No additional LLM calls, uses vector comparison
 
 #### Preview Flow
 
 The tool uses a preview/confirmation flow:
 
-1. `executeUpdateFileTool` identifies the section and generates a preview
+1. `executeUpdateFileTool` applies the edit (full rewrite or section-based)
 2. Preview includes diff visualization (added/removed lines)
 3. User confirms or cancels the update
 4. On confirm, `applyFileUpdate` commits changes and re-indexes the file
