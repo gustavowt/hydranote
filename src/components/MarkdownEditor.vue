@@ -40,17 +40,45 @@
         </template>
       </div>
       <div class="header-actions">
+        <!-- Version Navigation -->
+        <div v-if="currentFile && totalVersions > 0" class="version-nav">
+          <button 
+            class="version-nav-btn"
+            :disabled="!canGoBack || navigatingVersion"
+            @click="handleVersionBack"
+            :title="canGoBack ? `Go to version ${currentVersionIndex - 1}` : 'No older version'"
+          >
+            <ion-icon :icon="chevronBackOutline" />
+          </button>
+          <span class="version-indicator" :class="{ 'viewing-old': isViewingOldVersion }">
+            <template v-if="isViewingOldVersion">
+              v{{ currentVersionIndex }}/{{ totalVersions }}
+            </template>
+            <template v-else>
+              <ion-icon :icon="timeOutline" class="version-icon" />
+              {{ totalVersions }}
+            </template>
+          </span>
+          <button 
+            class="version-nav-btn"
+            :disabled="!canGoForward || navigatingVersion"
+            @click="handleVersionForward"
+            :title="canGoForward ? `Go to version ${currentVersionIndex + 1}` : 'At latest version'"
+          >
+            <ion-icon :icon="chevronForwardOutline" />
+          </button>
+        </div>
         <div class="save-btn-wrapper">
           <ion-button 
             fill="solid" 
             size="small" 
             class="save-btn"
-            :class="{ visible: hasChanges }"
+            :class="{ visible: hasChanges || isViewingOldVersion }"
             @click="handleSave"
-            :disabled="saving || !hasChanges"
+            :disabled="saving || (!hasChanges && !isViewingOldVersion)"
           >
             <ion-icon slot="start" :icon="saveOutline" />
-            Save
+            {{ isViewingOldVersion ? 'Restore' : 'Save' }}
           </ion-button>
         </div>
         <div class="mode-toggle">
@@ -104,6 +132,10 @@
                 <ion-icon :icon="pencilOutline" slot="start" />
                 <ion-label>Rename</ion-label>
               </ion-item>
+              <ion-item button @click="handleOpenVersionHistory" :detail="false">
+                <ion-icon :icon="timeOutline" slot="start" />
+                <ion-label>Version History</ion-label>
+              </ion-item>
             </ion-list>
           </ion-content>
         </ion-popover>
@@ -139,6 +171,58 @@
           <ion-icon :icon="informationCircleOutline" />
           Your default formatting settings from Settings will also be applied.
         </p>
+      </ion-content>
+    </ion-modal>
+
+    <!-- Version History Modal -->
+    <ion-modal :is-open="showVersionHistoryModal" @didDismiss="showVersionHistoryModal = false">
+      <ion-header>
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button @click="showVersionHistoryModal = false">Close</ion-button>
+          </ion-buttons>
+          <ion-title>Version History</ion-title>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding version-history-content">
+        <div v-if="loadingVersions" class="loading-versions">
+          <IonSpinner name="crescent" />
+          <p>Loading version history...</p>
+        </div>
+        <div v-else-if="versionHistory.length === 0" class="no-versions">
+          <ion-icon :icon="timeOutline" class="empty-icon" />
+          <p>No version history available.</p>
+          <p class="hint">Versions are created when you save, update, or format the file.</p>
+        </div>
+        <ion-list v-else lines="full" class="version-list">
+          <ion-item 
+            v-for="version in versionHistory" 
+            :key="version.id" 
+            button 
+            @click="handlePreviewVersion(version)"
+            :class="{ 'selected-version': selectedVersionId === version.id }"
+          >
+            <ion-icon 
+              :icon="getVersionIcon(version.source)" 
+              slot="start" 
+              :class="['version-icon', version.source]"
+            />
+            <ion-label>
+              <h3>Version {{ version.versionNumber }}</h3>
+              <p>{{ formatVersionDate(version.createdAt) }}</p>
+              <p class="version-source">{{ getVersionSourceLabel(version.source) }}</p>
+            </ion-label>
+            <ion-button 
+              slot="end" 
+              fill="outline" 
+              size="small"
+              @click.stop="handleRestoreVersion(version)"
+              :disabled="restoringVersion"
+            >
+              {{ restoringVersion && selectedVersionId === version.id ? 'Restoring...' : 'Restore' }}
+            </ion-button>
+          </ion-item>
+        </ion-list>
       </ion-content>
     </ion-modal>
 
@@ -257,10 +341,25 @@ import {
   checkmarkOutline,
   closeOutline,
   informationCircleOutline,
+  timeOutline,
+  createOutline,
+  refreshOutline,
+  colorWandOutline,
+  arrowUndoOutline,
+  chevronBackOutline,
+  chevronForwardOutline,
 } from 'ionicons/icons';
-import type { Project, ProjectFile, GlobalAddNoteResult } from '@/types';
+import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
-import { globalAddNote, formatNote, getNoteFormatInstructions } from '@/services';
+import { 
+  globalAddNote, 
+  formatNote, 
+  getNoteFormatInstructions, 
+  createFormatVersion,
+  getVersionHistory,
+  getVersionContent,
+  createRestoreVersion,
+} from '@/services';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -349,8 +448,26 @@ const isRenaming = ref(false);
 const newFileName = ref('');
 const renameInputRef = ref<HTMLInputElement | null>(null);
 
+// Version history state
+const showVersionHistoryModal = ref(false);
+const versionHistory = ref<FileVersionMeta[]>([]);
+const loadingVersions = ref(false);
+const selectedVersionId = ref<string | null>(null);
+const restoringVersion = ref(false);
+
+// Version navigation state
+const totalVersions = ref(0);
+const currentVersionIndex = ref(0); // 0 means viewing current/latest
+const navigatingVersion = ref(false);
+const cachedVersions = ref<Map<number, string>>(new Map()); // Cache for version content
+
 const hasChanges = computed(() => content.value !== originalContent.value);
 const isNewNote = computed(() => !props.currentFile);
+
+// Version navigation computed
+const isViewingOldVersion = computed(() => currentVersionIndex.value > 0 && currentVersionIndex.value < totalVersions.value);
+const canGoBack = computed(() => currentVersionIndex.value < totalVersions.value);
+const canGoForward = computed(() => currentVersionIndex.value > 0);
 
 // Mermaid rendering with debounce
 let mermaidRenderTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -455,11 +572,20 @@ async function handleSave() {
   if (!content.value.trim()) return;
   
   if (props.currentFile) {
-    // Save existing file
+    // Save existing file (or restore old version)
     saving.value = true;
     try {
+      // If viewing old version, create a restore version first
+      if (isViewingOldVersion.value) {
+        await createRestoreVersion(props.currentFile.id, originalContent.value);
+      }
+      
       emit('save', content.value, props.currentFile);
       originalContent.value = content.value;
+      
+      // Reset version navigation and reload version count
+      resetVersionNavigation();
+      await loadVersionCount();
     } finally {
       saving.value = false;
     }
@@ -564,6 +690,11 @@ async function handleRunFormatting() {
   formatting.value = true;
   
   try {
+    // Store pre-format version if this is an existing file
+    if (props.currentFile) {
+      await createFormatVersion(props.currentFile.id, content.value);
+    }
+    
     // Get current settings instructions and merge with user's additional instructions
     const settingsInstructions = getNoteFormatInstructions();
     let combinedInstructions = settingsInstructions;
@@ -667,12 +798,251 @@ async function handleSaveRename() {
 }
 
 // ============================================
+// Version Navigation Handlers
+// ============================================
+
+async function loadVersionCount() {
+  if (!props.currentFile) {
+    totalVersions.value = 0;
+    currentVersionIndex.value = 0;
+    return;
+  }
+  
+  try {
+    const history = await getVersionHistory(props.currentFile.id);
+    totalVersions.value = history.length;
+    // Store the history for potential use
+    versionHistory.value = history;
+  } catch (error) {
+    console.error('Failed to load version count:', error);
+    totalVersions.value = 0;
+  }
+}
+
+async function handleVersionBack() {
+  if (!props.currentFile || !canGoBack.value || navigatingVersion.value) return;
+  
+  navigatingVersion.value = true;
+  
+  try {
+    const targetIndex = currentVersionIndex.value + 1;
+    const targetVersionNumber = totalVersions.value - targetIndex + 1;
+    
+    // Check cache first
+    if (cachedVersions.value.has(targetVersionNumber)) {
+      content.value = cachedVersions.value.get(targetVersionNumber)!;
+      currentVersionIndex.value = targetIndex;
+    } else {
+      // Load version content
+      const versionContent = await getVersionContent(props.currentFile.id, targetVersionNumber);
+      if (versionContent !== null) {
+        cachedVersions.value.set(targetVersionNumber, versionContent);
+        content.value = versionContent;
+        currentVersionIndex.value = targetIndex;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to navigate to older version:', error);
+    const toast = await toastController.create({
+      message: 'Failed to load version',
+      duration: 2000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    navigatingVersion.value = false;
+  }
+}
+
+async function handleVersionForward() {
+  if (!props.currentFile || !canGoForward.value || navigatingVersion.value) return;
+  
+  navigatingVersion.value = true;
+  
+  try {
+    const targetIndex = currentVersionIndex.value - 1;
+    
+    if (targetIndex === 0) {
+      // Going back to current/latest version
+      content.value = originalContent.value;
+      currentVersionIndex.value = 0;
+    } else {
+      const targetVersionNumber = totalVersions.value - targetIndex + 1;
+      
+      // Check cache first
+      if (cachedVersions.value.has(targetVersionNumber)) {
+        content.value = cachedVersions.value.get(targetVersionNumber)!;
+        currentVersionIndex.value = targetIndex;
+      } else {
+        // Load version content
+        const versionContent = await getVersionContent(props.currentFile.id, targetVersionNumber);
+        if (versionContent !== null) {
+          cachedVersions.value.set(targetVersionNumber, versionContent);
+          content.value = versionContent;
+          currentVersionIndex.value = targetIndex;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to navigate to newer version:', error);
+    const toast = await toastController.create({
+      message: 'Failed to load version',
+      duration: 2000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    navigatingVersion.value = false;
+  }
+}
+
+function resetVersionNavigation() {
+  currentVersionIndex.value = 0;
+  cachedVersions.value.clear();
+}
+
+// ============================================
+// Version History Handlers
+// ============================================
+
+async function handleOpenVersionHistory() {
+  showActionsMenu.value = false;
+  if (!props.currentFile) return;
+  
+  showVersionHistoryModal.value = true;
+  loadingVersions.value = true;
+  selectedVersionId.value = null;
+  
+  try {
+    versionHistory.value = await getVersionHistory(props.currentFile.id);
+  } catch (error) {
+    console.error('Failed to load version history:', error);
+    versionHistory.value = [];
+  } finally {
+    loadingVersions.value = false;
+  }
+}
+
+function getVersionIcon(source: VersionSource): string {
+  switch (source) {
+    case 'create':
+      return createOutline;
+    case 'update':
+      return refreshOutline;
+    case 'format':
+      return colorWandOutline;
+    case 'restore':
+      return arrowUndoOutline;
+    default:
+      return timeOutline;
+  }
+}
+
+function getVersionSourceLabel(source: VersionSource): string {
+  switch (source) {
+    case 'create':
+      return 'Created';
+    case 'update':
+      return 'Updated';
+    case 'format':
+      return 'Before formatting';
+    case 'restore':
+      return 'Before restore';
+    default:
+      return source;
+  }
+}
+
+function formatVersionDate(date: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  
+  return date.toLocaleDateString(undefined, { 
+    month: 'short', 
+    day: 'numeric',
+    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function handlePreviewVersion(version: FileVersionMeta) {
+  selectedVersionId.value = version.id;
+}
+
+async function handleRestoreVersion(version: FileVersionMeta) {
+  if (!props.currentFile || restoringVersion.value) return;
+  
+  restoringVersion.value = true;
+  selectedVersionId.value = version.id;
+  
+  try {
+    // Store current content as a 'restore' version before restoring
+    await createRestoreVersion(props.currentFile.id, content.value);
+    
+    // Get the content of the selected version
+    const restoredContent = await getVersionContent(props.currentFile.id, version.versionNumber);
+    
+    if (restoredContent !== null) {
+      // Update editor content
+      content.value = restoredContent;
+      
+      // Save the restored content
+      emit('save', restoredContent, props.currentFile);
+      originalContent.value = restoredContent;
+      
+      showVersionHistoryModal.value = false;
+      
+      const toast = await toastController.create({
+        message: `Restored to version ${version.versionNumber}`,
+        duration: 2000,
+        position: 'top',
+        color: 'success',
+      });
+      await toast.present();
+    } else {
+      const toast = await toastController.create({
+        message: 'Failed to restore version: content not found',
+        duration: 3000,
+        position: 'top',
+        color: 'danger',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    console.error('Failed to restore version:', error);
+    const toast = await toastController.create({
+      message: 'Failed to restore version',
+      duration: 3000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    restoringVersion.value = false;
+  }
+}
+
+// ============================================
 // Expose methods
 // ============================================
 
 function setContent(newContent: string) {
   content.value = newContent;
   originalContent.value = newContent;
+  // Reset version navigation and load version count
+  resetVersionNavigation();
+  loadVersionCount();
 }
 
 function clearContent() {
@@ -752,6 +1122,70 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   flex-shrink: 0;
   margin-right: 32px;
   height: 30px;
+}
+
+/* Version Navigation */
+.version-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--hn-bg-elevated);
+  border-radius: 6px;
+  padding: 2px 4px;
+  height: 30px;
+}
+
+.version-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--hn-text-secondary);
+  transition: all 0.15s ease;
+}
+
+.version-nav-btn:hover:not(:disabled) {
+  color: var(--hn-text-primary);
+  background: var(--hn-bg-hover);
+}
+
+.version-nav-btn:disabled {
+  color: var(--hn-text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.version-nav-btn ion-icon {
+  font-size: 16px;
+}
+
+.version-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 0.75rem;
+  color: var(--hn-text-secondary);
+  font-weight: 500;
+  min-width: 32px;
+  justify-content: center;
+}
+
+.version-indicator.viewing-old {
+  color: var(--hn-orange);
+  background: rgba(var(--hn-orange-rgb, 245, 158, 11), 0.15);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.version-indicator .version-icon {
+  font-size: 12px;
+  color: var(--hn-text-muted);
 }
 
 .mode-toggle {
@@ -1398,6 +1832,120 @@ ion-modal ion-button {
 
 ion-modal ion-button[strong] {
   --color: var(--hn-green);
+}
+
+/* Version History Modal Styles */
+ion-modal ion-content.version-history-content {
+  --background: var(--hn-bg-deep);
+}
+
+.loading-versions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--hn-text-secondary);
+}
+
+.loading-versions ion-spinner {
+  --color: var(--hn-teal);
+  margin-bottom: 16px;
+}
+
+.no-versions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--hn-text-secondary);
+}
+
+.no-versions .empty-icon {
+  font-size: 48px;
+  color: var(--hn-text-muted);
+  margin-bottom: 16px;
+}
+
+.no-versions .hint {
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+  margin-top: 8px;
+}
+
+.version-list {
+  background: transparent;
+}
+
+.version-list ion-item {
+  --background: var(--hn-bg-surface);
+  --border-color: var(--hn-border-subtle);
+  --padding-start: 16px;
+  --padding-end: 16px;
+  --inner-padding-end: 8px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.version-list ion-item:hover {
+  --background: var(--hn-bg-elevated);
+}
+
+.version-list ion-item.selected-version {
+  --background: var(--hn-bg-elevated);
+  border-left: 3px solid var(--hn-teal);
+}
+
+.version-icon {
+  font-size: 20px;
+  margin-right: 4px;
+}
+
+.version-icon.create {
+  color: var(--hn-green);
+}
+
+.version-icon.update {
+  color: var(--hn-blue);
+}
+
+.version-icon.format {
+  color: var(--hn-purple);
+}
+
+.version-icon.restore {
+  color: var(--hn-orange);
+}
+
+.version-list ion-label h3 {
+  font-weight: 600;
+  color: var(--hn-text-primary);
+  margin-bottom: 4px;
+}
+
+.version-list ion-label p {
+  color: var(--hn-text-secondary);
+  font-size: 0.85rem;
+  margin: 2px 0;
+}
+
+.version-list ion-label .version-source {
+  color: var(--hn-text-muted);
+  font-size: 0.8rem;
+}
+
+.version-list ion-button[fill="outline"] {
+  --border-color: var(--hn-teal);
+  --color: var(--hn-teal);
+  --padding-start: 12px;
+  --padding-end: 12px;
+}
+
+.version-list ion-button[fill="outline"]:hover {
+  --background: rgba(var(--hn-teal-rgb), 0.1);
 }
 </style>
 
