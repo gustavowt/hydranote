@@ -1267,6 +1267,59 @@ export interface WebResearchResult {
 }
 
 // ============================================
+// File Version History Types
+// ============================================
+
+/**
+ * Source that triggered version creation
+ */
+export type VersionSource = 'create' | 'update' | 'format' | 'restore';
+
+/**
+ * File version entity - represents a version snapshot or diff
+ */
+export interface FileVersion {
+  /** Unique version ID */
+  id: string;
+  /** Reference to the file */
+  fileId: string;
+  /** Sequential version number (1-based) */
+  versionNumber: number;
+  /** Whether this stores full content (true) or a patch (false) */
+  isFullContent: boolean;
+  /** Full content or JSON-encoded patch */
+  contentOrPatch: string;
+  /** What triggered this version */
+  source: VersionSource;
+  /** When this version was created */
+  createdAt: Date;
+}
+
+/**
+ * Version metadata (without content/patch for listing)
+ */
+export interface FileVersionMeta {
+  /** Unique version ID */
+  id: string;
+  /** Reference to the file */
+  fileId: string;
+  /** Sequential version number */
+  versionNumber: number;
+  /** What triggered this version */
+  source: VersionSource;
+  /** When this version was created */
+  createdAt: Date;
+}
+
+/**
+ * Configuration for version history
+ */
+export const VERSION_HISTORY_CONFIG = {
+  /** Maximum versions to keep per file */
+  maxVersions: 10,
+} as const;
+
+// ============================================
 // Execution Plan Types (Planner-Executor-Checker Flow)
 // ============================================
 

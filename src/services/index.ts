@@ -245,3 +245,19 @@ export {
   clearWebSearchCache,
   testWebSearchConnection,
 } from './webSearchService';
+
+// Version Service (File History)
+export {
+  createVersion,
+  getVersionHistory,
+  reconstructVersion,
+  pruneVersions,
+  deleteAllVersions,
+  getVersionContent,
+  hasVersionHistory,
+  getLatestVersionNumber,
+  createInitialVersion,
+  createUpdateVersion,
+  createFormatVersion,
+  createRestoreVersion,
+} from './versionService';

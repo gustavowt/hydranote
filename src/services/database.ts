@@ -216,6 +216,29 @@ async function createSchema(): Promise<void> {
   await connection.query(`
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)
   `);
+
+  // File versions table for version history
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS file_versions (
+      id VARCHAR PRIMARY KEY,
+      file_id VARCHAR NOT NULL,
+      version_number INTEGER NOT NULL,
+      is_full_content BOOLEAN NOT NULL,
+      content_or_patch TEXT NOT NULL,
+      source VARCHAR NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (file_id) REFERENCES files(id)
+    )
+  `);
+
+  // Create indexes for file versions
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_file_versions_file_id ON file_versions(file_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_file_versions_version ON file_versions(file_id, version_number)
+  `);
 }
 
 /**
@@ -357,7 +380,7 @@ export async function updateFileContent(fileId: string, content: string): Promis
 }
 
 /**
- * Delete a file and cascade delete its chunks and embeddings
+ * Delete a file and cascade delete its chunks, embeddings, and versions
  */
 export async function deleteFile(fileId: string): Promise<void> {
   const conn = getConnection();
@@ -367,6 +390,9 @@ export async function deleteFile(fileId: string): Promise<void> {
   
   // Delete chunks for this file
   await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
+  
+  // Delete file versions for this file
+  await conn.query(`DELETE FROM file_versions WHERE file_id = '${fileId}'`);
   
   // Delete the file
   await conn.query(`DELETE FROM files WHERE id = '${fileId}'`);
@@ -1100,6 +1126,148 @@ export async function getChatMessages(sessionId: string): Promise<DBChatMessage[
 export async function deleteChatMessages(sessionId: string): Promise<void> {
   const conn = getConnection();
   await conn.query(`DELETE FROM chat_messages WHERE session_id = '${sessionId}'`);
+  await flushDatabase();
+}
+
+// ============================================
+// File Version Operations
+// ============================================
+
+export interface DBFileVersion {
+  id: string;
+  fileId: string;
+  versionNumber: number;
+  isFullContent: boolean;
+  contentOrPatch: string;
+  source: 'create' | 'update' | 'format' | 'restore';
+  createdAt: Date;
+}
+
+/**
+ * Create a new file version
+ */
+export async function createFileVersion(version: DBFileVersion): Promise<void> {
+  const conn = getConnection();
+  const escapedContent = version.contentOrPatch.replace(/'/g, "''");
+  
+  await conn.query(`
+    INSERT INTO file_versions (id, file_id, version_number, is_full_content, content_or_patch, source, created_at)
+    VALUES ('${version.id}', '${version.fileId}', ${version.versionNumber}, ${version.isFullContent}, '${escapedContent}', '${version.source}', '${version.createdAt.toISOString()}')
+  `);
+  await flushDatabase();
+}
+
+/**
+ * Get all versions for a file (ordered by version number descending)
+ */
+export async function getFileVersions(fileId: string): Promise<DBFileVersion[]> {
+  const conn = getConnection();
+  
+  const result = await conn.query(`
+    SELECT * FROM file_versions 
+    WHERE file_id = '${fileId}'
+    ORDER BY version_number DESC
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    fileId: row.file_id as string,
+    versionNumber: row.version_number as number,
+    isFullContent: row.is_full_content as boolean,
+    contentOrPatch: row.content_or_patch as string,
+    source: row.source as 'create' | 'update' | 'format' | 'restore',
+    createdAt: new Date(row.created_at as string),
+  }));
+}
+
+/**
+ * Get a specific version by file ID and version number
+ */
+export async function getFileVersion(fileId: string, versionNumber: number): Promise<DBFileVersion | null> {
+  const conn = getConnection();
+  
+  const result = await conn.query(`
+    SELECT * FROM file_versions 
+    WHERE file_id = '${fileId}' AND version_number = ${versionNumber}
+  `);
+  
+  const rows = result.toArray();
+  if (rows.length === 0) return null;
+  
+  const row = rows[0];
+  return {
+    id: row.id as string,
+    fileId: row.file_id as string,
+    versionNumber: row.version_number as number,
+    isFullContent: row.is_full_content as boolean,
+    contentOrPatch: row.content_or_patch as string,
+    source: row.source as 'create' | 'update' | 'format' | 'restore',
+    createdAt: new Date(row.created_at as string),
+  };
+}
+
+/**
+ * Get the latest version number for a file
+ */
+export async function getLatestVersionNumber(fileId: string): Promise<number> {
+  const conn = getConnection();
+  
+  const result = await conn.query(`
+    SELECT MAX(version_number) as max_version FROM file_versions 
+    WHERE file_id = '${fileId}'
+  `);
+  
+  const rows = result.toArray();
+  const maxVersion = rows[0]?.max_version;
+  return maxVersion !== null && maxVersion !== undefined ? Number(maxVersion) : 0;
+}
+
+/**
+ * Delete versions older than a certain version number (for pruning)
+ */
+export async function deleteOldVersions(fileId: string, keepCount: number): Promise<number> {
+  const conn = getConnection();
+  
+  // Get versions to delete (keeping the most recent keepCount versions)
+  const versionsToDelete = await conn.query(`
+    SELECT id FROM file_versions
+    WHERE file_id = '${fileId}'
+    ORDER BY version_number DESC
+    OFFSET ${keepCount}
+  `);
+  
+  const idsToDelete = versionsToDelete.toArray().map((row: Record<string, unknown>) => row.id as string);
+  
+  if (idsToDelete.length === 0) return 0;
+  
+  const idsStr = idsToDelete.map(id => `'${id}'`).join(', ');
+  await conn.query(`DELETE FROM file_versions WHERE id IN (${idsStr})`);
+  await flushDatabase();
+  
+  return idsToDelete.length;
+}
+
+/**
+ * Delete all versions for a file
+ */
+export async function deleteFileVersions(fileId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM file_versions WHERE file_id = '${fileId}'`);
+  await flushDatabase();
+}
+
+/**
+ * Update a version to store full content (used when converting patch to full for pruning)
+ */
+export async function updateVersionToFullContent(versionId: string, fullContent: string): Promise<void> {
+  const conn = getConnection();
+  const escapedContent = fullContent.replace(/'/g, "''");
+  
+  await conn.query(`
+    UPDATE file_versions 
+    SET is_full_content = true, content_or_patch = '${escapedContent}'
+    WHERE id = '${versionId}'
+  `);
   await flushDatabase();
 }
 
