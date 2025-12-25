@@ -33,6 +33,10 @@ import {
   syncProjectCreate,
   syncProjectDelete,
 } from './syncService';
+import {
+  createInitialVersion,
+  createUpdateVersion,
+} from './versionService';
 
 let initialized = false;
 let initializationPromise: Promise<void> | null = null;
@@ -410,6 +414,9 @@ export async function createFile(
   await dbCreateFile(projectFile);
   await flushDatabase();
   
+  // Create initial version for version history
+  await createInitialVersion(fileId, content);
+  
   // Sync to file system (for text-based files)
   if (fileType === 'md' || fileType === 'txt') {
     await syncFileToFileSystem(project.name, filePath, content);
@@ -480,6 +487,7 @@ export async function getFileWithChunks(fileId: string): Promise<{ file: Project
 
 /**
  * Update file content and sync to file system
+ * Creates a version of the current content before updating
  */
 export async function updateFile(fileId: string, content: string): Promise<ProjectFile | null> {
   await ensureInitialized();
@@ -492,6 +500,9 @@ export async function updateFile(fileId: string, content: string): Promise<Proje
   
   // Get project name for file system sync
   const project = await dbGetProject(file.projectId);
+  
+  // Create version of the new content (version history tracks the content at each save)
+  await createUpdateVersion(fileId, content);
   
   // Update content in database
   await updateFileContent(fileId, content);
