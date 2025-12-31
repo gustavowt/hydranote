@@ -5,6 +5,25 @@
  */
 
 import type { Project, ProjectFile, Chunk, Embedding, ChunkingConfig, SearchResult, SupportedFileType, FileTreeNode, ProjectFileTree } from '../types';
+
+/**
+ * Convert Uint8Array to base64 string efficiently (avoids stack overflow for large files)
+ */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  // Process in small chunks to avoid call stack size issues with apply()
+  const CHUNK_SIZE = 0x1000; // 4KB chunks (safe for all JS engines)
+  let binary = '';
+  
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  
+  return btoa(binary);
+}
+
 import {
   initializeDatabase,
   createProject as dbCreateProject,
@@ -168,11 +187,14 @@ export async function deleteProject(projectId: string): Promise<void> {
 /**
  * Ingest a document into a project
  * Extracts text, creates chunks, and generates embeddings
+ * For PDF files: stores system file path (readonly viewing from file system)
+ * For DOCX files: stores binary data and HTML for rich viewing/editing
  */
 export async function ingestDocument(
   file: File,
   projectId: string,
-  chunkingConfig?: ChunkingConfig
+  chunkingConfig?: ChunkingConfig,
+  systemFilePath?: string
 ): Promise<ProjectFile> {
   await ensureInitialized();
   
@@ -187,12 +209,14 @@ export async function ingestDocument(
     throw new Error(`Unsupported file type: ${file.name}`);
   }
   
+  const fileType = file.name.split('.').pop()?.toLowerCase() as ProjectFile['type'];
+  
   // Create file record
   const projectFile: ProjectFile = {
     id: crypto.randomUUID(),
     projectId,
     name: file.name,
-    type: file.name.split('.').pop()?.toLowerCase() as ProjectFile['type'],
+    type: fileType,
     size: file.size,
     status: 'processing',
     createdAt: new Date(),
@@ -208,6 +232,24 @@ export async function ingestDocument(
     
     // Store extracted text
     await updateFileContent(projectFile.id, text);
+    
+    // For PDF files: store the system file path for readonly viewing
+    if (fileType === 'pdf' && systemFilePath) {
+      await updateFileSystemPath(projectFile.id, systemFilePath);
+      projectFile.systemFilePath = systemFilePath;
+    }
+    
+    // For DOCX files: store binary data and convert to HTML for rich viewing/editing
+    if (fileType === 'docx') {
+      const { getFileBinaryData, convertDOCXToHTML } = await import('./documentProcessor');
+      const binaryData = await getFileBinaryData(file);
+      await updateFileBinaryData(projectFile.id, binaryData);
+      projectFile.binaryData = binaryData;
+      
+      const { html } = await convertDOCXToHTML(file);
+      await updateFileHtmlContent(projectFile.id, html);
+      projectFile.htmlContent = html;
+    }
     
     // Store chunks
     await dbCreateChunks(chunks);
@@ -236,6 +278,45 @@ export async function ingestDocument(
   }
 }
 
+/**
+ * Update file binary data (for PDF/DOCX viewing)
+ */
+async function updateFileBinaryData(fileId: string, binaryData: string): Promise<void> {
+  const conn = getConnection();
+  const escaped = binaryData.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE files 
+    SET binary_data = '${escaped}', updated_at = CURRENT_TIMESTAMP
+    WHERE id = '${fileId}'
+  `);
+}
+
+/**
+ * Update file HTML content (for DOCX rich viewing)
+ */
+async function updateFileHtmlContent(fileId: string, htmlContent: string): Promise<void> {
+  const conn = getConnection();
+  const escaped = htmlContent.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE files 
+    SET html_content = '${escaped}', updated_at = CURRENT_TIMESTAMP
+    WHERE id = '${fileId}'
+  `);
+}
+
+/**
+ * Update file system path (for PDF viewing from file system)
+ */
+async function updateFileSystemPath(fileId: string, systemFilePath: string): Promise<void> {
+  const conn = getConnection();
+  const escaped = systemFilePath.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE files 
+    SET system_file_path = '${escaped}', updated_at = CURRENT_TIMESTAMP
+    WHERE id = '${fileId}'
+  `);
+}
+
 // ============================================
 // Helper Functions (as per roadmap)
 // ============================================
@@ -252,17 +333,30 @@ export async function get_project_files(projectId: string): Promise<ProjectFile[
     SELECT * FROM files WHERE project_id = '${projectId}' ORDER BY created_at DESC
   `);
   
-  return result.toArray().map((row: Record<string, unknown>) => ({
-    id: row.id as string,
-    projectId: row.project_id as string,
-    name: row.name as string,
-    type: row.type as ProjectFile['type'],
-    size: row.size as number,
-    status: row.status as ProjectFile['status'],
-    content: row.content as string | undefined,
-    createdAt: new Date(row.created_at as string),
-    updatedAt: new Date(row.updated_at as string),
-  }));
+  return result.toArray().map((row: Record<string, unknown>) => {
+    // binary_data_base64 is stored as TEXT, get it directly
+    // Fall back to old binary_data column for backward compatibility
+    let binaryData: string | undefined = row.binary_data_base64 as string | undefined;
+    if (!binaryData && row.binary_data) {
+      // Legacy: convert from BLOB if new column is empty
+      binaryData = uint8ArrayToBase64(new Uint8Array(row.binary_data as ArrayBuffer));
+    }
+    
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      name: row.name as string,
+      type: row.type as ProjectFile['type'],
+      size: row.size as number,
+      status: row.status as ProjectFile['status'],
+      content: row.content as string | undefined,
+      binaryData,
+      htmlContent: row.html_content as string | undefined,
+      systemFilePath: row.system_file_path as string | undefined,
+      createdAt: new Date(row.created_at as string),
+      updatedAt: new Date(row.updated_at as string),
+    };
+  });
 }
 
 /**
@@ -384,7 +478,10 @@ export async function createFile(
   projectId: string,
   filePath: string,
   content: string,
-  fileType: 'md' | 'txt' | 'pdf' | 'docx' = 'md'
+  fileType: 'md' | 'txt' | 'pdf' | 'docx' = 'md',
+  binaryData?: Uint8Array,
+  htmlContent?: string,
+  systemFilePath?: string,
 ): Promise<ProjectFile> {
   await ensureInitialized();
   
@@ -396,7 +493,13 @@ export async function createFile(
   
   const now = new Date();
   const fileId = crypto.randomUUID();
-  const size = new Blob([content]).size;
+  const size = binaryData ? binaryData.length : new Blob([content]).size;
+  
+  // Convert binary data to base64 for storage
+  let binaryDataBase64: string | undefined;
+  if (binaryData) {
+    binaryDataBase64 = uint8ArrayToBase64(binaryData);
+  }
   
   // Create file record
   const projectFile: ProjectFile = {
@@ -407,6 +510,9 @@ export async function createFile(
     size,
     status: 'indexed',
     content,
+    binaryData: binaryDataBase64,
+    htmlContent,
+    systemFilePath,
     createdAt: now,
     updatedAt: now,
   };

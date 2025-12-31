@@ -146,6 +146,11 @@ export {
   stringSimilarity,
   parseLineNumberSpec,
   getOffsetFromLineNumbers,
+  // DOCX/PDF conversion helpers
+  convertDOCXToHTML,
+  convertDOCXBufferToHTML,
+  getFileBinaryData,
+  base64ToArrayBuffer,
 } from './documentProcessor';
 
 // Embedding Service

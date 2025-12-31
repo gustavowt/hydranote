@@ -28,6 +28,7 @@ HydraNote is an AI-powered document indexing and interaction system built with:
 - **AI**: OpenAI API / Anthropic (Claude) / Google (Gemini) / Ollama (local LLMs)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
 - **Markdown**: marked + highlight.js + Mermaid (diagrams)
+- **Rich Text Editor**: Tiptap (ProseMirror-based) for DOCX editing
 - **File System Sync**: File System Access API (bidirectional sync with local directories)
 
 ### Workspace Layout
@@ -1262,7 +1263,8 @@ Electron exposes file system operations via IPC handlers in `electron/src/index.
 | Handler | Description |
 |---------|-------------|
 | `fs:selectDirectory` | Open directory picker dialog |
-| `fs:readFile` | Read file contents |
+| `fs:readFile` | Read file contents (text) |
+| `fs:readBinaryFile` | Read binary file (returns base64) |
 | `fs:writeFile` | Write file (creates parent dirs) |
 | `fs:deleteFile` | Delete a file |
 | `fs:createDirectory` | Create directory recursively |
@@ -1422,6 +1424,85 @@ interface FileVersionMeta {
 
 ---
 
+## Enhanced PDF & DOCX Support
+
+The application provides proper viewing and editing support for PDF and DOCX files.
+
+### PDF Viewer (`PDFViewer.vue`)
+
+A dedicated PDF viewer component that renders PDF files from the file system (readonly):
+
+- **File System Loading**: PDFs are loaded directly from the file system via `systemFilePath` (Electron only)
+- **Page rendering**: Uses pdf.js to render actual PDF pages with accurate formatting
+- **Navigation**: Page navigation with input field for direct page jumping
+- **Zoom controls**: Zoom in/out and fit-to-width options
+- **Open in System**: Button to open the PDF in the system's default PDF viewer
+- **Visual feedback**: Current page highlighting and scroll-based page tracking
+
+**PDF Storage Strategy:**
+- **Text content**: Extracted text is stored in `content` field for embeddings and search
+- **System file path**: The absolute file path is stored in `systemFilePath` for loading the PDF
+- **No binary data**: PDF binary data is NOT stored in the database (saves space, avoids import issues)
+- **Always readonly**: PDF files cannot be edited within HydraNote
+
+### Rich Text Editor (`RichTextEditor.vue`)
+
+A Tiptap-based WYSIWYG editor for DOCX files featuring:
+
+- **Toolbar**: Bold, italic, underline, strikethrough, headings (H1-H3)
+- **Lists**: Bullet, numbered, and task lists
+- **Block elements**: Blockquotes, code blocks, horizontal rules
+- **Tables**: Full table support with resizable columns
+- **Links**: Link insertion and editing
+- **Text alignment**: Left, center, right alignment
+- **Syntax highlighting**: Code blocks with lowlight integration
+- **Word/character count**: Real-time statistics in status bar
+
+### File Type Routing
+
+The WorkspacePage automatically routes files to the appropriate editor:
+
+| File Type | Editor Component | Features |
+|-----------|-----------------|----------|
+| `.md`, `.txt` | MarkdownEditor | Edit/split/preview modes, Mermaid diagrams |
+| `.pdf` | PDFViewer | Read-only viewing from file system, zoom, navigation |
+| `.docx` | RichTextEditor | Full WYSIWYG editing with Tiptap |
+
+### Data Storage Strategy
+
+| File Type | Storage Approach |
+|-----------|------------------|
+| `.pdf` | `content` (extracted text for search) + `systemFilePath` (absolute path to file) |
+| `.docx` | `content` (extracted text) + `binaryData` (base64) + `htmlContent` (HTML for editing) |
+| `.md`, `.txt` | `content` (full text) - synced to file system |
+
+### Document Processing Functions
+
+Helper functions in `documentProcessor.ts`:
+
+| Function | Description |
+|----------|-------------|
+| `convertDOCXToHTML(file)` | Convert DOCX file to styled HTML |
+| `convertDOCXBufferToHTML(buffer)` | Convert DOCX ArrayBuffer to HTML |
+| `getFileBinaryData(file)` | Get file as base64 string |
+| `base64ToArrayBuffer(base64)` | Convert base64 back to ArrayBuffer |
+
+### Shell IPC Handler (Electron)
+
+The Electron app exposes a shell API for opening files in system applications:
+
+```typescript
+// In preload.ts
+shell: {
+  openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>
+}
+
+// Usage in PDFViewer.vue
+await electronAPI.shell.openPath(systemFilePath);
+```
+
+---
+
 ## File Structure
 
 ```
@@ -1433,12 +1514,14 @@ src/
 │   ├── FileTreeSidebar.vue          # Legacy file tree (Phase 11)
 │   ├── MarkdownEditor.vue           # Center panel: markdown editor
 │   ├── MarkdownViewerEditor.vue     # Read-only markdown viewer
+│   ├── PDFViewer.vue                # PDF file viewer with pdf.js
+│   ├── RichTextEditor.vue           # WYSIWYG editor with Tiptap for DOCX
 │   ├── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
 │   └── SearchAutocomplete.vue       # Header: global fuzzy search bar
 ├── services/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations (OPFS persistence)
-│   ├── documentProcessor.ts  # File processing
+│   ├── documentProcessor.ts  # File processing (+ DOCX/PDF conversion)
 │   ├── embeddingService.ts   # Vector embeddings
 │   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
@@ -1453,7 +1536,7 @@ src/
 ├── types/
 │   └── index.ts              # Type definitions
 └── views/
-    ├── WorkspacePage.vue     # Main unified workspace layout
+    ├── WorkspacePage.vue     # Main unified workspace layout (file type routing)
     └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage)
 ```
 
