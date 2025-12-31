@@ -15,12 +15,14 @@ import {
   updateFileSystemSettings,
   writeFile,
   readFile,
+  readBinaryFile,
   deleteFile as fsDeleteFile,
   listProjectFiles,
   isSyncAvailable,
   createProjectDirectory,
   deleteProjectDirectory,
   listRootDirectories,
+  getRootPath,
 } from "./fileSystemService";
 import {
   getAllProjects,
@@ -34,6 +36,44 @@ import {
 import {
   flushDatabase,
 } from "./database";
+import {
+  extractText,
+  getFileBinaryData,
+  convertDOCXToHTML,
+} from "./documentProcessor";
+
+// Supported file extensions for sync
+const SUPPORTED_TEXT_EXTENSIONS = ['.md', '.txt'];
+const SUPPORTED_BINARY_EXTENSIONS = ['.pdf', '.docx'];
+const ALL_SUPPORTED_EXTENSIONS = [...SUPPORTED_TEXT_EXTENSIONS, ...SUPPORTED_BINARY_EXTENSIONS];
+
+/**
+ * Check if a file is supported for sync
+ */
+function isSupportedFile(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return ALL_SUPPORTED_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+}
+
+/**
+ * Check if a file is a binary file (PDF, DOCX)
+ */
+function isBinaryFile(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return SUPPORTED_BINARY_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+}
+
+/**
+ * Get file type from extension
+ */
+function getFileType(fileName: string): string {
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.md')) return 'md';
+  if (lowerName.endsWith('.txt')) return 'txt';
+  if (lowerName.endsWith('.pdf')) return 'pdf';
+  if (lowerName.endsWith('.docx')) return 'docx';
+  return 'md'; // Default
+}
 
 // Sync state
 let isSyncing = false;
@@ -245,23 +285,63 @@ export async function syncProject(projectId: string): Promise<SyncResult> {
         } else {
           // Sync from file system to database
           if (change.type === "created" || change.type === "modified") {
-            const readResult = await readFile(project.name, change.filePath);
-            if (readResult.success && readResult.content !== undefined) {
-              if (change.type === "created") {
-                // Create new file in database using projectService
-                await createFile(
-                  projectId,
-                  change.filePath,
-                  readResult.content,
-                  'md',
-                );
-              } else {
-                // Update existing file using projectService
-                if (change.fileId) {
+            const fileType = getFileType(change.filePath);
+            
+            if (isBinaryFile(change.filePath)) {
+              // Handle binary files (PDF, DOCX)
+              const binaryResult = await readBinaryFile(project.name, change.filePath);
+              if (binaryResult.success && binaryResult.data) {
+                const binaryData = new Uint8Array(binaryResult.data);
+                
+                // Create a File object for processing
+                const fileName = change.filePath.split('/').pop() || change.filePath;
+                const blob = new Blob([binaryData]);
+                const file = new File([blob], fileName, { 
+                  type: fileType === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+                });
+                
+                // Extract text content
+                const textContent = await extractText(file);
+                
+                // Get HTML content for DOCX
+                let htmlContent: string | undefined;
+                if (fileType === 'docx') {
+                  const docxResult = await convertDOCXToHTML(file);
+                  htmlContent = docxResult.html;
+                }
+                
+                if (change.type === "created") {
+                  await createFile(
+                    projectId,
+                    change.filePath,
+                    textContent,
+                    fileType as 'md' | 'txt' | 'pdf' | 'docx',
+                    binaryData,
+                    htmlContent,
+                  );
+                } else if (change.fileId) {
+                  // For binary file updates, we need to update with new binary data
+                  // For now, just update the text content
+                  await updateFile(change.fileId, textContent);
+                }
+                result.filesRead++;
+              }
+            } else {
+              // Handle text files (MD, TXT)
+              const readResult = await readFile(project.name, change.filePath);
+              if (readResult.success && readResult.content !== undefined) {
+                if (change.type === "created") {
+                  await createFile(
+                    projectId,
+                    change.filePath,
+                    readResult.content,
+                    fileType as 'md' | 'txt' | 'pdf' | 'docx',
+                  );
+                } else if (change.fileId) {
                   await updateFile(change.fileId, readResult.content);
                 }
+                result.filesRead++;
               }
-              result.filesRead++;
             }
           } else if (change.type === "deleted" && change.fileId) {
             await projectDeleteFile(change.fileId);
@@ -314,32 +394,83 @@ async function importProjectFromFileSystem(
       return result;
     }
 
-    // Import all markdown files
-    const mdFiles = filesResult.files.filter(
-      (f) => !f.isDirectory && f.name.endsWith(".md"),
+    // Import all supported files (md, txt, pdf, docx)
+    const supportedFiles = filesResult.files.filter(
+      (f) => !f.isDirectory && isSupportedFile(f.name),
     );
 
     // Get existing files to avoid duplicates
     const existingFiles = await get_project_files(project.id);
     const existingPaths = new Set(existingFiles.map(f => f.name.toLowerCase()));
 
-    for (const fsFile of mdFiles) {
+    for (const fsFile of supportedFiles) {
       try {
         // Skip if file already exists in project
         if (existingPaths.has(fsFile.relativePath.toLowerCase())) {
           continue;
         }
 
-        const readResult = await readFile(directoryName, fsFile.relativePath);
-        if (readResult.success && readResult.content !== undefined) {
-          // Use projectService.createFile which handles DB + sync
-          await createFile(
-            project.id,
-            fsFile.relativePath,
-            readResult.content,
-            'md',
-          );
-          result.filesRead++;
+        const fileType = getFileType(fsFile.name);
+
+        if (isBinaryFile(fsFile.name)) {
+          // Handle binary files (PDF, DOCX)
+          const binaryResult = await readBinaryFile(directoryName, fsFile.relativePath);
+          if (binaryResult.success && binaryResult.data) {
+            // Convert ArrayBuffer to Uint8Array for storage
+            const binaryData = new Uint8Array(binaryResult.data);
+            
+            // Create a File object for processing
+            const blob = new Blob([binaryData]);
+            const file = new File([blob], fsFile.name, { 
+              type: fileType === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+            });
+            
+            // Extract text content
+            const textContent = await extractText(file);
+            
+            if (fileType === 'pdf') {
+              // For PDF files: store system file path for readonly viewing
+              const rootPath = getRootPath();
+              const systemFilePath = `${rootPath}/${directoryName}/${fsFile.relativePath}`.replace(/\/+/g, '/');
+              
+              await createFile(
+                project.id,
+                fsFile.relativePath,
+                textContent,
+                'pdf',
+                undefined, // no binary data for PDFs
+                undefined, // no html content for PDFs
+                systemFilePath,
+              );
+            } else {
+              // For DOCX files: store binary data and HTML content
+              let htmlContent: string | undefined;
+              const docxResult = await convertDOCXToHTML(file);
+              htmlContent = docxResult.html;
+              
+              await createFile(
+                project.id,
+                fsFile.relativePath,
+                textContent,
+                'docx',
+                binaryData,
+                htmlContent,
+              );
+            }
+            result.filesRead++;
+          }
+        } else {
+          // Handle text files (MD, TXT)
+          const readResult = await readFile(directoryName, fsFile.relativePath);
+          if (readResult.success && readResult.content !== undefined) {
+            await createFile(
+              project.id,
+              fsFile.relativePath,
+              readResult.content,
+              fileType as 'md' | 'txt' | 'pdf' | 'docx',
+            );
+            result.filesRead++;
+          }
         }
       } catch (error) {
         console.error(`Failed to import file: ${fsFile.relativePath}`, error);
@@ -364,9 +495,9 @@ function detectChanges(
 ): SyncChange[] {
   const changes: SyncChange[] = [];
 
-  // Filter to only markdown files in file system
-  const fsMdFiles = fsFiles.filter(
-    (f) => !f.isDirectory && f.name.endsWith(".md"),
+  // Filter to only supported files in file system
+  const fsSupportedFiles = fsFiles.filter(
+    (f) => !f.isDirectory && isSupportedFile(f.name),
   );
 
   // Create maps for easy lookup
@@ -376,7 +507,7 @@ function detectChanges(
   }
 
   const fsFileMap = new Map<string, FileSystemEntry>();
-  for (const file of fsMdFiles) {
+  for (const file of fsSupportedFiles) {
     fsFileMap.set(file.relativePath.toLowerCase(), file);
   }
 
@@ -419,7 +550,7 @@ function detectChanges(
   }
 
   // Check for files in FS but not in DB (need to import to DB)
-  for (const fsFile of fsMdFiles) {
+  for (const fsFile of fsSupportedFiles) {
     const dbFile = dbFileMap.get(fsFile.relativePath.toLowerCase());
     if (!dbFile) {
       changes.push({
@@ -468,23 +599,73 @@ export async function syncFileFromFileSystem(
   }
 
   try {
-    const readResult = await readFile(projectName, filePath);
-    if (!readResult.success) {
-      return readResult;
-    }
-
+    const fileType = getFileType(filePath);
+    
     // Find existing file in database
     const dbFiles = await get_project_files(projectId);
     const existingFile = dbFiles.find(
       (f) => f.name.toLowerCase() === filePath.toLowerCase(),
     );
 
-    if (existingFile) {
-      // Update existing file using projectService
-      await updateFile(existingFile.id, readResult.content!);
+    if (isBinaryFile(filePath)) {
+      // Handle binary files (PDF, DOCX)
+      const binaryResult = await readBinaryFile(projectName, filePath);
+      if (!binaryResult.success || !binaryResult.data) {
+        return { success: false, error: binaryResult.error };
+      }
+      
+      const binaryData = new Uint8Array(binaryResult.data);
+      
+      // Create a File object for processing
+      const fileName = filePath.split('/').pop() || filePath;
+      const blob = new Blob([binaryData]);
+      const file = new File([blob], fileName, { 
+        type: fileType === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+      });
+      
+      // Extract text content
+      const textContent = await extractText(file);
+
+      if (fileType === 'pdf') {
+        // For PDF files: store system file path for readonly viewing
+        const rootPath = getRootPath();
+        const systemFilePath = `${rootPath}/${projectName}/${filePath}`.replace(/\/+/g, '/');
+        
+        if (existingFile) {
+          // Update existing file - just update text content for embeddings
+          await updateFile(existingFile.id, textContent);
+        } else {
+          // Create new file with system file path
+          await createFile(projectId, filePath, textContent, 'pdf', undefined, undefined, systemFilePath);
+        }
+      } else {
+        // For DOCX files: store binary data and HTML content
+        let htmlContent: string | undefined;
+        const docxResult = await convertDOCXToHTML(file);
+        htmlContent = docxResult.html;
+
+        if (existingFile) {
+          // Update existing file
+          await updateFile(existingFile.id, textContent);
+        } else {
+          // Create new file with binary data
+          await createFile(projectId, filePath, textContent, 'docx', binaryData, htmlContent);
+        }
+      }
     } else {
-      // Create new file using projectService
-      await createFile(projectId, filePath, readResult.content!, 'md');
+      // Handle text files (MD, TXT)
+      const readResult = await readFile(projectName, filePath);
+      if (!readResult.success) {
+        return readResult;
+      }
+
+      if (existingFile) {
+        // Update existing file using projectService
+        await updateFile(existingFile.id, readResult.content!);
+      } else {
+        // Create new file using projectService
+        await createFile(projectId, filePath, readResult.content!, fileType as 'md' | 'txt' | 'pdf' | 'docx');
+      }
     }
 
     return { success: true };
@@ -606,12 +787,12 @@ async function checkForExternalChanges(): Promise<void> {
         continue;
       }
 
-      const fsMdFiles = fsResult.files.filter(
-        (f) => !f.isDirectory && f.name.endsWith(".md"),
+      const fsSupportedFiles = fsResult.files.filter(
+        (f) => !f.isDirectory && isSupportedFile(f.name),
       );
 
       // Check for new or modified files in file system
-      for (const fsFile of fsMdFiles) {
+      for (const fsFile of fsSupportedFiles) {
         const dbFile = dbFiles.find(
           (f) => f.name.toLowerCase() === fsFile.relativePath.toLowerCase(),
         );
