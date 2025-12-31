@@ -6,6 +6,24 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
 import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 
+/**
+ * Convert Uint8Array to base64 string efficiently (avoids stack overflow for large files)
+ */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  // Process in small chunks to avoid call stack size issues with apply()
+  const CHUNK_SIZE = 0x1000; // 4KB chunks (safe for all JS engines)
+  let binary = '';
+  
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  
+  return btoa(binary);
+}
+
 let db: duckdb.AsyncDuckDB | null = null;
 let connection: duckdb.AsyncDuckDBConnection | null = null;
 
@@ -112,6 +130,8 @@ async function createSchema(): Promise<void> {
       size INTEGER NOT NULL,
       status VARCHAR NOT NULL DEFAULT 'pending',
       content TEXT,
+      binary_data BLOB,
+      html_content TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -239,6 +259,35 @@ async function createSchema(): Promise<void> {
   await connection.query(`
     CREATE INDEX IF NOT EXISTS idx_file_versions_version ON file_versions(file_id, version_number)
   `);
+
+  // Migration: Add binary_data and html_content columns to files table
+  // These columns store original file data for PDF/DOCX viewing
+  try {
+    await connection.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS binary_data BLOB`);
+  } catch {
+    // Column may already exist, ignore error
+  }
+  try {
+    await connection.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS html_content TEXT`);
+  } catch {
+    // Column may already exist, ignore error
+  }
+  
+  // Migration: Add binary_data_base64 TEXT column for simpler base64 storage
+  // This avoids BLOB conversion issues that can corrupt binary data
+  try {
+    await connection.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS binary_data_base64 TEXT`);
+  } catch {
+    // Column may already exist, ignore error
+  }
+  
+  // Migration: Add system_file_path TEXT column for PDF files
+  // PDFs are now viewed directly from the file system instead of storing binary data
+  try {
+    await connection.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS system_file_path TEXT`);
+  } catch {
+    // Column may already exist, ignore error
+  }
 }
 
 /**
@@ -322,6 +371,9 @@ export async function deleteProject(projectId: string): Promise<void> {
   // Delete chunks for this project
   await conn.query(`DELETE FROM chunks WHERE project_id = '${projectId}'`);
   
+  // Delete file versions for files in this project
+  await conn.query(`DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE project_id = '${projectId}')`);
+  
   // Delete files for this project
   await conn.query(`DELETE FROM files WHERE project_id = '${projectId}'`);
   
@@ -338,9 +390,16 @@ export async function deleteProject(projectId: string): Promise<void> {
 export async function createFile(file: ProjectFile): Promise<void> {
   const conn = getConnection();
   const escapedContent = file.content ? file.content.replace(/'/g, "''") : '';
+  const escapedHtmlContent = file.htmlContent ? file.htmlContent.replace(/'/g, "''") : null;
+  
+  // Store binary data as base64 TEXT (simpler and avoids BLOB conversion issues)
+  const binaryDataBase64Value = file.binaryData ? `'${file.binaryData}'` : 'NULL';
+  const htmlContentValue = escapedHtmlContent ? `'${escapedHtmlContent}'` : 'NULL';
+  const systemFilePathValue = file.systemFilePath ? `'${file.systemFilePath.replace(/'/g, "''")}'` : 'NULL';
+  
   await conn.query(`
-    INSERT INTO files (id, project_id, name, type, size, status, content, created_at, updated_at)
-    VALUES ('${file.id}', '${file.projectId}', '${file.name}', '${file.type}', ${file.size}, '${file.status}', '${escapedContent}', '${file.createdAt.toISOString()}', '${file.updatedAt.toISOString()}')
+    INSERT INTO files (id, project_id, name, type, size, status, content, binary_data_base64, html_content, system_file_path, created_at, updated_at)
+    VALUES ('${file.id}', '${file.projectId}', '${file.name}', '${file.type}', ${file.size}, '${file.status}', '${escapedContent}', ${binaryDataBase64Value}, ${htmlContentValue}, ${systemFilePathValue}, '${file.createdAt.toISOString()}', '${file.updatedAt.toISOString()}')
   `);
 }
 
@@ -351,6 +410,15 @@ export async function getFile(fileId: string): Promise<ProjectFile | null> {
   if (rows.length === 0) return null;
   
   const row = rows[0];
+  
+  // binary_data_base64 is stored as TEXT, so we get it directly as a string
+  // Fall back to old binary_data column for backward compatibility
+  let binaryData: string | undefined = row.binary_data_base64 as string | undefined;
+  if (!binaryData && row.binary_data) {
+    // Legacy: convert from BLOB if new column is empty
+    binaryData = uint8ArrayToBase64(new Uint8Array(row.binary_data));
+  }
+  
   return {
     id: row.id,
     projectId: row.project_id,
@@ -359,6 +427,9 @@ export async function getFile(fileId: string): Promise<ProjectFile | null> {
     size: row.size,
     status: row.status,
     content: row.content,
+    binaryData,
+    htmlContent: row.html_content,
+    systemFilePath: row.system_file_path as string | undefined,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };

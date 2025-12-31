@@ -34,6 +34,12 @@ export interface ProjectFile {
   size: number;
   status: FileStatus;
   content?: string; // Raw extracted text
+  /** Original binary data as base64 (for DOCX files only) */
+  binaryData?: string;
+  /** HTML content (for DOCX files converted via mammoth) */
+  htmlContent?: string;
+  /** System file path for external file viewing (for PDF files) */
+  systemFilePath?: string;
   createdAt: Date;
   updatedAt: Date;
 }
