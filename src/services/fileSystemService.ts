@@ -7,6 +7,19 @@
 import type { FileSystemEntry, FileSystemSettings } from '../types';
 import { DEFAULT_FILESYSTEM_SETTINGS } from '../types';
 
+/**
+ * Decode base64 string to Uint8Array efficiently (handles large files)
+ */
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Storage key for settings
 const FILESYSTEM_SETTINGS_KEY = 'hydranote_filesystem_settings';
 const DIRECTORY_HANDLE_KEY = 'hydranote_directory_handle';
@@ -19,8 +32,10 @@ export function isElectron(): boolean {
   return typeof window !== 'undefined' && window.electronAPI?.isElectron === true;
 }
 
-// Get the Electron API (only available in Electron)
-function getElectronAPI() {
+/**
+ * Get the Electron API (only available in Electron)
+ */
+export function getElectronAPI() {
   if (!isElectron()) {
     return null;
   }
@@ -469,6 +484,67 @@ export async function readFile(
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to read file' 
+    };
+  }
+}
+
+/**
+ * Read a binary file from the file system (for PDF, DOCX, etc.)
+ * Returns the file as an ArrayBuffer
+ */
+export async function readBinaryFile(
+  projectName: string,
+  filePath: string
+): Promise<{ success: boolean; data?: ArrayBuffer; error?: string }> {
+  const settings = loadFileSystemSettings();
+  if (!settings.enabled) {
+    return { success: false, error: 'File system sync is not enabled' };
+  }
+
+  // Use Electron API if available
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
+    const result = await electronAPI.fs.readBinaryFile(fullPath);
+    if (!result.success || !result.data) {
+      return { success: false, error: result.error || 'Failed to read binary file' };
+    }
+    // Decode base64 to ArrayBuffer
+    const bytes = base64ToUint8Array(result.data);
+    return { success: true, data: bytes.buffer as ArrayBuffer };
+  }
+
+  // Fallback to File System Access API
+  const projectDir = await getProjectDirectory(projectName);
+  if (!projectDir) {
+    return { success: false, error: 'Could not access project directory' };
+  }
+
+  try {
+    // Handle nested paths
+    const parts = filePath.split('/').filter(p => p.length > 0);
+    const fileName = parts.pop()!;
+    
+    // Navigate to parent directory
+    let parentHandle = projectDir;
+    for (const part of parts) {
+      parentHandle = await parentHandle.getDirectoryHandle(part);
+    }
+
+    // Read the file as binary
+    const fileHandle = await parentHandle.getFileHandle(fileName);
+    const file = await fileHandle.getFile();
+    const data = await file.arrayBuffer();
+
+    return { success: true, data };
+  } catch (error) {
+    if ((error as Error).name === 'NotFoundError') {
+      return { success: false, error: 'File not found' };
+    }
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to read binary file' 
     };
   }
 }
