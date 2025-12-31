@@ -72,6 +72,76 @@ async function extractTextFromDOCX(file: File): Promise<string> {
 }
 
 /**
+ * Convert DOCX file to styled HTML for rich viewing/editing
+ */
+export async function convertDOCXToHTML(file: File): Promise<{ html: string; messages: string[] }> {
+  const arrayBuffer = await file.arrayBuffer();
+  const result = await mammoth.convertToHtml({ arrayBuffer }, {
+    styleMap: [
+      "p[style-name='Heading 1'] => h1:fresh",
+      "p[style-name='Heading 2'] => h2:fresh",
+      "p[style-name='Heading 3'] => h3:fresh",
+      "p[style-name='Heading 4'] => h4:fresh",
+      "p[style-name='Heading 5'] => h5:fresh",
+      "p[style-name='Heading 6'] => h6:fresh",
+      "r[style-name='Strong'] => strong",
+      "r[style-name='Emphasis'] => em",
+    ],
+  });
+  return {
+    html: result.value,
+    messages: result.messages.map(m => m.message),
+  };
+}
+
+/**
+ * Convert DOCX ArrayBuffer to styled HTML
+ */
+export async function convertDOCXBufferToHTML(arrayBuffer: ArrayBuffer): Promise<{ html: string; messages: string[] }> {
+  const result = await mammoth.convertToHtml({ arrayBuffer }, {
+    styleMap: [
+      "p[style-name='Heading 1'] => h1:fresh",
+      "p[style-name='Heading 2'] => h2:fresh",
+      "p[style-name='Heading 3'] => h3:fresh",
+      "p[style-name='Heading 4'] => h4:fresh",
+      "p[style-name='Heading 5'] => h5:fresh",
+      "p[style-name='Heading 6'] => h6:fresh",
+      "r[style-name='Strong'] => strong",
+      "r[style-name='Emphasis'] => em",
+    ],
+  });
+  return {
+    html: result.value,
+    messages: result.messages.map(m => m.message),
+  };
+}
+
+/**
+ * Get raw binary data from a file as base64 string
+ */
+export async function getFileBinaryData(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Convert base64 string back to ArrayBuffer
+ */
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+/**
  * Extract text from an image using OCR
  */
 async function extractTextFromImage(file: File): Promise<string> {
