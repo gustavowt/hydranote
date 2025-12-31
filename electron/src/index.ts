@@ -1,7 +1,7 @@
 import type { CapacitorElectronConfig } from '@capacitor-community/electron';
 import { getCapacitorElectronConfig, setupElectronDeepLinking } from '@capacitor-community/electron';
 import type { MenuItemConstructorOptions } from 'electron';
-import { app, MenuItem, ipcMain, dialog } from 'electron';
+import { app, MenuItem, ipcMain, dialog, shell } from 'electron';
 import electronIsDev from 'electron-is-dev';
 import unhandled from 'electron-unhandled';
 import { autoUpdater } from 'electron-updater';
@@ -90,7 +90,7 @@ ipcMain.handle('fs:selectDirectory', async () => {
   return { success: true, path: result.filePaths[0] };
 });
 
-// Read file
+// Read file (text)
 ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
   try {
     const content = await fs.promises.readFile(filePath, 'utf-8');
@@ -99,6 +99,20 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to read file' 
+    };
+  }
+});
+
+// Read binary file (returns base64)
+ipcMain.handle('fs:readBinaryFile', async (_event, filePath: string) => {
+  try {
+    const buffer = await fs.promises.readFile(filePath);
+    const base64 = buffer.toString('base64');
+    return { success: true, data: base64 };
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to read binary file' 
     };
   }
 });
@@ -218,6 +232,27 @@ ipcMain.handle('fs:getStats', async (_event, targetPath: string) => {
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to get stats' 
+    };
+  }
+});
+
+// ============================================
+// Shell IPC Handlers
+// ============================================
+
+// Open file in system default application
+ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
+  try {
+    const result = await shell.openPath(filePath);
+    if (result) {
+      // shell.openPath returns an empty string on success, error message otherwise
+      return { success: false, error: result };
+    }
+    return { success: true };
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to open file' 
     };
   }
 });
