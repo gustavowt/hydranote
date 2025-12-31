@@ -52,8 +52,29 @@
         @file-moved="handleFileMoved"
       />
 
-      <!-- Center: Markdown Editor -->
+      <!-- Center: Editor (routes based on file type) -->
+      <!-- PDF Viewer (readonly, loads from file system) -->
+      <PDFViewer
+        v-if="currentFile && currentFile.type === 'pdf'"
+        ref="pdfViewerRef"
+        :current-file="currentFile"
+        :current-project="currentProject"
+        :system-file-path="currentFile.systemFilePath"
+        :pdf-data="pdfData"
+      />
+      <!-- Rich Text Editor (DOCX) -->
+      <RichTextEditor
+        v-else-if="currentFile && currentFile.type === 'docx'"
+        ref="richTextEditorRef"
+        :current-file="currentFile"
+        :current-project="currentProject"
+        :html-content="currentFile.htmlContent || ''"
+        @save="handleSaveDocxFile"
+        @content-change="handleContentChange"
+      />
+      <!-- Markdown Editor (default for md, txt, and new notes) -->
       <MarkdownEditor
+        v-else
         ref="markdownEditorRef"
         :current-file="currentFile"
         :current-project="currentProject"
@@ -152,9 +173,12 @@ import {
   updateFile,
   renameFile,
   onSyncEvent,
+  base64ToArrayBuffer,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
+import RichTextEditor from '@/components/RichTextEditor.vue';
+import PDFViewer from '@/components/PDFViewer.vue';
 import ChatSidebar from '@/components/ChatSidebar.vue';
 import SearchAutocomplete from '@/components/SearchAutocomplete.vue';
 
@@ -163,6 +187,8 @@ const router = useRouter();
 // Refs for child components
 const projectsTreeRef = ref<InstanceType<typeof ProjectsTreeSidebar> | null>(null);
 const markdownEditorRef = ref<InstanceType<typeof MarkdownEditor> | null>(null);
+const richTextEditorRef = ref<InstanceType<typeof RichTextEditor> | null>(null);
+const pdfViewerRef = ref<InstanceType<typeof PDFViewer> | null>(null);
 const chatSidebarRef = ref<InstanceType<typeof ChatSidebar> | null>(null);
 const searchAutocompleteRef = ref<InstanceType<typeof SearchAutocomplete> | null>(null);
 
@@ -176,6 +202,7 @@ const selectedFileId = ref<string | undefined>(undefined);
 const currentProject = ref<Project | null>(null);
 const currentFile = ref<ProjectFile | null>(null);
 const editorInitialContent = ref('');
+const pdfData = ref<ArrayBuffer | null>(null);
 
 // Modal state
 const showCreateProjectModal = ref(false);
@@ -255,6 +282,21 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
   if (projectFile) {
     currentFile.value = projectFile;
     editorInitialContent.value = projectFile.content || '';
+    
+    // For PDF files: prefer systemFilePath, fallback to binaryData for legacy files
+    if (projectFile.type === 'pdf') {
+      if (projectFile.systemFilePath) {
+        // New approach: load from file system (handled by PDFViewer)
+        pdfData.value = null;
+      } else if (projectFile.binaryData) {
+        // Legacy: load from stored binary data
+        pdfData.value = base64ToArrayBuffer(projectFile.binaryData);
+      } else {
+        pdfData.value = null;
+      }
+    } else {
+      pdfData.value = null;
+    }
   }
   
   // Update chat sidebar project
@@ -361,6 +403,41 @@ async function handleSaveExistingFile(content: string, file?: ProjectFile) {
   } catch (error) {
     const toast = await toastController.create({
       message: 'Failed to save note',
+      duration: 2000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+// Save handler for DOCX files (from RichTextEditor)
+async function handleSaveDocxFile(_text: string, html: string, file?: ProjectFile) {
+  if (!file) return;
+  
+  try {
+    // For DOCX files, we save the HTML content
+    // The text content is extracted from the editor for indexing
+    const updatedFile = await updateFile(file.id, html);
+    
+    if (updatedFile) {
+      currentFile.value = updatedFile;
+      
+      if (selectedProjectId.value) {
+        await projectsTreeRef.value?.revealFile(selectedProjectId.value, file.id);
+      }
+      
+      const toast = await toastController.create({
+        message: 'Document saved!',
+        duration: 1500,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to save document',
       duration: 2000,
       color: 'danger',
       position: 'top',

@@ -47,6 +47,10 @@ interface ElectronFsReadFileResult extends ElectronFsResult {
   content?: string;
 }
 
+interface ElectronFsReadBinaryFileResult extends ElectronFsResult {
+  data?: string; // base64 encoded
+}
+
 interface ElectronFsExistsResult extends ElectronFsResult {
   exists?: boolean;
 }
@@ -77,6 +81,7 @@ interface ElectronAPI {
   fs: {
     selectDirectory: () => Promise<ElectronFsSelectDirectoryResult>;
     readFile: (filePath: string) => Promise<ElectronFsReadFileResult>;
+    readBinaryFile: (filePath: string) => Promise<ElectronFsReadBinaryFileResult>;
     writeFile: (filePath: string, content: string) => Promise<ElectronFsResult>;
     deleteFile: (filePath: string) => Promise<ElectronFsResult>;
     createDirectory: (dirPath: string) => Promise<ElectronFsResult>;
@@ -84,6 +89,10 @@ interface ElectronAPI {
     listDirectory: (dirPath: string) => Promise<ElectronFsListDirectoryResult>;
     exists: (path: string) => Promise<ElectronFsExistsResult>;
     getStats: (path: string) => Promise<ElectronFsStatsResult>;
+  };
+  // Shell Operations (open files/URLs in system applications)
+  shell: {
+    openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   };
   // Web Fetch Operations (bypasses CORS by running in main process)
   web: {
@@ -102,6 +111,8 @@ declare global {
 }
 
 export {};
+
+
 
 
 
