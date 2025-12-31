@@ -2627,14 +2627,16 @@ function enrichParamsWithContext(
     enrichedParams.project = String(accumulatedContext.projectId);
   }
 
-  // If step needs content from web research
+  // If step needs content from web research - always set _webContext when contextNeeded declares it
+  // This overrides any placeholder content the Planner may have set
   if (
     step.contextNeeded?.includes("webResearchResults") &&
-    accumulatedContext.webResearchResults &&
-    !enrichedParams.content
+    accumulatedContext.webResearchResults
   ) {
     // For write/addNote, we'll generate content based on web research
     enrichedParams._webContext = String(accumulatedContext.webResearchResults);
+    // Mark that we should override placeholder content
+    enrichedParams._shouldGenerateFromContext = "true";
   }
 
   // If step needs search results
@@ -2770,12 +2772,17 @@ export async function executePlan(
       const enrichedParams = enrichParamsWithContext(step, accumulatedContext);
 
       // For write/addNote, generate content if needed
+      // Generate content when:
+      // 1. No content exists, OR
+      // 2. Step explicitly needs context (contextNeeded was set, so _shouldGenerateFromContext is true)
+      const hasContextToUse = enrichedParams._webContext || enrichedParams._searchContext;
+      const shouldGenerateContent = enrichedParams._shouldGenerateFromContext === "true";
+      
       if (
         (step.tool === "write" || step.tool === "addNote") &&
-        !enrichedParams.content &&
-        (enrichedParams._webContext || enrichedParams._searchContext)
+        hasContextToUse &&
+        (!enrichedParams.content || shouldGenerateContent)
       ) {
-        console.log("[EXECUTOR] Generating content from context...");
         enrichedParams.content = await generateContentFromContext(
           step,
           accumulatedContext,
@@ -2784,6 +2791,7 @@ export async function executePlan(
         // Clean up internal params
         delete enrichedParams._webContext;
         delete enrichedParams._searchContext;
+        delete enrichedParams._shouldGenerateFromContext;
       }
 
       // Resolve project ID for the step
