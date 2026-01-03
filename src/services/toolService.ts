@@ -35,6 +35,7 @@ import {
   deleteProject,
   deleteFile,
   moveFile,
+  renameFile,
   getAllProjects,
   getProject,
   findFileByPath,
@@ -925,37 +926,108 @@ async function resolveProject(
 
 /**
  * Execute the moveFile tool
- * Moves a file from one project to another
+ * Supports three operations:
+ * 1. Rename: Change file name within same project (newName provided)
+ * 2. Move within project: Move to different directory in same project
+ * 3. Move between projects: Move file from one project to another
  */
 export async function executeMoveFileTool(params: {
   file: string;
-  fromProject: string;
-  toProject: string;
+  fromProject?: string;
+  toProject?: string;
   directory?: string;
+  newName?: string;
 }): Promise<ToolResult> {
   try {
-    const { file, fromProject, toProject, directory } = params;
+    const { file, fromProject, toProject, directory, newName } = params;
 
-    if (!file || !fromProject || !toProject) {
+    if (!file) {
       return {
         success: false,
         tool: "moveFile",
-        error:
-          "File name, source project, and destination project are all required.",
+        error: "File name is required.",
       };
     }
 
-    // Resolve source project
-    const sourceProject = await resolveProject(fromProject);
-    if (!sourceProject) {
+    // Determine source project
+    let sourceProject: { id: string; name: string } | null = null;
+    let sourceFile: ProjectFile | null = null;
+
+    if (fromProject) {
+      sourceProject = await resolveProject(fromProject);
+      if (!sourceProject) {
+        return {
+          success: false,
+          tool: "moveFile",
+          error: `Source project "${fromProject}" not found.`,
+        };
+      }
+      sourceFile = await findFileByPath(sourceProject.id, file);
+    } else {
+      // Try to find the file globally
+      const globalResult = await findFileGlobal(file);
+      if (globalResult) {
+        sourceProject = { id: globalResult.projectId, name: globalResult.projectName };
+        sourceFile = globalResult.file;
+      }
+    }
+
+    if (!sourceProject || !sourceFile) {
       return {
         success: false,
         tool: "moveFile",
-        error: `Source project "${fromProject}" not found.`,
+        error: `File "${file}" not found.${!fromProject ? " Please specify which project the file is in." : ""}`,
       };
     }
 
-    // Resolve destination project
+    // Determine if this is a rename, same-project move, or cross-project move
+    const isSameProject = !toProject || toProject === fromProject || 
+      (await resolveProject(toProject))?.id === sourceProject.id;
+
+    // Case 1: Rename (same project, newName provided)
+    if (isSameProject && newName) {
+      const renamedFile = await renameFile(sourceFile.id, newName);
+      if (!renamedFile) {
+        return {
+          success: false,
+          tool: "moveFile",
+          error: `Failed to rename file "${file}".`,
+        };
+      }
+      return {
+        success: true,
+        tool: "moveFile",
+        data: `File "${file}" has been renamed to "${renamedFile.name}" in project "${sourceProject.name}".`,
+        metadata: {
+          fileId: renamedFile.id,
+          fileName: renamedFile.name,
+        },
+      };
+    }
+
+    // Case 2: Move within same project to different directory
+    if (isSameProject && directory) {
+      const movedFile = await moveFile(sourceFile.id, sourceProject.id, directory);
+      return {
+        success: true,
+        tool: "moveFile",
+        data: `File "${file}" has been moved to "${directory}/" in project "${sourceProject.name}".`,
+        metadata: {
+          fileId: movedFile.id,
+          fileName: movedFile.name,
+        },
+      };
+    }
+
+    // Case 3: Cross-project move
+    if (!toProject) {
+      return {
+        success: false,
+        tool: "moveFile",
+        error: "Please specify either a new name (for rename), a directory (for move within project), or a destination project (for cross-project move).",
+      };
+    }
+
     const destProject = await resolveProject(toProject);
     if (!destProject) {
       return {
@@ -965,17 +1037,6 @@ export async function executeMoveFileTool(params: {
       };
     }
 
-    // Find the file in source project
-    const sourceFile = await findFileByPath(sourceProject.id, file);
-    if (!sourceFile) {
-      return {
-        success: false,
-        tool: "moveFile",
-        error: `File "${file}" not found in project "${sourceProject.name}".`,
-      };
-    }
-
-    // Move the file
     const movedFile = await moveFile(sourceFile.id, destProject.id, directory);
 
     return {
@@ -991,7 +1052,7 @@ export async function executeMoveFileTool(params: {
     return {
       success: false,
       tool: "moveFile",
-      error: error instanceof Error ? error.message : "Failed to move file",
+      error: error instanceof Error ? error.message : "Failed to move/rename file",
     };
   }
 }
@@ -2180,9 +2241,10 @@ async function executeToolInternal(
     case "moveFile":
       return executeMoveFileTool({
         file: call.params.file || call.params.fileName,
-        fromProject: call.params.fromProject || call.params.from,
+        fromProject: call.params.fromProject || call.params.from || call.params.project,
         toProject: call.params.toProject || call.params.to,
         directory: call.params.directory || call.params.path,
+        newName: call.params.newName || call.params.name || call.params.rename,
       });
 
     case "deleteFile":
@@ -2366,7 +2428,7 @@ Available tools:
 - addNote: Create and save a quick note. Params: {content: "note content", title?: "title", project?: "project name"}
 - updateFile: Update an existing file. Params: {file: "filename", section: "section to find", operation: "replace"|"insert_before"|"insert_after", newContent: "new content"}
 - createProject: Create a new project. Params: {name: "project name", description?: "description"}
-- moveFile: Move a file between projects. Params: {file: "filename", fromProject: "source", toProject: "destination"}
+- moveFile: Rename or move a file. Params: {file: "filename", newName?: "new-name.md" (for rename), directory?: "target/dir" (for move within project), fromProject?: "source", toProject?: "destination" (for cross-project move)}
 - deleteFile: Delete a file. Params: {file: "filename", project?: "project name"}
 - deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
 - webResearch: Search the web for information. Params: {query: "search query", maxResults?: number}

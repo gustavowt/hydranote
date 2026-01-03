@@ -191,7 +191,7 @@ Handles tool execution with a Planner → Executor → Checker architecture.
 | `updateFile` | Update sections in existing files | update, edit, modify, replace, insert |
 | `webResearch` | Search the web for information | web search, google, look up online, current news |
 | `createProject` | Create a new project (global mode) | create project, new project |
-| `moveFile` | Move file between projects (global mode) | move file, transfer |
+| `moveFile` | Rename, move within project, or move between projects | rename, move file, transfer |
 | `deleteFile` | Delete a file | delete file, remove file |
 | `deleteProject` | Delete a project (global mode) | delete project, remove project |
 
