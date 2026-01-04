@@ -87,7 +87,9 @@
                 :class="{ selected: settings.provider === provider.id }"
                 @click="settings.provider = provider.id"
               >
-                <div class="provider-icon" v-html="provider.icon"></div>
+                <div class="provider-icon">
+                  <component :is="provider.iconComponent" />
+                </div>
                 <div class="provider-info">
                   <h3>{{ provider.name }}</h3>
                   <p>{{ provider.description }}</p>
@@ -392,7 +394,9 @@
                     :class="{ selected: webSearchSettings.provider === provider.id }"
                     @click="webSearchSettings.provider = provider.id"
                   >
-                    <div class="provider-icon" v-html="provider.icon"></div>
+                    <div class="provider-icon">
+                      <component :is="provider.iconComponent" />
+                    </div>
                     <div class="provider-info">
                       <h3>{{ provider.name }}</h3>
                       <p>{{ provider.description }}</p>
@@ -674,6 +678,15 @@ import {
 import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS } from '@/types';
 import { 
+  OpenAiIcon, 
+  ClaudeIcon, 
+  GeminiIcon, 
+  OllamaIcon,
+  SearxngIcon,
+  BraveIcon,
+  DuckDuckGoIcon,
+} from '@/icons';
+import { 
   loadSettings, 
   saveSettings, 
   testConnection, 
@@ -693,45 +706,30 @@ import {
 } from '@/services';
 
 // Provider configurations for modularity
-const providerConfigs: { id: LLMProvider; name: string; description: string; icon: string }[] = [
+const providerConfigs: { id: LLMProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
   {
     id: 'openai',
     name: 'OpenAI',
     description: 'GPT-4.1, o3, GPT-4o series',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.8956zm16.0993 3.8558L12.6 8.3829l2.02-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/>
-    </svg>`,
+    iconComponent: OpenAiIcon,
   },
   {
     id: 'anthropic',
     name: 'Claude',
     description: 'Claude 4 Opus, Sonnet, 3.5 series',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M13.827 3.52h3.603L24 20.48h-3.603l-6.57-16.96zm-7.258 0h3.767L16.906 20.48h-3.674l-1.343-3.461H5.017l-1.344 3.46H0L6.57 3.522zm1.065 5.166l-2.08 5.357h4.16l-2.08-5.357z"/>
-    </svg>`,
+    iconComponent: ClaudeIcon,
   },
   {
     id: 'google',
     name: 'Gemini',
     description: 'Gemini 2.5 Pro, Flash, 2.0 series',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0C5.383 0 0 5.383 0 12s5.383 12 12 12 12-5.383 12-12S18.617 0 12 0zm0 2.182c5.424 0 9.818 4.394 9.818 9.818 0 5.424-4.394 9.818-9.818 9.818-5.424 0-9.818-4.394-9.818-9.818 0-5.424 4.394-9.818 9.818-9.818zm0 1.636a8.182 8.182 0 100 16.364 8.182 8.182 0 000-16.364zm0 2.182a6 6 0 110 12 6 6 0 010-12zm0 2.182a3.818 3.818 0 100 7.636 3.818 3.818 0 000-7.636z"/>
-    </svg>`,
+    iconComponent: GeminiIcon,
   },
   {
     id: 'ollama',
     name: 'Ollama',
     description: 'Local LLMs: Llama, Mistral, etc.',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" opacity="0"/>
-      <ellipse cx="12" cy="10" rx="6" ry="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
-      <circle cx="9.5" cy="9" r="1"/>
-      <circle cx="14.5" cy="9" r="1"/>
-      <ellipse cx="12" cy="12" rx="2" ry="1" fill="none" stroke="currentColor" stroke-width="1"/>
-      <path d="M8 14c0 2 1.5 4 4 4s4-2 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M6 10c-1-1-2-1.5-2-3s1.5-2.5 2-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M18 10c1-1 2-1.5 2-3s-1.5-2.5-2-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>`,
+    iconComponent: OllamaIcon,
   },
 ];
 
@@ -765,31 +763,24 @@ const webSearchStatus = ref<{
 } | null>(null);
 
 // Web search provider configurations
-const webSearchProviders: { id: WebSearchProvider; name: string; description: string; icon: string }[] = [
+const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
   {
     id: 'searxng',
     name: 'SearXNG',
     description: 'Self-hosted, private meta-search',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    </svg>`,
+    iconComponent: SearxngIcon,
   },
   {
     id: 'brave',
     name: 'Brave Search',
     description: 'Privacy-focused, 2000 free queries/month',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2L3 7v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm0 11h7c-.53 4.12-3.28 7.79-7 8.94V13H5V8.3l7-3.89v8.59z"/>
-    </svg>`,
+    iconComponent: BraveIcon,
   },
   {
     id: 'duckduckgo',
     name: 'DuckDuckGo',
     description: 'Instant Answers API, no setup required',
-    icon: `<svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-    </svg>`,
+    iconComponent: DuckDuckGoIcon,
   },
 ];
 
