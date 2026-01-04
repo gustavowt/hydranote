@@ -1610,6 +1610,15 @@ src/
 │   ├── RichTextEditor.vue           # WYSIWYG editor with Tiptap for DOCX
 │   ├── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
 │   └── SearchAutocomplete.vue       # Header: global fuzzy search bar
+├── icons/
+│   ├── index.ts              # Icon component exports
+│   ├── OpenAiIcon.vue        # OpenAI provider logo
+│   ├── ClaudeIcon.vue        # Anthropic Claude provider logo
+│   ├── GeminiIcon.vue        # Google Gemini provider logo
+│   ├── OllamaIcon.vue        # Ollama local LLM logo
+│   ├── SearxngIcon.vue       # SearXNG web search provider icon
+│   ├── BraveIcon.vue         # Brave Search provider icon
+│   └── DuckDuckGoIcon.vue    # DuckDuckGo web search provider icon
 ├── services/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations (OPFS persistence)
@@ -1633,5 +1642,39 @@ src/
     ├── WorkspacePage.vue     # Main unified workspace layout (file type routing)
     └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage)
 ```
+
+---
+
+## Icons
+
+Custom SVG icon components are stored in `src/icons/`. These are reusable Vue components for third-party service logos used in the Settings and Setup Wizard pages.
+
+### Available Icons
+
+| Icon Component | Description | Used In |
+|----------------|-------------|---------|
+| `OpenAiIcon` | OpenAI logo | AI provider selection |
+| `ClaudeIcon` | Anthropic Claude logo | AI provider selection |
+| `GeminiIcon` | Google Gemini logo | AI provider selection |
+| `OllamaIcon` | Ollama local LLM logo | AI provider selection |
+| `SearxngIcon` | SearXNG icon | Web search provider selection |
+| `BraveIcon` | Brave Search shield logo | Web search provider selection |
+| `DuckDuckGoIcon` | DuckDuckGo globe icon | Web search provider selection |
+
+### Usage
+
+```typescript
+import { OpenAiIcon, ClaudeIcon, GeminiIcon } from '@/icons';
+```
+
+```vue
+<template>
+  <OpenAiIcon class="icon-class" />
+  <!-- Or with dynamic component -->
+  <component :is="provider.iconComponent" />
+</template>
+```
+
+All icons inherit attributes via `v-bind="$attrs"` and use `fill="currentColor"` to respect the parent's text color.
 
 
