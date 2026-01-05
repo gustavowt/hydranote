@@ -266,3 +266,11 @@ export {
   createFormatVersion,
   createRestoreVersion,
 } from './versionService';
+
+// Setup Wizard Service
+export {
+  isWizardCompleted,
+  markWizardCompleted,
+  resetWizardState,
+  shouldShowWizard,
+} from './setupWizardService';

@@ -13,9 +13,10 @@ This document provides technical documentation for developers working on HydraNo
 7. [Telemetry & Metrics](#telemetry--metrics)
 8. [Phase 12 Guardrails](#phase-12-guardrails)
 9. [File Version History](#file-version-history)
-10. [Routing](#routing)
-11. [Configuration](#configuration)
-12. [File Structure](#file-structure)
+10. [Setup Wizard](#setup-wizard)
+11. [Routing](#routing)
+12. [Configuration](#configuration)
+13. [File Structure](#file-structure)
 
 ---
 
@@ -1168,19 +1169,110 @@ interface WebResearchResult {
 
 ---
 
+## Setup Wizard
+
+A first-run configuration wizard guides new users through essential setup when the application boots for the first time.
+
+### Overview
+
+The setup wizard:
+- Appears automatically on first launch (before the main workspace)
+- Uses a step-by-step flow with Previous/Next navigation
+- Requires users to view all steps before completing
+- Saves all settings to localStorage upon completion
+- Marks completion state so it doesn't reappear on subsequent launches
+
+### Wizard Steps
+
+| Step | Title | Purpose |
+|------|-------|---------|
+| 1 | Welcome | Introduction to HydraNote features |
+| 2 | Storage | Configure file system sync (optional) |
+| 3 | AI Provider | Select and configure AI provider (OpenAI, Claude, Gemini, Ollama) |
+| 4 | AI Instructions | Set note formatting preferences and default directory |
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      App Bootstrap                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │ shouldShowWizard │
+                    │   (localStorage) │
+                    └─────────────────┘
+                     /              \
+                    /                \
+              false                  true
+                 │                     │
+                 ▼                     ▼
+        ┌──────────────┐     ┌───────────────────┐
+        │  Workspace   │     │   Setup Wizard    │
+        │    Page      │     │   (4 steps)       │
+        └──────────────┘     └───────────────────┘
+                                     │
+                                     ▼ (on complete)
+                           markWizardCompleted()
+                                     │
+                                     ▼
+                             Redirect to Workspace
+```
+
+### Setup Wizard Service (`setupWizardService.ts`)
+
+Manages wizard completion state in localStorage.
+
+| Function | Description |
+|----------|-------------|
+| `shouldShowWizard()` | Check if wizard should be shown (not completed) |
+| `isWizardCompleted()` | Check if wizard has been completed |
+| `markWizardCompleted()` | Mark wizard as completed (sets localStorage flag) |
+| `resetWizardState()` | Reset wizard state for testing/debugging |
+
+### localStorage Keys
+
+| Key | Description |
+|-----|-------------|
+| `hydranote_wizard_completed` | `"true"` if wizard has been completed |
+
+### Router Integration
+
+The router uses a navigation guard to redirect to `/setup` on first boot:
+
+```typescript
+router.beforeEach((to, _from, next) => {
+  const needsSetup = shouldShowWizard();
+  
+  if (to.meta.isSetupWizard) {
+    next();
+  } else if (needsSetup) {
+    next('/setup');
+  } else {
+    next();
+  }
+});
+```
+
+---
+
 ## Routing
 
-All routes redirect to the unified workspace:
+Routes include the setup wizard with conditional redirect:
 
 ```typescript
 const routes = [
   { path: '/', redirect: '/workspace' },
+  { path: '/setup', component: SetupWizardPage, meta: { isSetupWizard: true } },
   { path: '/workspace', component: WorkspacePage },
   { path: '/home', redirect: '/workspace' },
   { path: '/project/:id/chat', redirect: '/workspace' },
   { path: '/settings', component: SettingsPage },
 ];
 ```
+
+The navigation guard in the router redirects to `/setup` if the wizard hasn't been completed.
 
 ---
 
@@ -1527,6 +1619,7 @@ src/
 │   ├── llmService.ts         # LLM API calls
 │   ├── noteService.ts        # AddNote pipeline
 │   ├── projectService.ts     # Project management (with FS sync)
+│   ├── setupWizardService.ts # First-run setup wizard state management
 │   ├── syncService.ts        # Bidirectional file system sync
 │   ├── telemetryService.ts   # Metrics tracking (Phase 12)
 │   ├── toolService.ts        # Tool routing/execution
@@ -1536,6 +1629,7 @@ src/
 ├── types/
 │   └── index.ts              # Type definitions
 └── views/
+    ├── SetupWizardPage.vue   # First-run configuration wizard
     ├── WorkspacePage.vue     # Main unified workspace layout (file type routing)
     └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage)
 ```
