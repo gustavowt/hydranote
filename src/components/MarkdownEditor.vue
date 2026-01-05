@@ -227,7 +227,29 @@
     </ion-modal>
 
     <!-- Editor Content -->
-    <div class="editor-content">
+    <div class="editor-content" ref="editorContentRef">
+      <!-- Floating Send to Chat Button -->
+      <Teleport to="body">
+        <Transition name="selection-fade">
+          <button
+            v-if="showSelectionButton && selectionPosition"
+            class="selection-to-chat-btn"
+            :style="{
+              position: 'fixed',
+              left: `${selectionPosition.x}px`,
+              top: `${selectionPosition.y}px`,
+              zIndex: 9999,
+            }"
+            @mousedown.prevent
+            @click="handleSendToChat"
+            title="Send selection to Chat"
+          >
+            <ion-icon :icon="chatbubbleOutline" />
+            <span>Send to Chat</span>
+          </button>
+        </Transition>
+      </Teleport>
+
       <!-- Saving State (for new notes) -->
       <div v-if="saving && isNewNote" class="saving-overlay">
         <div class="saving-content">
@@ -259,6 +281,8 @@
           class="markdown-textarea"
           placeholder="Start writing your note..."
           @input="handleInput"
+          @mouseup="handleEditorMouseUp"
+          @keyup="handleEditorMouseUp"
           :disabled="saving"
         ></textarea>
       </div>
@@ -272,10 +296,12 @@
             class="markdown-textarea"
             placeholder="Start writing your note..."
             @input="handleInput"
+            @mouseup="handleEditorMouseUp"
+            @keyup="handleEditorMouseUp"
             :disabled="saving"
           ></textarea>
         </div>
-        <div class="preview-pane markdown-preview" v-html="renderedContent"></div>
+        <div class="split-preview markdown-preview" v-html="renderedContent"></div>
       </div>
 
       <!-- View Mode -->
@@ -301,7 +327,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
@@ -348,6 +374,7 @@ import {
   arrowUndoOutline,
   chevronBackOutline,
   chevronForwardOutline,
+  chatbubbleOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
@@ -373,11 +400,21 @@ const props = withDefaults(defineProps<Props>(), {
   initialContent: '',
 });
 
+// Selection context for Send to Chat feature
+interface SelectionContext {
+  text: string;
+  filePath: string | null;
+  fileId: string | null;
+  startLine: number;
+  endLine: number;
+}
+
 const emit = defineEmits<{
   (e: 'save', content: string, file?: ProjectFile): void;
   (e: 'content-change', content: string): void;
   (e: 'note-saved', result: GlobalAddNoteResult): void;
   (e: 'rename', fileId: string, newName: string): void;
+  (e: 'selection-to-chat', selection: SelectionContext): void;
 }>();
 
 // Initialize mermaid with dark theme
@@ -460,6 +497,21 @@ const totalVersions = ref(0);
 const currentVersionIndex = ref(0); // 0 means viewing current/latest
 const navigatingVersion = ref(false);
 const cachedVersions = ref<Map<number, string>>(new Map()); // Cache for version content
+
+// Text selection state (for Send to Chat feature)
+const selectionText = ref('');
+const selectionStartLine = ref(1);
+const selectionEndLine = ref(1);
+const selectionPosition = ref<{ x: number; y: number } | null>(null);
+const showSelectionButton = ref(false);
+let selectionHideTimeout: ReturnType<typeof setTimeout> | null = null;
+const editorContentRef = ref<HTMLElement | null>(null);
+
+// Helper to calculate line number from character offset
+function getLineNumberFromOffset(text: string, offset: number): number {
+  const textUpToOffset = text.substring(0, offset);
+  return (textUpToOffset.match(/\n/g) || []).length + 1;
+}
 
 const hasChanges = computed(() => content.value !== originalContent.value);
 const isNewNote = computed(() => !props.currentFile);
@@ -567,6 +619,164 @@ watch(viewMode, (newMode) => {
 function handleInput() {
   emit('content-change', content.value);
 }
+
+// ============================================
+// Text Selection Detection (for Send to Chat)
+// ============================================
+
+function handleSelectionChange() {
+  // Clear any pending hide timeout
+  if (selectionHideTimeout) {
+    clearTimeout(selectionHideTimeout);
+    selectionHideTimeout = null;
+  }
+
+  let selectedText = '';
+  let startLine = 1;
+  let endLine = 1;
+  let position: { x: number; y: number } | null = null;
+
+  if (viewMode.value === 'edit') {
+    // Handle textarea selection
+    const textarea = editorRef.value;
+    if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+      selectedText = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+      startLine = getLineNumberFromOffset(textarea.value, textarea.selectionStart);
+      endLine = getLineNumberFromOffset(textarea.value, textarea.selectionEnd);
+      // Get position from textarea - use getBoundingClientRect
+      const rect = textarea.getBoundingClientRect();
+      // Position button at the top-right of the textarea selection area
+      position = {
+        x: rect.right - 100,
+        y: rect.top + 10,
+      };
+    }
+  } else if (viewMode.value === 'split') {
+    // Handle split mode - check both textarea and preview
+    const textarea = splitEditorRef.value;
+    if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+      selectedText = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+      startLine = getLineNumberFromOffset(textarea.value, textarea.selectionStart);
+      endLine = getLineNumberFromOffset(textarea.value, textarea.selectionEnd);
+      const rect = textarea.getBoundingClientRect();
+      position = {
+        x: rect.right - 100,
+        y: rect.top + 10,
+      };
+    } else {
+      // Check preview selection - for preview, we try to find the text in original content
+      const selection = window.getSelection();
+      if (selection && selection.toString().trim()) {
+        // Verify selection is within our preview pane
+        const previewPane = editorContentRef.value?.querySelector('.split-preview');
+        if (previewPane && selection.anchorNode && previewPane.contains(selection.anchorNode)) {
+          selectedText = selection.toString();
+          // Try to find this text in the content to get line numbers
+          const textIndex = content.value.indexOf(selectedText);
+          if (textIndex !== -1) {
+            startLine = getLineNumberFromOffset(content.value, textIndex);
+            endLine = getLineNumberFromOffset(content.value, textIndex + selectedText.length);
+          }
+          const range = selection.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          position = {
+            x: rect.right + 10,
+            y: rect.top,
+          };
+        }
+      }
+    }
+  } else if (viewMode.value === 'view') {
+    // Handle preview selection
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim()) {
+      // Verify selection is within our preview pane
+      const previewPane = editorContentRef.value?.querySelector('.preview-pane.full');
+      if (previewPane && selection.anchorNode && previewPane.contains(selection.anchorNode)) {
+        selectedText = selection.toString();
+        // Try to find this text in the content to get line numbers
+        const textIndex = content.value.indexOf(selectedText);
+        if (textIndex !== -1) {
+          startLine = getLineNumberFromOffset(content.value, textIndex);
+          endLine = getLineNumberFromOffset(content.value, textIndex + selectedText.length);
+        }
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        position = {
+          x: rect.right + 10,
+          y: rect.top,
+        };
+      }
+    }
+  }
+
+  if (selectedText.trim()) {
+    selectionText.value = selectedText.trim();
+    selectionStartLine.value = startLine;
+    selectionEndLine.value = endLine;
+    selectionPosition.value = position;
+    showSelectionButton.value = true;
+
+    // Auto-hide after 4 seconds
+    selectionHideTimeout = setTimeout(() => {
+      hideSelectionButton();
+    }, 4000);
+  } else {
+    hideSelectionButton();
+  }
+}
+
+function hideSelectionButton() {
+  showSelectionButton.value = false;
+  selectionText.value = '';
+  selectionPosition.value = null;
+  if (selectionHideTimeout) {
+    clearTimeout(selectionHideTimeout);
+    selectionHideTimeout = null;
+  }
+}
+
+function handleSendToChat() {
+  if (selectionText.value.trim()) {
+    const selectionContext: SelectionContext = {
+      text: selectionText.value.trim(),
+      filePath: props.currentFile?.name || null,
+      fileId: props.currentFile?.id || null,
+      startLine: selectionStartLine.value,
+      endLine: selectionEndLine.value,
+    };
+    emit('selection-to-chat', selectionContext);
+    hideSelectionButton();
+    // Clear the selection
+    window.getSelection()?.removeAllRanges();
+  }
+}
+
+function handleEditorMouseUp() {
+  // Small delay to ensure selection is complete
+  setTimeout(() => {
+    handleSelectionChange();
+  }, 10);
+}
+
+function handleDocumentSelectionChange() {
+  // Only process if we're in view or split mode (for preview selection)
+  if (viewMode.value === 'view' || viewMode.value === 'split') {
+    handleSelectionChange();
+  }
+}
+
+// Setup and cleanup selection listeners
+onMounted(() => {
+  document.addEventListener('selectionchange', handleDocumentSelectionChange);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('selectionchange', handleDocumentSelectionChange);
+  if (selectionHideTimeout) {
+    clearTimeout(selectionHideTimeout);
+  }
+});
 
 async function handleSave() {
   if (!content.value.trim()) return;
@@ -1946,6 +2156,60 @@ ion-modal ion-content.version-history-content {
 
 .version-list ion-button[fill="outline"]:hover {
   --background: rgba(var(--hn-teal-rgb), 0.1);
+}
+</style>
+
+<!-- Global styles for teleported button -->
+<style>
+/* Selection to Chat floating button */
+.selection-to-chat-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, var(--hn-teal, #2dd4bf) 0%, var(--hn-purple, #a855f7) 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(45, 212, 191, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.selection-to-chat-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(45, 212, 191, 0.5), 0 3px 6px rgba(0, 0, 0, 0.25);
+}
+
+.selection-to-chat-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(45, 212, 191, 0.3);
+}
+
+.selection-to-chat-btn ion-icon {
+  font-size: 14px;
+}
+
+/* Fade transition for selection button */
+.selection-fade-enter-active,
+.selection-fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.selection-fade-enter-from,
+.selection-fade-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+.selection-fade-enter-to,
+.selection-fade-leave-from {
+  opacity: 1;
+  transform: scale(1);
 }
 </style>
 

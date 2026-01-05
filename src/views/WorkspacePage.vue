@@ -83,6 +83,7 @@
         @content-change="handleContentChange"
         @note-saved="handleNoteSaved"
         @rename="handleRename"
+        @selection-to-chat="handleSelectionToChat"
       />
 
       <!-- Right Sidebar: Chat -->
@@ -464,6 +465,19 @@ async function handleNoteSaved(result: GlobalAddNoteResult) {
 
 function handleContentChange(_content: string) {
   // Could be used for auto-save or draft saving
+}
+
+// Handle selection to chat from editor
+interface SelectionContext {
+  text: string;
+  filePath: string | null;
+  fileId: string | null;
+  startLine: number;
+  endLine: number;
+}
+
+function handleSelectionToChat(selection: SelectionContext) {
+  chatSidebarRef.value?.insertSelection(selection);
 }
 
 // Delete project handler
