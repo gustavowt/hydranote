@@ -668,6 +668,54 @@ focusEditor()                 // Focus textarea
 | `content-change` | `(content: string)` | Emitted on editor content change |
 | `note-saved` | `(result: GlobalAddNoteResult)` | Emitted after new note saved |
 | `rename` | `(fileId: string, newName: string)` | Emitted when file is renamed |
+| `selection-to-chat` | `(selection: SelectionContext)` | Emitted when user sends selected text to chat |
+
+#### Send to Chat Feature
+
+Users can select text in the editor and send it as context to the chat sidebar. The selection includes file context and line numbers, enabling the LLM to edit the specific section when requested.
+
+**SelectionContext Interface:**
+```typescript
+interface SelectionContext {
+  text: string;           // Selected text content
+  filePath: string | null; // File path (null if unsaved)
+  fileId: string | null;   // File ID for database reference
+  startLine: number;       // Start line number (1-indexed)
+  endLine: number;         // End line number (1-indexed)
+}
+```
+
+**How It Works:**
+
+1. **Selection Detection**: Works in all view modes (edit, split, view)
+   - In edit/split mode: Detects textarea selection via `selectionStart`/`selectionEnd`
+   - In view/split mode: Detects preview selection via `window.getSelection()`
+   - Line numbers are calculated from character offsets
+
+2. **Floating Button**: A "Send to Chat" button appears near the selection
+   - Positioned dynamically based on selection location
+   - Auto-hides after 4 seconds or when selection is cleared
+   - Uses `Teleport` to render at body level for proper z-indexing
+
+3. **Chat Integration**: Selection is formatted like a code editor reference:
+   ```
+   @selection:filepath.md:10-25
+   ```
+   followed by the selected text in a code block
+
+4. **Edit Behavior**: The LLM understands that when a selection reference is provided with edit commands (rephrase, rewrite, fix, etc.), it should use `updateFile` to modify the existing file, NOT create a new file.
+
+```
+User selects text → Floating button appears → Click "Send to Chat"
+       ↓
+MarkdownEditor emits 'selection-to-chat' with SelectionContext
+       ↓
+WorkspacePage calls chatSidebarRef.insertSelection(context)
+       ↓
+ChatSidebar inserts @selection:file:lines reference in input
+       ↓
+User types "rephrase this" → LLM uses updateFile on that section
+```
 
 #### Actions Menu
 
@@ -704,15 +752,31 @@ Collapsible AI chat panel with project context.
 
 - Project selector dropdown
 - @file: autocomplete for file references
+- @selection: references from editor text selection
 - Markdown rendering in responses
 - Quick action buttons for common queries
 
 #### Exposed Methods
 
 ```typescript
-selectProject(projectId: string)  // Switch to project
-refresh()                         // Reload projects
+selectProject(projectId: string)      // Switch to project
+selectGlobalMode()                    // Switch to global mode (all projects)
+insertSelection(text: string)         // Insert @selection: reference from editor
 ```
+
+#### Reference Types
+
+| Reference | Format | Description |
+|-----------|--------|-------------|
+| `@file:` | `@file:path/to/file.md` | References a file in the project |
+| `@project:` | `@project:ProjectName` | References a specific project |
+| `@selection:` | `@selection:file.md:10-25` + code block | User-selected text with file context and line range |
+
+**Selection Reference Behavior:**
+- When user selects text and sends to chat, it's formatted as `@selection:filepath:startLine-endLine`
+- The selected text is included in a code block after the reference
+- The LLM interprets edit commands (rephrase, fix, modify) on selections as `updateFile` operations
+- This ensures editing selected content modifies the existing file rather than creating new files
 
 ### ProjectsTreeSidebar (`ProjectsTreeSidebar.vue`)
 
@@ -1331,6 +1395,80 @@ const DEFAULT_CONTEXT_CONFIG = {
 };
 ```
 
+### Indexer Settings (Embedding Provider)
+
+The embedding provider is **completely independent** from the LLM provider, allowing users to mix and match:
+- Use Claude for chat + OpenAI for embeddings
+- Use Ollama for chat + Gemini for embeddings
+- etc.
+
+Stored in localStorage under `hydranote_indexer_settings`:
+
+```typescript
+type EmbeddingProvider = 'openai' | 'gemini' | 'ollama';
+
+interface IndexerSettings {
+  provider: EmbeddingProvider;
+  openai: {
+    apiKey: string;
+    model: string;  // 'text-embedding-3-small' or 'text-embedding-3-large'
+  };
+  gemini: {
+    apiKey: string;
+    model: string;  // 'text-embedding-004'
+  };
+  ollama: {
+    baseUrl: string;
+    model: string;  // e.g., 'nomic-embed-text', 'mxbai-embed-large'
+  };
+}
+```
+
+#### Supported Embedding Providers
+
+| Provider | Model | Dimensions | Configuration |
+|----------|-------|------------|---------------|
+| OpenAI | text-embedding-3-small | 1536 | API Key |
+| OpenAI | text-embedding-3-large | 3072 | API Key |
+| Google Gemini | text-embedding-004 | 768 | API Key |
+| Ollama | nomic-embed-text | 768 | Base URL + Model |
+| Ollama | mxbai-embed-large | 1024 | Base URL + Model |
+| Ollama | all-minilm | 384 | Base URL + Model |
+
+#### Embedding Service Functions
+
+| Function | Description |
+|----------|-------------|
+| `loadIndexerSettings()` | Load indexer settings from localStorage |
+| `saveIndexerSettings()` | Save indexer settings to localStorage |
+| `isIndexerConfigured()` | Check if current provider is configured |
+| `getIndexerProviderName()` | Get provider name for display |
+| `testIndexerConnection()` | Test embedding generation |
+| `generateEmbedding(text)` | Generate embedding using configured provider |
+| `generateEmbeddingsForChunks(chunks)` | Batch generate embeddings |
+| `computeContentHash(content)` | Compute hash for stale detection |
+| `detectStaleEmbeddings(projectId?)` | Find files needing re-indexing |
+| `reindexStaleFiles(projectId?, onProgress?)` | Re-index stale files |
+| `reindexAllFiles(onProgress?)` | Full re-index of all files |
+
+#### Stale Embedding Detection
+
+Files are tracked with a `content_hash` column that stores a hash of the content at indexing time. When content changes but the hash doesn't match, the file is considered "stale" and needs re-indexing.
+
+The Settings → Indexer section provides a "Re-index All Files" button that:
+1. Clears all existing embeddings for each file
+2. Re-generates embeddings using the current provider
+3. Updates the content_hash for each file
+4. Shows progress in real-time
+
+#### Re-indexing on File Updates
+
+When `updateFile()` is called, the file is automatically re-indexed:
+1. Old chunks and embeddings are deleted
+2. New chunks are created from updated content
+3. New embeddings are generated via the configured provider
+4. Content hash is updated
+
 ---
 
 ## Electron Configuration
@@ -1623,7 +1761,7 @@ src/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations (OPFS persistence)
 │   ├── documentProcessor.ts  # File processing (+ DOCX/PDF conversion)
-│   ├── embeddingService.ts   # Vector embeddings
+│   ├── embeddingService.ts   # Multi-provider embeddings (OpenAI/Gemini/Ollama)
 │   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
 │   ├── noteService.ts        # AddNote pipeline
