@@ -293,3 +293,17 @@ export {
   resetWizardState,
   shouldShowWizard,
 } from './setupWizardService';
+
+// MCP Service (Model Context Protocol)
+export {
+  initializeMCPService,
+  loadMCPSettings,
+  saveMCPSettings,
+  generateMCPToken,
+  getMCPServerStatus,
+  generateMCPConfig,
+  isMCPAvailable,
+  DEFAULT_MCP_SETTINGS,
+} from './mcpService';
+
+export type { MCPSettings } from './mcpService';

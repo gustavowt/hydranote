@@ -9,6 +9,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { ElectronCapacitorApp, setupContentSecurityPolicy, setupReloadWatcher } from './setup';
+import {
+  loadMCPSettings,
+  saveMCPSettings,
+  generateBearerToken,
+  initializeMCPServer,
+  getMCPServer,
+  MCPSettings,
+  DEFAULT_MCP_SETTINGS,
+} from './mcpServer';
 
 // Graceful handling of unhandled errors.
 unhandled();
@@ -50,6 +59,19 @@ if (electronIsDev) {
   await myCapacitorApp.init();
   // Check for updates if we are in a packaged app.
   autoUpdater.checkForUpdatesAndNotify();
+  
+  // Start MCP server if enabled
+  const mcpSettings = loadMCPSettings();
+  if (mcpSettings.enabled && mcpSettings.bearerToken) {
+    try {
+      const mcpServer = initializeMCPServer(mcpSettings);
+      mcpServer.setMainWindow(myCapacitorApp.getMainWindow());
+      await mcpServer.start();
+      console.log('[MCP] Server started successfully');
+    } catch (error) {
+      console.error('[MCP] Failed to start server:', error);
+    }
+  }
 })();
 
 // Handle when all of our windows are close (platforms have their own expectations).
@@ -402,5 +424,132 @@ ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<We
     }
     
     return { success: false, error: `Fetch failed: ${errorMessage}` };
+  }
+});
+
+// ============================================
+// MCP Server IPC Handlers
+// ============================================
+
+// Get MCP settings
+ipcMain.handle('mcp:getSettings', async () => {
+  try {
+    const settings = loadMCPSettings();
+    return { success: true, settings };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to load MCP settings',
+    };
+  }
+});
+
+// Save MCP settings
+ipcMain.handle('mcp:saveSettings', async (_event, settings: MCPSettings) => {
+  try {
+    saveMCPSettings(settings);
+    
+    // Update or restart server based on settings
+    const server = getMCPServer();
+    
+    if (settings.enabled && settings.bearerToken) {
+      if (server) {
+        // Server exists - update settings and restart if needed
+        const wasRunning = server.isRunning();
+        if (wasRunning) {
+          await server.stop();
+        }
+        server.updateSettings(settings);
+        server.setMainWindow(myCapacitorApp.getMainWindow());
+        await server.start();
+      } else {
+        // Create new server
+        const newServer = initializeMCPServer(settings);
+        newServer.setMainWindow(myCapacitorApp.getMainWindow());
+        await newServer.start();
+      }
+    } else if (server && server.isRunning()) {
+      // Disable server
+      await server.stop();
+    }
+    
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to save MCP settings',
+    };
+  }
+});
+
+// Generate new bearer token
+ipcMain.handle('mcp:generateToken', async () => {
+  try {
+    const token = generateBearerToken();
+    return { success: true, token };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate token',
+    };
+  }
+});
+
+// Get MCP server status
+ipcMain.handle('mcp:getStatus', async () => {
+  try {
+    const server = getMCPServer();
+    return {
+      success: true,
+      running: server?.isRunning() ?? false,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get MCP status',
+    };
+  }
+});
+
+// Start MCP server manually
+ipcMain.handle('mcp:start', async () => {
+  try {
+    const settings = loadMCPSettings();
+    if (!settings.enabled) {
+      return { success: false, error: 'MCP server is disabled in settings' };
+    }
+    if (!settings.bearerToken) {
+      return { success: false, error: 'No bearer token configured' };
+    }
+    
+    let server = getMCPServer();
+    if (!server) {
+      server = initializeMCPServer(settings);
+    }
+    
+    server.setMainWindow(myCapacitorApp.getMainWindow());
+    await server.start();
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to start MCP server',
+    };
+  }
+});
+
+// Stop MCP server manually
+ipcMain.handle('mcp:stop', async () => {
+  try {
+    const server = getMCPServer();
+    if (server && server.isRunning()) {
+      await server.stop();
+    }
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to stop MCP server',
+    };
   }
 });

@@ -75,6 +75,36 @@ interface ElectronFsStatsResult extends ElectronFsResult {
   };
 }
 
+// MCP Settings
+interface ElectronMCPSettings {
+  /** Whether MCP server is enabled */
+  enabled: boolean;
+  /** Port to run MCP server on */
+  port: number;
+  /** Bearer token for authentication */
+  bearerToken: string;
+}
+
+// MCP Tool Request (from main process)
+interface ElectronMCPToolRequest {
+  /** Unique request ID */
+  requestId: string;
+  /** Tool name to execute */
+  toolName: string;
+  /** Tool arguments */
+  args: Record<string, unknown>;
+}
+
+// MCP Tool Response
+interface ElectronMCPToolResponse {
+  /** Whether execution succeeded */
+  success: boolean;
+  /** Result data */
+  data?: unknown;
+  /** Error message if failed */
+  error?: string;
+}
+
 // Electron API interface
 interface ElectronAPI {
   // File System Operations
@@ -97,6 +127,17 @@ interface ElectronAPI {
   // Web Fetch Operations (bypasses CORS by running in main process)
   web: {
     fetch: (options: ElectronWebFetchOptions) => Promise<ElectronWebFetchResult>;
+  };
+  // MCP Server Operations
+  mcp: {
+    getSettings: () => Promise<{ success: boolean; settings?: ElectronMCPSettings; error?: string }>;
+    saveSettings: (settings: ElectronMCPSettings) => Promise<{ success: boolean; error?: string }>;
+    generateToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
+    getStatus: () => Promise<{ success: boolean; running?: boolean; error?: string }>;
+    start: () => Promise<{ success: boolean; error?: string }>;
+    stop: () => Promise<{ success: boolean; error?: string }>;
+    onToolRequest: (callback: (request: ElectronMCPToolRequest) => void) => void;
+    sendToolResponse: (requestId: string, response: ElectronMCPToolResponse) => void;
   };
   // App info
   platform: string;

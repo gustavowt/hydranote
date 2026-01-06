@@ -49,7 +49,7 @@ import '@ionic/vue/css/palettes/dark.system.css';
 import './theme/variables.css';
 
 /* Services */
-import { initialize } from './services';
+import { initialize, initializeMCPService } from './services';
 
 /**
  * Bootstrap the application
@@ -59,6 +59,10 @@ async function bootstrap() {
   // Initialize database and core services before mounting the app
   // This ensures the database is ready for all components and services
   await initialize();
+  
+  // Initialize MCP service (for Electron MCP server integration)
+  // This sets up listeners for tool execution requests from the main process
+  initializeMCPService();
 
   const app = createApp(App)
     .use(IonicVue)

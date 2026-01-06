@@ -4,6 +4,20 @@ require('./rt/electron-rt');
 
 import { contextBridge, ipcRenderer } from 'electron';
 
+// MCP Settings type
+interface MCPSettings {
+  enabled: boolean;
+  port: number;
+  bearerToken: string;
+}
+
+// MCP Tool Request type
+interface MCPToolRequest {
+  requestId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}
+
 // Expose Electron APIs to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // File System Operations
@@ -32,6 +46,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
       body?: string;
       timeout?: number;
     }) => ipcRenderer.invoke('web:fetch', options),
+  },
+  // MCP Server Operations
+  mcp: {
+    getSettings: () => ipcRenderer.invoke('mcp:getSettings'),
+    saveSettings: (settings: MCPSettings) => {
+      // Create a plain object copy to ensure serializability
+      const plainSettings = {
+        enabled: settings.enabled,
+        port: settings.port,
+        bearerToken: settings.bearerToken,
+      };
+      return ipcRenderer.invoke('mcp:saveSettings', plainSettings);
+    },
+    generateToken: () => ipcRenderer.invoke('mcp:generateToken'),
+    getStatus: () => ipcRenderer.invoke('mcp:getStatus'),
+    start: () => ipcRenderer.invoke('mcp:start'),
+    stop: () => ipcRenderer.invoke('mcp:stop'),
+    // Listen for tool execution requests from main process
+    onToolRequest: (callback: (request: MCPToolRequest) => void) => {
+      ipcRenderer.on('mcp:tool-request', (_event, request: MCPToolRequest) => {
+        callback(request);
+      });
+    },
+    // Send tool execution response back to main process
+    sendToolResponse: (requestId: string, response: { success: boolean; data?: unknown; error?: string }) => {
+      ipcRenderer.send('mcp:tool-response', { requestId, result: response });
+    },
   },
   // App info
   platform: process.platform,
