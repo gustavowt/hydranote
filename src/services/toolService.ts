@@ -1808,6 +1808,7 @@ export function removePendingPreview(previewId: string): void {
 /**
  * Apply a file update from a confirmed preview
  * Commits changes to the database and re-indexes the file
+ * Uses shared reindexFile() function from projectService
  */
 export async function applyFileUpdate(
   previewId: string,
@@ -1827,10 +1828,8 @@ export async function applyFileUpdate(
 
   try {
     const { getConnection, flushDatabase } = await import("./database");
-    const { chunkText, chunkMarkdownText } = await import(
-      "./documentProcessor"
-    );
-    const { generateEmbeddingsForChunks } = await import("./embeddingService");
+    const { reindexFile, getProject } = await import("./projectService");
+    const { syncFileToFileSystem } = await import("./syncService");
 
     const conn = getConnection();
 
@@ -1857,50 +1856,26 @@ export async function applyFileUpdate(
       WHERE id = '${preview.fileId}'
     `);
 
-    // Delete old chunks and embeddings
-    await conn.query(`
-      DELETE FROM embeddings WHERE file_id = '${preview.fileId}'
-    `);
-    await conn.query(`
-      DELETE FROM chunks WHERE file_id = '${preview.fileId}'
-    `);
-
-    // Re-chunk the document
-    const chunks =
-      preview.fileType === "md"
-        ? chunkMarkdownText(
-            preview.newFullContent,
-            preview.fileId,
-            file.projectId,
-          )
-        : chunkText(preview.newFullContent, preview.fileId, file.projectId);
-
-    // Store new chunks
-    for (const chunk of chunks) {
-      const escapedText = chunk.text.replace(/'/g, "''");
-      await conn.query(`
-        INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-        VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
-      `);
-    }
-
-    // Generate and store new embeddings
-    const embeddings = await generateEmbeddingsForChunks(chunks);
-    for (const embedding of embeddings) {
-      const vectorStr = `[${embedding.vector.join(", ")}]`;
-      await conn.query(`
-        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
-        VALUES ('${embedding.id}', '${embedding.chunkId}', '${embedding.fileId}', '${embedding.projectId}', ${vectorStr}::DOUBLE[], '${embedding.createdAt.toISOString()}')
-      `);
-    }
-
-    // Flush to persist changes
     await flushDatabase();
+
+    // Re-index the file using shared function
+    let reIndexed = false;
+    if (preview.fileType === "md" || preview.fileType === "docx") {
+      try {
+        await reindexFile(
+          preview.fileId,
+          preview.newFullContent,
+          preview.fileType === "md" ? "md" : "txt"
+        );
+        reIndexed = true;
+      } catch (reindexError) {
+        console.warn("Failed to re-index file:", reindexError);
+        // Don't fail the whole operation if re-indexing fails
+      }
+    }
 
     // Sync to file system
     try {
-      const { syncFileToFileSystem } = await import("./syncService");
-      const { getProject } = await import("./projectService");
       const project = await getProject(file.projectId);
       if (project && preview.fileType === "md") {
         await syncFileToFileSystem(
@@ -1922,7 +1897,7 @@ export async function applyFileUpdate(
       fileId: preview.fileId,
       fileName: preview.fileName,
       operation: preview.operation,
-      reIndexed: true,
+      reIndexed,
     };
   } catch (error) {
     return {
@@ -2433,11 +2408,23 @@ Available tools:
 - deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
 - webResearch: Search the web for information. Params: {query: "search query", maxResults?: number}
 
+User message references:
+- @file:path/to/file.md - References a specific file in the project
+- @project:ProjectName - References a specific project
+- @selection:filepath:startLine-endLine followed by code block - User-selected text from the editor with precise location
+  Example: @selection:notes/meeting.md:15-22 followed by the selected text in a code block
+
 IMPORTANT RULES:
 1. Order matters! If creating a project then adding files, createProject MUST come first
 2. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
 3. For content generation (write/addNote), the Executor will generate content based on accumulated context
 4. If the user's request is ambiguous or missing critical info, set needsClarification: true
+5. **CRITICAL - Selection Edit Behavior**: When the user includes @selection: with a file path and asks to:
+   - "rephrase", "rewrite", "improve", "fix", "edit", "change", "modify", "update", etc.
+   - You MUST use the "updateFile" tool to edit that specific section in the existing file
+   - Do NOT create a new file when a selection reference is provided
+   - The updateFile params should target the file from the selection, with section set to find the selected text
+   - Example: @selection:notes/doc.md:10-15 + "rephrase this" → updateFile on notes/doc.md
 
 Context propagation examples:
 - webResearch → write: The write step needs webResearchResults from the webResearch step
