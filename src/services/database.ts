@@ -288,6 +288,14 @@ async function createSchema(): Promise<void> {
   } catch {
     // Column may already exist, ignore error
   }
+
+  // Migration: Add content_hash column for stale embedding detection
+  // Used to detect when file content has changed and re-indexing is needed
+  try {
+    await connection.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS content_hash VARCHAR`);
+  } catch {
+    // Column may already exist, ignore error
+  }
 }
 
 /**

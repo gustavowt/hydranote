@@ -127,6 +127,94 @@ export interface EmbeddingConfig {
 }
 
 // ============================================
+// Indexer Settings Types (Embedding Provider)
+// ============================================
+
+/**
+ * Available embedding providers (separate from LLM providers)
+ */
+export type EmbeddingProvider = 'openai' | 'gemini' | 'ollama';
+
+/**
+ * OpenAI embedding configuration
+ */
+export interface OpenAIEmbeddingConfig {
+  apiKey: string;
+  model: string; // 'text-embedding-3-small' or 'text-embedding-3-large'
+}
+
+/**
+ * Gemini embedding configuration
+ */
+export interface GeminiEmbeddingConfig {
+  apiKey: string;
+  model: string; // 'text-embedding-004'
+}
+
+/**
+ * Ollama embedding configuration
+ */
+export interface OllamaEmbeddingConfig {
+  baseUrl: string;
+  model: string; // user picks: 'nomic-embed-text', 'mxbai-embed-large', etc.
+}
+
+/**
+ * Indexer settings - independent from LLM provider
+ * Users can mix and match: e.g., Claude for chat + OpenAI for embeddings
+ */
+export interface IndexerSettings {
+  provider: EmbeddingProvider;
+  openai: OpenAIEmbeddingConfig;
+  gemini: GeminiEmbeddingConfig;
+  ollama: OllamaEmbeddingConfig;
+}
+
+/**
+ * Default indexer settings
+ */
+export const DEFAULT_INDEXER_SETTINGS: IndexerSettings = {
+  provider: 'openai',
+  openai: {
+    apiKey: '',
+    model: 'text-embedding-3-small',
+  },
+  gemini: {
+    apiKey: '',
+    model: 'text-embedding-004',
+  },
+  ollama: {
+    baseUrl: 'http://localhost:11434',
+    model: 'nomic-embed-text',
+  },
+};
+
+/**
+ * Suggested Ollama embedding models for the UI
+ */
+export const SUGGESTED_OLLAMA_EMBEDDING_MODELS = [
+  { name: 'nomic-embed-text', description: 'Best overall performance (768 dimensions)' },
+  { name: 'mxbai-embed-large', description: 'High quality, larger model (1024 dimensions)' },
+  { name: 'all-minilm', description: 'Fast and lightweight (384 dimensions)' },
+  { name: 'snowflake-arctic-embed', description: 'Good for retrieval tasks (1024 dimensions)' },
+] as const;
+
+/**
+ * OpenAI embedding model options
+ */
+export const OPENAI_EMBEDDING_MODELS = [
+  { name: 'text-embedding-3-small', description: 'Efficient, 1536 dimensions' },
+  { name: 'text-embedding-3-large', description: 'Highest quality, 3072 dimensions' },
+] as const;
+
+/**
+ * Gemini embedding model options
+ */
+export const GEMINI_EMBEDDING_MODELS = [
+  { name: 'text-embedding-004', description: 'Latest model, 768 dimensions' },
+] as const;
+
+// ============================================
 // Chat Types (Phase 2)
 // ============================================
 
