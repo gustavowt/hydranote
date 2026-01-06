@@ -198,7 +198,7 @@ Handles tool execution with a Planner → Executor → Checker architecture.
 
 #### Orchestration Flow (Planner → Executor → Checker)
 
-The chat system uses a three-phase execution pattern:
+The chat system uses a three-phase execution pattern with smart auto-execution for simple queries:
 
 ```
 User Message
@@ -214,16 +214,23 @@ User Message
 └─────────────────────────────────────────┘
     |
     v
-Show Plan to User (with confirmation UI)
+┌─────────────────────────────────────────┐
+│      AUTO-EXECUTE CHECK                 │
+│                                         │
+│  If single-step AND read-only tool:     │
+│  → Execute immediately (no confirmation)│
+│  Else:                                  │
+│  → Show Plan UI for user confirmation   │
+└─────────────────────────────────────────┘
     |
-    v (User clicks "Execute")
+    v (Auto-execute OR User clicks "Execute")
 ┌─────────────────────────────────────────┐
 │         PHASE 2: EXECUTOR               │
 │                                         │
 │  For each step in plan:                 │
 │  1. Check dependencies (wait if needed) │
 │  2. Enrich params with context          │
-│  3. Execute tool                        │
+│  3. Execute tool (with log updates)     │
 │  4. Extract context for next steps      │
 │  5. Pass context chain forward          │
 └─────────────────────────────────────────┘
@@ -235,29 +242,66 @@ Show Plan to User (with confirmation UI)
 │  - Compare original request vs results  │
 │  - Verify all tasks completed           │
 │  - If incomplete: replan and re-execute │
-│  - If complete: return final response   │
+│  - If complete: generate interpretation │
 └─────────────────────────────────────────┘
     |
     v
-Final Response to User
+┌─────────────────────────────────────────┐
+│      FINAL RESPONSE                     │
+│                                         │
+│  - Collapsible tool execution log       │
+│  - Formatted tool outputs               │
+│  - LLM interpretation of results        │
+└─────────────────────────────────────────┘
 ```
 
 **Key Features:**
-- User sees and confirms execution plan before tools run
+- **Auto-execution for simple queries**: Single-step read-only operations (read, search, summarize) execute immediately without confirmation
+- **Collapsible tool log**: Shows real-time execution progress, auto-collapses when complete
+- **Dual-format response**: Both raw tool outputs AND LLM interpretation for better UX
+- User sees and confirms complex multi-step plans before tools run
 - Context passes between steps (e.g., web research → file creation)
 - Automatic re-planning if tasks are incomplete
-- Step-by-step progress UI during execution
 - Dependencies between steps are respected
+
+#### Auto-Execute Tools
+
+The following tools auto-execute without confirmation when used alone:
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file content |
+| `search` | Semantic search |
+| `summarize` | Summarize documents |
+
+This improves UX for common read-only queries like "What does file X say about Y?" by removing the confirmation step.
+
+#### Tool Execution Log
+
+During and after execution, a collapsible log shows:
+
+| Field | Description |
+|-------|-------------|
+| Tool icon | Visual identifier for each tool |
+| Description | Human-readable step description |
+| Status | Running (spinner), Completed (checkmark), Failed (X) |
+| Duration | Execution time in ms/s |
+| Result preview | Brief preview of tool output (expandable) |
+| Error | Error message if tool failed |
+
+The log is **expanded during execution** and **auto-collapses when complete**.
 
 #### Key Functions
 
 | Function | Description |
 |----------|-------------|
 | `createExecutionPlan()` | Phase 1: Create plan from user message |
+| `shouldAutoExecutePlan()` | Check if plan should auto-execute (single-step read-only) |
 | `executePlan()` | Phase 2: Execute plan with context passing |
 | `checkCompletion()` | Phase 3: Validate all tasks complete |
-| `runPlannerFlow()` | Full orchestration with re-planning |
+| `runPlannerFlow()` | Full orchestration with re-planning, tool logs, and LLM interpretation |
 | `executeTool()` | Execute a single tool call |
+| `getToolIcon()` | Get icon for a tool (used in UI) |
 
 #### Types
 
@@ -286,6 +330,30 @@ interface ExecutionResult {
   failedSteps: FailedStep[];
   accumulatedContext: Record<string, unknown>;
   finalResponse: string;
+}
+
+// Tool Log Entry (for UI display)
+interface ToolLogEntry {
+  id: string;
+  tool: ToolName;
+  description: string;
+  status: 'running' | 'completed' | 'failed';
+  resultPreview?: string;    // Brief preview (first 200 chars)
+  resultData?: string;       // Full result (expandable)
+  error?: string;
+  startTime: Date;
+  endTime?: Date;
+  durationMs?: number;
+}
+
+// Enhanced Planner Flow Result
+interface PlannerFlowResult {
+  state: PlannerFlowState;
+  response: string;              // LLM interpretation
+  toolResults: ToolResult[];     // Raw tool results
+  toolLogs: ToolLogEntry[];      // For UI display
+  formattedToolOutputs: string[];// Formatted tool outputs
+  success: boolean;
 }
 ```
 
