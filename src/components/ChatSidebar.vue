@@ -111,18 +111,82 @@
             </div>
           </div>
 
-          <!-- Typing Indicator + Streaming -->
+          <!-- Collapsible Tool Execution Log (FIRST - chronological order) -->
+          <div v-if="toolLogs.length > 0" class="tool-log-container">
+            <div class="tool-log-header" @click="toggleToolLog">
+              <ion-icon :icon="isToolLogExpanded ? chevronUpOutline : chevronDownOutline" class="tool-log-chevron" />
+              <span class="tool-log-title">Tool Execution</span>
+              <span class="tool-log-count">{{ toolLogs.length }} {{ toolLogs.length === 1 ? 'tool' : 'tools' }}</span>
+              <span v-if="toolLogs.some(l => l.status === 'running')" class="tool-log-status-badge running">
+                <ion-spinner name="dots" class="badge-spinner" />
+                Running
+              </span>
+              <span v-else-if="toolLogs.every(l => l.status === 'completed')" class="tool-log-status-badge completed">
+                <ion-icon :icon="checkmarkCircle" class="badge-icon" />
+                Complete
+              </span>
+              <span v-else-if="toolLogs.some(l => l.status === 'failed')" class="tool-log-status-badge failed">
+                <ion-icon :icon="closeCircle" class="badge-icon" />
+                Failed
+              </span>
+            </div>
+            
+            <div v-show="isToolLogExpanded" class="tool-log-content">
+              <div 
+                v-for="log in toolLogs" 
+                :key="log.id"
+                :class="['tool-log-entry', getToolLogStatusClass(log.status)]"
+              >
+                <div class="tool-log-entry-header">
+                  <span class="tool-icon" v-html="getToolIcon(log.tool)"></span>
+                  <span class="tool-description">{{ log.description }}</span>
+                  <span v-if="log.status === 'running'" class="tool-status">
+                    <ion-spinner name="dots" class="tool-spinner" />
+                  </span>
+                  <span v-else-if="log.status === 'completed'" class="tool-status completed">
+                    <ion-icon :icon="checkmarkCircle" class="status-icon" />
+                    <span v-if="log.durationMs" class="tool-duration">{{ formatToolLogDuration(log) }}</span>
+                  </span>
+                  <span v-else-if="log.status === 'failed'" class="tool-status failed">
+                    <ion-icon :icon="closeCircle" class="status-icon" />
+                  </span>
+                </div>
+                
+                <!-- Error display -->
+                <div v-if="log.error" class="tool-log-error">
+                  {{ log.error }}
+                </div>
+                
+                <!-- Result preview (expandable) -->
+                <div v-if="log.resultPreview && log.status === 'completed'" class="tool-log-preview">
+                  <pre class="preview-content">{{ log.resultPreview }}</pre>
+                </div>
+              </div>
+              
+              <!-- Streaming tool output (shows real-time content during execution) -->
+              <div v-if="currentToolStreamingContent" class="tool-streaming-area">
+                <div class="tool-streaming-label">
+                  <ion-spinner v-if="toolLogs.some(l => l.status === 'running')" name="dots" class="streaming-spinner" />
+                  <ion-icon v-else :icon="checkmarkCircle" class="streaming-done-icon" />
+                  <span>{{ toolLogs.some(l => l.status === 'running') ? 'Processing...' : 'Result:' }}</span>
+                </div>
+                <pre class="tool-streaming-content">{{ currentToolStreamingContent }}</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Typing Indicator + Streaming Response (AFTER tool execution) -->
           <div v-if="isTyping || streamingContent" class="message assistant">
             <div class="message-bubble">
-              <!-- Streaming Content -->
+              <!-- Streaming Content (LLM interpretation) -->
               <div 
                 v-if="streamingContent" 
                 class="message-content markdown-content"
                 v-html="renderMarkdown(streamingContent)"
               ></div>
 
-              <!-- Current Step Indicator (always at bottom) -->
-              <div v-if="currentStep && (currentStep.status === 'running' || !streamingContent)" class="current-step-indicator">
+              <!-- Current Step Indicator (when no tool logs, shows old-style step) -->
+              <div v-if="currentStep && toolLogs.length === 0 && (currentStep.status === 'running' || !streamingContent)" class="current-step-indicator">
                 <ion-spinner v-if="currentStep.status === 'running'" name="dots" class="step-spinner" />
                 <ion-icon v-else-if="currentStep.status === 'completed'" :icon="checkmarkCircle" class="step-icon-done" />
                 <ion-icon v-else-if="currentStep.status === 'error'" :icon="closeCircle" class="step-icon-error" />
@@ -131,11 +195,27 @@
               </div>
               
               <!-- Typing dots when no steps and no streaming -->
-              <div v-if="!currentStep && !streamingContent" class="typing">
+              <div v-if="!currentStep && !streamingContent && toolLogs.length === 0" class="typing">
                 <span class="dot"></span>
                 <span class="dot"></span>
                 <span class="dot"></span>
               </div>
+              
+              <!-- Generating response indicator (after tools complete) -->
+              <div v-if="toolLogs.length > 0 && !streamingContent && isTyping && toolLogs.every(l => l.status !== 'running')" class="generating-response">
+                <ion-spinner name="dots" class="response-spinner" />
+                <span>Generating response...</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pending Final Answer (rendered AFTER tool log, before next query) -->
+          <div v-if="pendingFinalAnswer && !isTyping" class="message assistant">
+            <div class="message-bubble">
+              <div 
+                class="message-content markdown-content"
+                v-html="renderMarkdown(pendingFinalAnswer)"
+              ></div>
             </div>
           </div>
 
@@ -326,7 +406,7 @@ import {
   listOutline,
   playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -346,13 +426,14 @@ import {
   createExecutionPlan,
   runPlannerFlow,
   getToolIcon,
+  shouldAutoExecutePlan,
   // Chat history
   getSessionHistory,
   switchToSession,
   startNewSession,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
-import { folderOutline, addOutline, timeOutline, chevronDownOutline } from 'ionicons/icons';
+import { folderOutline, addOutline, timeOutline, chevronDownOutline, chevronUpOutline } from 'ionicons/icons';
 
 // Special value for "All Projects" scope
 const ALL_PROJECTS_SCOPE = '__all__';
@@ -434,6 +515,13 @@ const streamingContent = ref('');
 const pendingPlan = ref<ExecutionPlan | null>(null);
 const isExecutingPlan = ref(false);
 const currentPlanStep = ref<{ step: PlanStep; index: number; total: number } | null>(null);
+
+// Tool execution log state
+const toolLogs = ref<ToolLogEntry[]>([]);
+const isToolLogExpanded = ref(true); // Expanded during execution
+const formattedToolOutputs = ref<string[]>([]);
+const currentToolStreamingContent = ref(''); // Shows real-time tool output during execution
+const pendingFinalAnswer = ref(''); // Holds the final answer until next query (to keep order correct)
 
 // Chat history state
 const showHistoryDropdown = ref(false);
@@ -578,6 +666,14 @@ async function sendMessage(text?: string) {
 
   inputMessage.value = '';
 
+  // Commit any pending final answer from previous query to messages
+  if (pendingFinalAnswer.value) {
+    const prevAnswer = await addMessage(sessionId.value, 'assistant', pendingFinalAnswer.value);
+    messages.value = [...messages.value, prevAnswer];
+    pendingFinalAnswer.value = '';
+    toolLogs.value = [];
+  }
+
   // Add user message
   const userMessage = await addMessage(sessionId.value, 'user', messageText);
   messages.value = [...messages.value, userMessage];
@@ -587,6 +683,10 @@ async function sendMessage(text?: string) {
   isTyping.value = true;
   executionSteps.value = [];
   streamingContent.value = '';
+  toolLogs.value = [];
+  formattedToolOutputs.value = [];
+  isToolLogExpanded.value = true;
+  pendingFinalAnswer.value = '';
 
   try {
     // Get file names based on mode
@@ -659,7 +759,14 @@ async function sendMessage(text?: string) {
       return;
     }
 
-    // Show plan summary to user
+    // Check if this is a simple plan that should auto-execute
+    if (shouldAutoExecutePlan(plan)) {
+      // Auto-execute without confirmation
+      await executeAutoExecutePlan(plan);
+      return;
+    }
+
+    // Complex plan - show confirmation UI
     const planSummaryMessage = await addMessage(
       sessionId.value,
       'assistant',
@@ -681,6 +788,110 @@ async function sendMessage(text?: string) {
   } finally {
     executionSteps.value = [];
     streamingContent.value = '';
+    await scrollToBottom();
+  }
+}
+
+/**
+ * Auto-execute a simple single-step plan without confirmation
+ */
+async function executeAutoExecutePlan(plan: ExecutionPlan) {
+  isExecutingPlan.value = true;
+  currentToolStreamingContent.value = '';
+  
+  try {
+    const result = await runPlannerFlow(
+      plan,
+      selectedProjectId.value,
+      {
+        onStepUpdate: (step, index, total) => {
+          // Update plan step status
+          const planStep = plan.steps.find(s => s.id === step.id);
+          if (planStep) {
+            planStep.status = step.status;
+            planStep.error = step.error;
+          }
+          currentPlanStep.value = { step, index, total };
+          // Clear streaming content when a new step starts
+          if (step.status === 'running') {
+            currentToolStreamingContent.value = '';
+          }
+          scrollToBottom();
+        },
+        onToolLog: (log: ToolLogEntry) => {
+          // Update tool logs for UI
+          const existingIndex = toolLogs.value.findIndex(l => l.id === log.id);
+          if (existingIndex >= 0) {
+            toolLogs.value[existingIndex] = log;
+          } else {
+            toolLogs.value = [...toolLogs.value, log];
+          }
+          scrollToBottom();
+        },
+        onToolResultStream: (chunk: string, done: boolean) => {
+          // Show tool result content during execution
+          if (!done && chunk) {
+            // Replace content (not append) since we're getting full results
+            currentToolStreamingContent.value = chunk;
+            scrollToBottom();
+          }
+          // Don't clear on done - keep visible until execution completes
+        },
+        onStreamChunk: (chunk: string, done: boolean) => {
+          if (done) return;
+          streamingContent.value += chunk;
+          scrollToBottom();
+        },
+        skipInterpretation: false,
+      }
+    );
+
+    // Collapse the tool log after completion
+    isToolLogExpanded.value = false;
+
+    // Store formatted outputs for display
+    formattedToolOutputs.value = result.formattedToolOutputs;
+
+    // Build the final message: tool outputs + interpretation
+    let finalMessage = '';
+    
+    // Add tool outputs (collapsed by default in message)
+    if (result.formattedToolOutputs.length > 0) {
+      finalMessage = result.formattedToolOutputs.join('\n\n') + '\n\n---\n\n';
+    }
+    
+    // Add LLM interpretation
+    if (result.response) {
+      finalMessage += result.response;
+    }
+
+    // Store as pending answer (NOT added to messages yet - keeps order correct)
+    // Will be committed to messages when next query is sent
+    if (finalMessage.trim()) {
+      pendingFinalAnswer.value = finalMessage;
+    }
+
+    // Handle file creations
+    handleExecutionFileCreations(result.toolResults);
+
+    // Check for changes
+    handleExecutionChanges(result.toolResults);
+
+    // Check for updateFile previews
+    handleUpdateFilePreview(result.toolResults);
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to execute';
+    const assistantMessage = await addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
+    messages.value = [...messages.value, assistantMessage];
+  } finally {
+    isExecutingPlan.value = false;
+    currentPlanStep.value = null;
+    isTyping.value = false;
+    streamingContent.value = '';
+    currentToolStreamingContent.value = '';
+    // Collapse the tool log (keep it visible but collapsed)
+    isToolLogExpanded.value = false;
     await scrollToBottom();
   }
 }
@@ -860,6 +1071,10 @@ async function handleExecutePlan() {
   if (!pendingPlan.value) return;
 
   isExecutingPlan.value = true;
+  toolLogs.value = [];
+  formattedToolOutputs.value = [];
+  isToolLogExpanded.value = true;
+  currentToolStreamingContent.value = '';
   
   try {
     const result = await runPlannerFlow(
@@ -876,6 +1091,34 @@ async function handleExecutePlan() {
             }
           }
           currentPlanStep.value = { step, index, total };
+          // Clear streaming content when a new step starts
+          if (step.status === 'running') {
+            currentToolStreamingContent.value = '';
+          }
+          scrollToBottom();
+        },
+        onToolLog: (log: ToolLogEntry) => {
+          // Update tool logs for UI
+          const existingIndex = toolLogs.value.findIndex(l => l.id === log.id);
+          if (existingIndex >= 0) {
+            toolLogs.value[existingIndex] = log;
+          } else {
+            toolLogs.value = [...toolLogs.value, log];
+          }
+          scrollToBottom();
+        },
+        onToolResultStream: (chunk: string, done: boolean) => {
+          // Show tool result content during execution
+          if (!done && chunk) {
+            // Replace content (not append) since we're getting full results
+            currentToolStreamingContent.value = chunk;
+            scrollToBottom();
+          }
+          // Don't clear on done - keep visible until execution completes
+        },
+        onStreamChunk: (chunk: string, done: boolean) => {
+          if (done) return;
+          streamingContent.value += chunk;
           scrollToBottom();
         },
       }
@@ -885,45 +1128,43 @@ async function handleExecutePlan() {
     pendingPlan.value = null;
     currentPlanStep.value = null;
 
-    // Add the final response
-    const assistantMessage = await addMessage(sessionId.value, 'assistant', result.response);
-    messages.value = [...messages.value, assistantMessage];
+    // Collapse the tool log after completion
+    isToolLogExpanded.value = false;
 
-    // Check for file creations and emit events
-    const fileCreationResults = result.toolResults.filter(
-      (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
-    );
-    for (const fileResult of fileCreationResults) {
-      if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
-        const projectId = fileResult.metadata?.projectId || selectedProjectId.value;
-        if (projectId) {
-          emit('file-created', projectId, fileResult.metadata.fileId, fileResult.metadata.fileName);
-        }
-      }
+    // Store formatted outputs for display
+    formattedToolOutputs.value = result.formattedToolOutputs;
+
+    // Build the final message: tool outputs + interpretation
+    let finalMessage = '';
+    
+    // Add tool outputs (collapsed by default in message)
+    if (result.formattedToolOutputs.length > 0) {
+      finalMessage = result.formattedToolOutputs.join('\n\n') + '\n\n---\n\n';
+    }
+    
+    // Add LLM interpretation
+    if (result.response) {
+      finalMessage += result.response;
     }
 
-    // Check for project/file changes
-    const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
-    const hasChanges = result.toolResults.some(
-      (r) => changeTools.includes(r.tool) && r.success
-    );
-    if (hasChanges) {
-      emit('projects-changed');
+    // Store as pending answer (NOT added to messages yet - keeps order correct)
+    // Will be committed to messages when next query is sent
+    if (finalMessage.trim()) {
+      pendingFinalAnswer.value = finalMessage;
     }
+
+    // Handle file creations
+    handleExecutionFileCreations(result.toolResults);
+
+    // Check for changes
+    handleExecutionChanges(result.toolResults);
 
     // Check for updateFile previews
-    const updateFileResult = result.toolResults.find(
-      (r) => r.tool === 'updateFile' && r.success && (r as { preview?: UpdateFilePreview }).preview
-    );
-    if (updateFileResult) {
-      const preview = (updateFileResult as { preview?: UpdateFilePreview }).preview;
-      if (preview) {
-        activePreview.value = preview;
-      }
-    }
+    handleUpdateFilePreview(result.toolResults);
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute plan';
+    // Errors go directly to messages since they're not part of normal flow
     const assistantMessage = await addMessage(sessionId.value, 'assistant', `⚠️ Error: ${errorMessage}`);
     messages.value = [...messages.value, assistantMessage];
   } finally {
@@ -931,7 +1172,53 @@ async function handleExecutePlan() {
     pendingPlan.value = null;
     currentPlanStep.value = null;
     isTyping.value = false;
+    streamingContent.value = '';
+    currentToolStreamingContent.value = '';
+    // Collapse the tool log (keep it visible but collapsed)
+    isToolLogExpanded.value = false;
     await scrollToBottom();
+  }
+}
+
+/**
+ * Helper: Handle file creation events from tool results
+ */
+function handleExecutionFileCreations(toolResults: Array<{ tool: string; success: boolean; metadata?: { fileId?: string; fileName?: string; projectId?: string } }>) {
+  const fileCreationResults = toolResults.filter(
+    (r) => (r.tool === 'write' || r.tool === 'addNote') && r.success && r.metadata?.fileId
+  );
+  for (const fileResult of fileCreationResults) {
+    if (fileResult.metadata?.fileId && fileResult.metadata?.fileName) {
+      const projectId = fileResult.metadata?.projectId || selectedProjectId.value;
+      if (projectId) {
+        emit('file-created', projectId, fileResult.metadata.fileId, fileResult.metadata.fileName);
+      }
+    }
+  }
+}
+
+/**
+ * Helper: Handle project/file change events from tool results
+ */
+function handleExecutionChanges(toolResults: Array<{ tool: string; success: boolean }>) {
+  const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
+  const hasChanges = toolResults.some(
+    (r) => changeTools.includes(r.tool) && r.success
+  );
+  if (hasChanges) {
+    emit('projects-changed');
+  }
+}
+
+/**
+ * Helper: Handle updateFile preview from tool results
+ */
+function handleUpdateFilePreview(toolResults: Array<{ tool: string; success: boolean; preview?: UpdateFilePreview }>) {
+  const updateFileResult = toolResults.find(
+    (r) => r.tool === 'updateFile' && r.success && r.preview
+  );
+  if (updateFileResult?.preview) {
+    activePreview.value = updateFileResult.preview;
   }
 }
 
@@ -967,6 +1254,29 @@ async function scrollToBottom() {
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value;
   emit('collapse-change', isCollapsed.value);
+}
+
+function toggleToolLog() {
+  isToolLogExpanded.value = !isToolLogExpanded.value;
+}
+
+function getToolLogStatusClass(status: ToolLogEntry['status']): string {
+  switch (status) {
+    case 'running':
+      return 'tool-log-running';
+    case 'completed':
+      return 'tool-log-completed';
+    case 'failed':
+      return 'tool-log-failed';
+    default:
+      return '';
+  }
+}
+
+function formatToolLogDuration(entry: ToolLogEntry): string {
+  if (entry.durationMs === undefined) return '';
+  if (entry.durationMs < 1000) return `${entry.durationMs}ms`;
+  return `${(entry.durationMs / 1000).toFixed(1)}s`;
 }
 
 function renderMarkdown(content: string): string {
@@ -1767,6 +2077,248 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 .diff-content::-webkit-scrollbar-thumb {
   background: var(--hn-border-default);
   border-radius: 3px;
+}
+
+/* Collapsible Tool Log Styles */
+.tool-log-container {
+  margin: 12px 0;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+
+.tool-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--hn-bg-surface);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.tool-log-header:hover {
+  background: var(--hn-bg-hover);
+}
+
+.tool-log-chevron {
+  font-size: 14px;
+  color: var(--hn-text-muted);
+  transition: transform 0.2s ease;
+}
+
+.tool-log-title {
+  font-weight: 600;
+  color: var(--hn-text-primary);
+}
+
+.tool-log-count {
+  font-size: 0.75rem;
+  color: var(--hn-text-muted);
+  margin-left: auto;
+}
+
+.tool-log-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.tool-log-status-badge.running {
+  background: rgba(138, 180, 248, 0.15);
+  color: var(--hn-purple);
+}
+
+.tool-log-status-badge.completed {
+  background: rgba(76, 175, 80, 0.15);
+  color: var(--hn-green);
+}
+
+.tool-log-status-badge.failed {
+  background: rgba(255, 82, 82, 0.15);
+  color: #ff5252;
+}
+
+.tool-log-status-badge .badge-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.tool-log-status-badge .badge-icon {
+  font-size: 12px;
+}
+
+.tool-log-content {
+  border-top: 1px solid var(--hn-border-default);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tool-log-entry {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hn-border-subtle);
+  transition: background 0.15s ease;
+}
+
+.tool-log-entry:last-child {
+  border-bottom: none;
+}
+
+.tool-log-entry.tool-log-running {
+  background: rgba(138, 180, 248, 0.05);
+}
+
+.tool-log-entry.tool-log-completed {
+  background: transparent;
+}
+
+.tool-log-entry.tool-log-failed {
+  background: rgba(255, 82, 82, 0.05);
+}
+
+.tool-log-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-log-entry .tool-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.tool-log-entry .tool-description {
+  flex: 1;
+  color: var(--hn-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-log-entry .tool-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tool-log-entry .tool-spinner {
+  width: 14px;
+  height: 14px;
+  color: var(--hn-purple);
+}
+
+.tool-log-entry .status-icon {
+  font-size: 14px;
+}
+
+.tool-log-entry .tool-status.completed .status-icon {
+  color: var(--hn-green);
+}
+
+.tool-log-entry .tool-status.failed .status-icon {
+  color: #ff5252;
+}
+
+.tool-log-entry .tool-duration {
+  font-size: 0.7rem;
+  color: var(--hn-text-muted);
+}
+
+.tool-log-error {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 82, 82, 0.1);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #ff5252;
+}
+
+.tool-log-preview {
+  margin-top: 8px;
+  background: var(--hn-bg-deep);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tool-log-preview .preview-content {
+  padding: 8px 10px;
+  font-family: var(--hn-font-mono);
+  font-size: 0.75rem;
+  color: var(--hn-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 100px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+/* Tool Streaming Area (shows real-time content during execution) */
+.tool-streaming-area {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--hn-bg-deep);
+  border-radius: 6px;
+  border: 1px solid var(--hn-border-subtle);
+}
+
+.tool-streaming-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 0.75rem;
+  color: var(--hn-text-muted);
+}
+
+.tool-streaming-label .streaming-spinner {
+  width: 12px;
+  height: 12px;
+  color: var(--hn-purple);
+}
+
+.tool-streaming-label .streaming-done-icon {
+  font-size: 12px;
+  color: var(--hn-green);
+}
+
+.tool-streaming-content {
+  font-family: var(--hn-font-mono);
+  font-size: 0.75rem;
+  color: var(--hn-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+  margin: 0;
+  line-height: 1.5;
+  background: transparent;
+}
+
+/* Generating Response Indicator */
+.generating-response {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+}
+
+.generating-response .response-spinner {
+  width: 14px;
+  height: 14px;
+  color: var(--hn-purple);
 }
 
 /* Execution Plan Styles */
