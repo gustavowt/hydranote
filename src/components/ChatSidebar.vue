@@ -993,7 +993,51 @@ async function selectGlobalMode() {
   await loadSession();
 }
 
-defineExpose({ selectProject, selectGlobalMode });
+// Selection context for Send to Chat feature
+interface SelectionContext {
+  text: string;
+  filePath: string | null;
+  fileId: string | null;
+  startLine: number;
+  endLine: number;
+}
+
+// Insert selection text into chat input (for Send to Chat feature)
+// Format: @selection:filepath:startLine-endLine: "text..."
+// This tells the LLM exactly which file and lines to edit
+function insertSelection(selection: SelectionContext) {
+  if (!selection.text.trim()) return;
+  
+  // Truncate display text if too long (keep first 500 chars for display)
+  const displayText = selection.text.length > 500 
+    ? selection.text.substring(0, 500) + '...' 
+    : selection.text;
+  
+  // Format like a code editor reference with file path and line numbers
+  let selectionRef: string;
+  
+  if (selection.filePath) {
+    // Include file path and line numbers for precise context
+    selectionRef = `@selection:${selection.filePath}:${selection.startLine}-${selection.endLine}\n\`\`\`\n${displayText}\n\`\`\`\n`;
+  } else {
+    // No file context (new unsaved note)
+    selectionRef = `@selection:${selection.startLine}-${selection.endLine}\n\`\`\`\n${displayText}\n\`\`\`\n`;
+  }
+  
+  inputMessage.value = selectionRef + inputMessage.value;
+  
+  // Focus the textarea
+  nextTick(() => {
+    const textarea = textareaRef.value?.$el?.querySelector('textarea');
+    if (textarea) {
+      textarea.focus();
+      // Place cursor at the end
+      textarea.setSelectionRange(inputMessage.value.length, inputMessage.value.length);
+    }
+  });
+}
+
+defineExpose({ selectProject, selectGlobalMode, insertSelection });
 </script>
 
 <style scoped>
