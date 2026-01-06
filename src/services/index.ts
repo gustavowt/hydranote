@@ -31,6 +31,7 @@ export {
   // Centralized file operations (single source of truth)
   createFile,
   indexFileForSearch,
+  reindexFile,
   // Phase 11: File tree API
   getProjectFileTree,
   getProjectFilesForAutocomplete,
@@ -153,12 +154,27 @@ export {
   base64ToArrayBuffer,
 } from './documentProcessor';
 
-// Embedding Service
+// Embedding Service (with multi-provider indexer support)
 export {
+  // Settings management
+  loadIndexerSettings,
+  saveIndexerSettings,
+  isIndexerConfigured,
+  getIndexerProviderName,
+  testIndexerConnection,
+  // Embedding generation
   generateEmbedding,
   generateEmbeddingsForChunks,
+  generateEmbeddingsBatch,
   cosineSimilarity,
+  // Stale detection & re-indexing
+  computeContentHash,
+  detectStaleEmbeddings,
+  reindexStaleFiles,
+  reindexAllFiles,
 } from './embeddingService';
+
+export type { StaleFile, ReindexProgressCallback } from './embeddingService';
 
 // Note Service (Phase 9 + Phase 10 + Phase 13 Optimization)
 export {

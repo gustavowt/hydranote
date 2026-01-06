@@ -579,6 +579,35 @@ export async function indexFileForSearch(
 }
 
 /**
+ * Re-index a file: delete old chunks/embeddings and create new ones
+ * Use this when file content has been updated to keep search results accurate
+ */
+export async function reindexFile(
+  fileId: string,
+  content: string,
+  fileType: 'md' | 'txt' = 'md'
+): Promise<void> {
+  await ensureInitialized();
+  
+  const conn = getConnection();
+  
+  // Get file to retrieve projectId
+  const file = await dbGetFile(fileId);
+  if (!file) {
+    throw new Error(`File not found: ${fileId}`);
+  }
+  
+  // Delete old embeddings first (foreign key on chunks)
+  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
+  
+  // Delete old chunks
+  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
+  
+  // Re-index with new content
+  await indexFileForSearch(file.projectId, fileId, content, fileType);
+}
+
+/**
  * Get file with its chunks
  */
 export async function getFileWithChunks(fileId: string): Promise<{ file: ProjectFile; chunks: Chunk[] } | null> {
@@ -594,6 +623,7 @@ export async function getFileWithChunks(fileId: string): Promise<{ file: Project
 /**
  * Update file content and sync to file system
  * Creates a version of the current content before updating
+ * Re-indexes the file for accurate search results
  */
 export async function updateFile(fileId: string, content: string): Promise<ProjectFile | null> {
   await ensureInitialized();
@@ -617,6 +647,17 @@ export async function updateFile(fileId: string, content: string): Promise<Proje
   // Sync to file system
   if (project && file.type === 'md') {
     await syncFileToFileSystem(project.name, file.name, content);
+  }
+  
+  // Re-index for search (update chunks and embeddings)
+  // Only re-index text-based files that support search
+  if (file.type === 'md' || file.type === 'txt') {
+    try {
+      await reindexFile(fileId, content, file.type as 'md' | 'txt');
+    } catch (error) {
+      // Don't fail the update if re-indexing fails
+      console.warn('Failed to re-index file after update:', fileId, error);
+    }
   }
   
   // Return updated file

@@ -17,6 +17,10 @@
             <ion-icon :icon="cloudOutline" />
             <ion-label>AI Providers</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="indexer">
+            <ion-icon :icon="searchOutline" />
+            <ion-label>Indexer</ion-label>
+          </ion-segment-button>
           <ion-segment-button value="instructions">
             <ion-icon :icon="documentTextOutline" />
             <ion-label>AI Instructions</ion-label>
@@ -43,6 +47,14 @@
             >
               <ion-icon :icon="cloudOutline" />
               <span>AI Providers</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'indexer' }"
+              @click="activeSection = 'indexer'"
+            >
+              <ion-icon :icon="searchOutline" />
+              <span>Indexer</span>
             </button>
             <button 
               class="nav-item" 
@@ -318,6 +330,221 @@
                 <span>Test Connection</span>
               </button>
               <button class="btn btn-primary" @click="handleSave">
+                <ion-icon :icon="saveOutline" />
+                <span>Save Settings</span>
+              </button>
+            </div>
+          </section>
+
+          <!-- Indexer Section -->
+          <section v-if="activeSection === 'indexer'" class="content-section">
+            <h2 class="section-title">Indexer</h2>
+            <p class="section-description">
+              Configure the embedding provider for semantic search and document indexing. 
+              This is separate from your AI provider—you can mix and match (e.g., use Claude for chat + OpenAI for embeddings).
+            </p>
+
+            <!-- Indexer Provider Cards -->
+            <div class="provider-cards">
+              <button
+                v-for="provider in indexerProviders"
+                :key="provider.id"
+                class="provider-card"
+                :class="{ selected: indexerSettings.provider === provider.id }"
+                @click="indexerSettings.provider = provider.id"
+              >
+                <div class="provider-icon">
+                  <component :is="provider.iconComponent" />
+                </div>
+                <div class="provider-info">
+                  <h3>{{ provider.name }}</h3>
+                  <p>{{ provider.description }}</p>
+                </div>
+                <div class="selected-indicator" v-if="indexerSettings.provider === provider.id">
+                  <ion-icon :icon="checkmarkCircle" />
+                </div>
+              </button>
+            </div>
+
+            <!-- OpenAI Embedding Configuration -->
+            <div v-if="indexerSettings.provider === 'openai'" class="config-panel">
+              <h3 class="config-title">OpenAI Embedding Configuration</h3>
+              <div class="config-fields">
+                <div class="field-group">
+                  <label>API Key</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model="indexerSettings.openai.apiKey"
+                      :type="showIndexerOpenAIKey ? 'text' : 'password'"
+                      placeholder="sk-..."
+                    />
+                    <button class="toggle-visibility" @click="showIndexerOpenAIKey = !showIndexerOpenAIKey">
+                      <ion-icon :icon="showIndexerOpenAIKey ? eyeOffOutline : eyeOutline" />
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Can be the same or different from your AI Provider API key.
+                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
+                      Get an API key
+                    </a>
+                  </span>
+                </div>
+
+                <div class="field-group">
+                  <label>Embedding Model</label>
+                  <select v-model="indexerSettings.openai.model">
+                    <option value="text-embedding-3-small">text-embedding-3-small (1536 dims, efficient)</option>
+                    <option value="text-embedding-3-large">text-embedding-3-large (3072 dims, highest quality)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Gemini Embedding Configuration -->
+            <div v-if="indexerSettings.provider === 'gemini'" class="config-panel">
+              <h3 class="config-title">Gemini Embedding Configuration</h3>
+              <div class="config-fields">
+                <div class="field-group">
+                  <label>API Key</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model="indexerSettings.gemini.apiKey"
+                      :type="showIndexerGeminiKey ? 'text' : 'password'"
+                      placeholder="AIza..."
+                    />
+                    <button class="toggle-visibility" @click="showIndexerGeminiKey = !showIndexerGeminiKey">
+                      <ion-icon :icon="showIndexerGeminiKey ? eyeOffOutline : eyeOutline" />
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Can be the same or different from your AI Provider API key.
+                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+                      Get an API key
+                    </a>
+                  </span>
+                </div>
+
+                <div class="field-group">
+                  <label>Embedding Model</label>
+                  <select v-model="indexerSettings.gemini.model">
+                    <option value="text-embedding-004">text-embedding-004 (768 dims, latest)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Ollama Embedding Configuration -->
+            <div v-if="indexerSettings.provider === 'ollama'" class="config-panel">
+              <h3 class="config-title">Ollama Embedding Configuration</h3>
+              <div class="config-fields">
+                <div class="field-group">
+                  <label>Ollama URL</label>
+                  <input
+                    v-model="indexerSettings.ollama.baseUrl"
+                    type="text"
+                    placeholder="http://localhost:11434"
+                  />
+                </div>
+
+                <div class="field-group">
+                  <label>Embedding Model</label>
+                  <div class="model-input-row">
+                    <input
+                      v-model="indexerSettings.ollama.model"
+                      type="text"
+                      placeholder="nomic-embed-text"
+                    />
+                    <button 
+                      class="fetch-models-btn" 
+                      @click="fetchOllamaEmbeddingModels" 
+                      :disabled="loadingEmbeddingModels"
+                    >
+                      <ion-spinner v-if="loadingEmbeddingModels" name="crescent" />
+                      <span v-else>Fetch Models</span>
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Suggested models: nomic-embed-text, mxbai-embed-large, all-minilm
+                  </span>
+                </div>
+
+                <!-- Available Embedding Models -->
+                <div v-if="ollamaEmbeddingModels.length > 0" class="field-group">
+                  <label>Available Models</label>
+                  <div class="models-list">
+                    <button 
+                      v-for="model in ollamaEmbeddingModels" 
+                      :key="model"
+                      class="model-item"
+                      :class="{ selected: indexerSettings.ollama.model === model }"
+                      @click="selectOllamaEmbeddingModel(model)"
+                    >
+                      <ion-icon :icon="cubeOutline" />
+                      <span>{{ model }}</span>
+                      <ion-icon 
+                        v-if="indexerSettings.ollama.model === model" 
+                        :icon="checkmarkOutline" 
+                        class="check-icon"
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Indexer Connection Status -->
+            <div v-if="indexerStatus" :class="['connection-status', indexerStatus.success ? 'success' : 'error']">
+              <ion-icon :icon="indexerStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+              <span>{{ indexerStatus.message }}</span>
+            </div>
+
+            <!-- Re-indexing Section -->
+            <div class="config-panel">
+              <h3 class="config-title">Re-index Documents</h3>
+              <p class="section-description" style="margin-bottom: 16px; font-size: 0.9rem;">
+                Re-generate embeddings for all documents. Useful after changing embedding providers or if search results seem stale.
+              </p>
+              
+              <!-- Re-index Progress -->
+              <div v-if="reindexProgress" class="reindex-progress">
+                <div class="progress-info">
+                  <span>{{ reindexProgress.current }} / {{ reindexProgress.total }}</span>
+                  <span class="progress-file">{{ reindexProgress.fileName }}</span>
+                </div>
+                <div class="progress-bar">
+                  <div 
+                    class="progress-fill" 
+                    :style="{ width: `${(reindexProgress.current / reindexProgress.total) * 100}%` }"
+                  />
+                </div>
+              </div>
+
+              <!-- Re-index Status -->
+              <div v-if="reindexStatus" :class="['connection-status', reindexStatus.success ? 'success' : 'error']">
+                <ion-icon :icon="reindexStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+                <span>{{ reindexStatus.message }}</span>
+              </div>
+
+              <button 
+                class="btn btn-secondary" 
+                @click="handleReindexAll" 
+                :disabled="reindexing"
+                style="margin-top: 12px;"
+              >
+                <ion-spinner v-if="reindexing" name="crescent" />
+                <ion-icon v-else :icon="refreshOutline" />
+                <span>Re-index All Files</span>
+              </button>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+              <button class="btn btn-secondary" @click="handleTestIndexer" :disabled="testingIndexer">
+                <ion-spinner v-if="testingIndexer" name="crescent" />
+                <ion-icon v-else :icon="flashOutline" />
+                <span>Test Connection</span>
+              </button>
+              <button class="btn btn-primary" @click="handleSaveIndexer">
                 <ion-icon :icon="saveOutline" />
                 <span>Save Settings</span>
               </button>
@@ -674,9 +901,10 @@ import {
   globeOutline,
   searchOutline,
   trashOutline,
+  refreshOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider } from '@/types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider } from '@/types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS } from '@/types';
 import { 
   OpenAiIcon, 
   ClaudeIcon, 
@@ -703,6 +931,11 @@ import {
   saveWebSearchSettings,
   testWebSearchConnection,
   clearWebSearchCache,
+  // Indexer settings
+  loadIndexerSettings,
+  saveIndexerSettings,
+  testIndexerConnection,
+  reindexAllFiles,
 } from '@/services';
 
 // Provider configurations for modularity
@@ -733,7 +966,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'instructions' | 'webresearch' | 'storage'>('providers');
+const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'storage'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -784,10 +1017,47 @@ const webSearchProviders: { id: WebSearchProvider; name: string; description: st
   },
 ];
 
+// Indexer (embedding) provider configurations
+const indexerProviders: { id: EmbeddingProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    description: 'text-embedding-3-small/large',
+    iconComponent: OpenAiIcon,
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    description: 'text-embedding-004 (768 dims)',
+    iconComponent: GeminiIcon,
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama',
+    description: 'Local: nomic-embed-text, mxbai, etc.',
+    iconComponent: OllamaIcon,
+  },
+];
+
+// Indexer section state
+const indexerSettings = ref<IndexerSettings>({ ...DEFAULT_INDEXER_SETTINGS });
+const showIndexerOpenAIKey = ref(false);
+const showIndexerGeminiKey = ref(false);
+const loadingEmbeddingModels = ref(false);
+const ollamaEmbeddingModels = ref<string[]>([]);
+const testingIndexer = ref(false);
+const indexerStatus = ref<{ success: boolean; message: string } | null>(null);
+
+// Re-indexing state
+const reindexing = ref(false);
+const reindexProgress = ref<{ current: number; total: number; fileName: string } | null>(null);
+const reindexStatus = ref<{ success: boolean; message: string } | null>(null);
+
 onMounted(() => {
   settings.value = loadSettings();
   fsSettings.value = loadFileSystemSettings();
   webSearchSettings.value = loadWebSearchSettings();
+  indexerSettings.value = loadIndexerSettings();
   isFileSystemSupported.value = isFileSystemAccessSupported();
   
   // Start file watcher if enabled
@@ -1064,6 +1334,111 @@ async function handleClearWebCache() {
     await toast.present();
   } finally {
     clearingCache.value = false;
+  }
+}
+
+// Indexer handlers
+async function handleSaveIndexer() {
+  saveIndexerSettings(indexerSettings.value);
+  
+  const toast = await toastController.create({
+    message: 'Indexer settings saved',
+    duration: 2000,
+    color: 'success',
+    position: 'top',
+  });
+  await toast.present();
+}
+
+async function handleTestIndexer() {
+  testingIndexer.value = true;
+  indexerStatus.value = null;
+  
+  // Save settings first so test uses current values
+  saveIndexerSettings(indexerSettings.value);
+  
+  try {
+    const result = await testIndexerConnection();
+    indexerStatus.value = {
+      success: result.success,
+      message: result.success 
+        ? `${result.provider}: ${result.message}`
+        : `${result.provider}: ${result.message}`,
+    };
+  } catch (error) {
+    indexerStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Connection test failed',
+    };
+  } finally {
+    testingIndexer.value = false;
+  }
+}
+
+async function fetchOllamaEmbeddingModels() {
+  loadingEmbeddingModels.value = true;
+  
+  try {
+    const models = await getOllamaModels(indexerSettings.value.ollama.baseUrl);
+    ollamaEmbeddingModels.value = models;
+    
+    if (models.length === 0) {
+      const toast = await toastController.create({
+        message: 'No models found. Make sure Ollama is running and has embedding models installed.',
+        duration: 3000,
+        color: 'warning',
+        position: 'top',
+      });
+      await toast.present();
+    }
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to fetch models. Check Ollama URL.',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  } finally {
+    loadingEmbeddingModels.value = false;
+  }
+}
+
+function selectOllamaEmbeddingModel(model: string) {
+  indexerSettings.value.ollama.model = model;
+}
+
+async function handleReindexAll() {
+  reindexing.value = true;
+  reindexProgress.value = null;
+  reindexStatus.value = null;
+  
+  try {
+    const result = await reindexAllFiles((current, total, fileName) => {
+      reindexProgress.value = { current, total, fileName };
+    });
+    
+    reindexProgress.value = null;
+    
+    if (result.failed === 0) {
+      reindexStatus.value = {
+        success: true,
+        message: `Successfully re-indexed ${result.reindexed} files`,
+      };
+    } else {
+      reindexStatus.value = {
+        success: false,
+        message: `Re-indexed ${result.reindexed} files, ${result.failed} failed`,
+      };
+    }
+  } catch (error) {
+    reindexProgress.value = null;
+    reindexStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Re-indexing failed',
+    };
+  } finally {
+    reindexing.value = false;
   }
 }
 </script>
@@ -1817,5 +2192,42 @@ ion-content {
 .connection-status.success .status-suggestions {
   list-style-type: none;
   padding-left: 0;
+}
+
+/* Re-index Progress */
+.reindex-progress {
+  margin-bottom: 16px;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: var(--hn-text-secondary);
+}
+
+.progress-file {
+  color: var(--hn-text-primary);
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--hn-bg-deep);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--hn-purple), var(--hn-purple-light));
+  border-radius: 4px;
+  transition: width 0.2s ease;
 }
 </style>
