@@ -109,6 +109,9 @@ export {
   checkCompletion,
   runPlannerFlow,
   getToolIcon,
+  // Auto-execute helpers
+  shouldAutoExecutePlan,
+  AUTO_EXECUTE_TOOLS,
 } from './toolService';
 
 // Export types from toolService

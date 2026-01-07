@@ -1544,11 +1544,18 @@ export interface CompletionCheck {
 export type PlanStepCallback = (step: PlanStep, index: number, total: number) => void;
 
 /**
+ * Callback for step result (called after each step completes with result data)
+ */
+export type PlanStepResultCallback = (stepId: string, tool: ToolName, resultData: string | undefined) => void;
+
+/**
  * Options for plan execution
  */
 export interface ExecutePlanOptions {
   /** Callback for step status updates */
   onStepUpdate?: PlanStepCallback;
+  /** Callback for step result data (called after each step completes) */
+  onStepResult?: PlanStepResultCallback;
   /** Callback for streaming content (for tools that stream) */
   onStreamChunk?: LLMStreamCallback;
   /** Whether to stop on first failure */
@@ -1573,4 +1580,57 @@ export interface PlannerFlowState {
   replanAttempts: number;
   /** Error if flow failed */
   error?: string;
+}
+
+// ============================================
+// Tool Execution Log Types (for Chat UX)
+// ============================================
+
+/**
+ * Status of a tool log entry
+ */
+export type ToolLogStatus = 'running' | 'completed' | 'failed';
+
+/**
+ * A single tool execution log entry
+ */
+export interface ToolLogEntry {
+  /** Unique log entry ID */
+  id: string;
+  /** Tool that was executed */
+  tool: ToolName;
+  /** Human-readable description */
+  description: string;
+  /** Current status */
+  status: ToolLogStatus;
+  /** Brief result preview (for completed tools) */
+  resultPreview?: string;
+  /** Full result data (for expanding) */
+  resultData?: string;
+  /** Error message (for failed tools) */
+  error?: string;
+  /** Timestamp when tool started */
+  startTime: Date;
+  /** Timestamp when tool completed */
+  endTime?: Date;
+  /** Duration in milliseconds */
+  durationMs?: number;
+}
+
+/**
+ * Enhanced planner flow result with tool logs
+ */
+export interface EnhancedPlannerFlowResult {
+  /** Final state of the flow */
+  state: PlannerFlowState;
+  /** Final response to show user */
+  response: string;
+  /** All tool results from execution */
+  toolResults: ToolResult[];
+  /** Tool execution logs for UI display */
+  toolLogs: ToolLogEntry[];
+  /** Raw tool outputs (formatted for display) */
+  formattedToolOutputs: string[];
+  /** Whether the flow completed successfully */
+  success: boolean;
 }

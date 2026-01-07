@@ -2384,6 +2384,37 @@ import type {
 } from "../types";
 
 // ============================================
+// Auto-Execute Configuration
+// ============================================
+
+/**
+ * Tools that are considered "read-only" and can auto-execute without user confirmation
+ * These are single-step operations that don't modify data
+ */
+export const AUTO_EXECUTE_TOOLS: ToolName[] = ['read', 'search', 'summarize'];
+
+/**
+ * Determine if a plan should auto-execute without user confirmation
+ * @param plan - The execution plan to check
+ * @returns true if the plan should auto-execute
+ */
+export function shouldAutoExecutePlan(plan: ExecutionPlan): boolean {
+  // Don't auto-execute if clarification is needed
+  if (plan.needsClarification) {
+    return false;
+  }
+
+  // Don't auto-execute if there are multiple steps
+  if (plan.steps.length !== 1) {
+    return false;
+  }
+
+  // Only auto-execute read-only tools
+  const singleStep = plan.steps[0];
+  return AUTO_EXECUTE_TOOLS.includes(singleStep.tool);
+}
+
+// ============================================
 // Planner Prompt
 // ============================================
 
@@ -2884,6 +2915,9 @@ export async function executePlan(
           durationMs: Date.now() - stepStartTime,
         });
 
+        // Emit step result for streaming display
+        options.onStepResult?.(step.id, step.tool, result.data);
+
         console.log("[EXECUTOR] Step completed successfully. Extracted context:", Object.keys(extractedContext));
       } else {
         step.status = "failed";
@@ -3076,33 +3110,155 @@ Did we fully satisfy the user's request?`,
 // Main Planner Flow Orchestrator
 // ============================================
 
+import type { ToolLogEntry, ToolLogStatus } from "../types";
+
 /**
  * Result from the full planner flow
  */
 export interface PlannerFlowResult {
   /** Final state of the flow */
   state: PlannerFlowState;
-  /** Final response to show user */
+  /** Final response to show user (LLM interpretation) */
   response: string;
   /** All tool results from execution */
   toolResults: ToolResult[];
+  /** Tool execution logs for UI display */
+  toolLogs: ToolLogEntry[];
+  /** Formatted tool outputs (for display in chat) */
+  formattedToolOutputs: string[];
   /** Whether the flow completed successfully */
   success: boolean;
 }
 
 /**
+ * Create a tool log entry for a step
+ */
+function createToolLogEntry(
+  step: PlanStep,
+  status: ToolLogStatus,
+  result?: ToolResult,
+): ToolLogEntry {
+  const entry: ToolLogEntry = {
+    id: step.id,
+    tool: step.tool,
+    description: step.description,
+    status,
+    startTime: new Date(),
+  };
+
+  if (result) {
+    entry.endTime = new Date();
+    if (result.success && result.data) {
+      // Create a brief preview (first 200 chars)
+      entry.resultPreview = result.data.length > 200
+        ? result.data.substring(0, 200) + "..."
+        : result.data;
+      entry.resultData = result.data;
+    } else if (!result.success) {
+      entry.error = result.error;
+    }
+  }
+
+  return entry;
+}
+
+/**
+ * Format tool outputs for display in chat
+ */
+function formatToolOutputsForDisplay(
+  completedSteps: CompletedStep[],
+  plan: ExecutionPlan,
+): string[] {
+  return completedSteps
+    .filter((cs) => cs.result.success && cs.result.data)
+    .map((cs) => {
+      const step = plan.steps.find((s) => s.id === cs.stepId);
+      const icon = getToolIcon(cs.tool);
+      const title = step?.description || cs.tool;
+      return `### ${icon} ${title}\n\n${cs.result.data}`;
+    });
+}
+
+/**
+ * Generate LLM interpretation of tool results
+ */
+async function generateInterpretation(
+  originalQuery: string,
+  toolOutputs: string[],
+  onStreamChunk?: LLMStreamCallback,
+): Promise<string> {
+  if (toolOutputs.length === 0) {
+    return "The operation completed, but no output was produced.";
+  }
+
+  const systemPrompt = `You are a helpful assistant. Based on the tool execution results below, provide a natural, conversational response to the user's original question.
+
+Guidelines:
+- Be concise but complete
+- Highlight the key information found
+- If there are multiple results, synthesize them
+- Respond in the same language as the user's query
+- Don't repeat the raw tool output verbatim, summarize and present it naturally
+- If the results contain code or technical details, you can include them formatted appropriately`;
+
+  const userPrompt = `User's question: ${originalQuery}
+
+Tool execution results:
+${toolOutputs.join("\n\n---\n\n")}
+
+Please provide a helpful response based on these results.`;
+
+  if (onStreamChunk) {
+    // Streaming response
+    const response = await chatCompletionStreaming(
+      {
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.5,
+        maxTokens: 2000,
+      },
+      onStreamChunk,
+    );
+    return response.content;
+  } else {
+    // Non-streaming response
+    const response = await chatCompletion({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.5,
+      maxTokens: 2000,
+    });
+    return response.content;
+  }
+}
+
+/**
  * Run the complete Planner → Executor → Checker flow
- * Called after user confirms the plan
+ * Called after user confirms the plan (or auto-executed for simple plans)
+ * 
+ * @param options.onToolLog - Callback for real-time tool log updates
+ * @param options.onToolResultStream - Callback for streaming tool result content as it becomes available
+ * @param options.onStreamChunk - Callback for streaming LLM interpretation
  */
 export async function runPlannerFlow(
   plan: ExecutionPlan,
   projectId: string | undefined,
-  options: ExecutePlanOptions = {},
+  options: ExecutePlanOptions & {
+    onToolLog?: (log: ToolLogEntry) => void;
+    onToolResultStream?: (content: string, done: boolean) => void;
+    skipInterpretation?: boolean;
+  } = {},
 ): Promise<PlannerFlowResult> {
-  const maxReplanAttempts = options.maxReplanAttempts ?? 2;
+  const { onToolLog, onToolResultStream, skipInterpretation, onStreamChunk, ...execOptions } = options;
+  const maxReplanAttempts = execOptions.maxReplanAttempts ?? 2;
   let replanAttempts = 0;
   let currentPlan = plan;
   let allToolResults: ToolResult[] = [];
+  const allToolLogs: ToolLogEntry[] = [];
 
   const state: PlannerFlowState = {
     phase: "executing",
@@ -3110,11 +3266,80 @@ export async function runPlannerFlow(
     replanAttempts: 0,
   };
 
+  // Wrap step update to also track tool logs
+  const wrappedOnStepUpdate = (step: PlanStep, index: number, total: number) => {
+    // Call original callback if provided
+    execOptions.onStepUpdate?.(step, index, total);
+
+    // Create or update tool log entry
+    const existingLogIndex = allToolLogs.findIndex((l) => l.id === step.id);
+    
+    let logEntry: ToolLogEntry;
+    if (existingLogIndex === -1) {
+      // New log entry
+      logEntry = {
+        id: step.id,
+        tool: step.tool,
+        description: step.description,
+        status: step.status === "running" ? "running" : 
+                step.status === "completed" ? "completed" : 
+                step.status === "failed" ? "failed" : "running",
+        startTime: new Date(),
+      };
+      allToolLogs.push(logEntry);
+    } else {
+      // Update existing
+      logEntry = allToolLogs[existingLogIndex];
+      logEntry.status = step.status === "running" ? "running" : 
+                        step.status === "completed" ? "completed" : 
+                        step.status === "failed" ? "failed" : logEntry.status;
+      if (step.status === "completed" || step.status === "failed") {
+        logEntry.endTime = new Date();
+        logEntry.durationMs = logEntry.endTime.getTime() - logEntry.startTime.getTime();
+      }
+      if (step.error) {
+        logEntry.error = step.error;
+      }
+    }
+
+    // Emit log update
+    onToolLog?.(logEntry);
+  };
+
   while (replanAttempts <= maxReplanAttempts) {
-    // Execute the plan
+    // Execute the plan with wrapped step update and result streaming
     state.phase = "executing";
-    const executionResult = await executePlan(currentPlan, projectId, options);
+    const executionResult = await executePlan(currentPlan, projectId, {
+      ...execOptions,
+      onStepUpdate: wrappedOnStepUpdate,
+      onStepResult: (stepId, tool, resultData) => {
+        // Show tool result content immediately as it becomes available
+        if (resultData && onToolResultStream) {
+          const maxPreview = 500; // Limit to first 500 chars
+          const dataToShow = resultData.length > maxPreview 
+            ? resultData.substring(0, maxPreview) + "..." 
+            : resultData;
+          
+          // Send the full content immediately
+          onToolResultStream(dataToShow, false);
+          // Signal done after a brief delay to let the UI update
+          setTimeout(() => onToolResultStream("", true), 50);
+        }
+      },
+    });
     state.executionResult = executionResult;
+
+    // Update tool logs with results
+    for (const cs of executionResult.completedSteps) {
+      const logEntry = allToolLogs.find((l) => l.id === cs.stepId);
+      if (logEntry && cs.result.success && cs.result.data) {
+        logEntry.resultPreview = cs.result.data.length > 200
+          ? cs.result.data.substring(0, 200) + "..."
+          : cs.result.data;
+        logEntry.resultData = cs.result.data;
+        onToolLog?.(logEntry);
+      }
+    }
 
     // Collect all tool results
     allToolResults = [
@@ -3132,12 +3357,32 @@ export async function runPlannerFlow(
     state.completionCheck = completionCheck;
 
     if (completionCheck.isComplete) {
-      // All done!
+      // All done - generate LLM interpretation
       state.phase = "complete";
-  return {
+      
+      const formattedOutputs = formatToolOutputsForDisplay(
+        executionResult.completedSteps,
+        currentPlan,
+      );
+
+      let interpretation: string;
+      if (skipInterpretation) {
+        // For simple single-tool queries, don't add extra interpretation
+        interpretation = "";
+      } else {
+        interpretation = await generateInterpretation(
+          currentPlan.originalQuery,
+          formattedOutputs,
+          onStreamChunk,
+        );
+      }
+
+      return {
         state,
-        response: executionResult.finalResponse,
-    toolResults: allToolResults,
+        response: interpretation,
+        toolResults: allToolResults,
+        toolLogs: allToolLogs,
+        formattedToolOutputs: formattedOutputs,
         success: true,
       };
     }
@@ -3146,7 +3391,17 @@ export async function runPlannerFlow(
       // Can't or shouldn't replan
       state.phase = "complete";
       
-      let response = executionResult.finalResponse;
+      const formattedOutputs = formatToolOutputsForDisplay(
+        executionResult.completedSteps,
+        currentPlan,
+      );
+
+      let response = await generateInterpretation(
+        currentPlan.originalQuery,
+        formattedOutputs,
+        onStreamChunk,
+      );
+
       if (completionCheck.missingTasks.length > 0) {
         response += `\n\n⚠️ Some tasks could not be completed:\n${completionCheck.missingTasks.map((t) => `- ${t}`).join("\n")}`;
       }
@@ -3155,6 +3410,8 @@ export async function runPlannerFlow(
         state,
         response,
         toolResults: allToolResults,
+        toolLogs: allToolLogs,
+        formattedToolOutputs: formattedOutputs,
         success: false,
       };
     }
@@ -3189,6 +3446,8 @@ export async function runPlannerFlow(
         state,
         response: currentPlan.clarificationQuestion || "I need more information to continue.",
         toolResults: allToolResults,
+        toolLogs: allToolLogs,
+        formattedToolOutputs: [],
         success: false,
       };
     }
@@ -3196,10 +3455,16 @@ export async function runPlannerFlow(
 
   // Should never reach here, but just in case
   state.phase = "complete";
+  const formattedOutputs = state.executionResult
+    ? formatToolOutputsForDisplay(state.executionResult.completedSteps, currentPlan)
+    : [];
+    
   return {
     state,
     response: state.executionResult?.finalResponse || "Execution completed.",
     toolResults: allToolResults,
+    toolLogs: allToolLogs,
+    formattedToolOutputs: formattedOutputs,
     success: state.executionResult?.allSuccessful ?? false,
   };
 }
