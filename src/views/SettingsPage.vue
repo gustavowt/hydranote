@@ -33,6 +33,10 @@
             <ion-icon :icon="folderOutline" />
             <ion-label>Storage</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="mcp" v-if="isMcpAvailable">
+            <ion-icon :icon="serverOutline" />
+            <ion-label>MCP Server</ion-label>
+          </ion-segment-button>
         </ion-segment>
       </div>
 
@@ -79,6 +83,15 @@
             >
               <ion-icon :icon="folderOutline" />
               <span>Storage</span>
+            </button>
+            <button 
+              v-if="isMcpAvailable"
+              class="nav-item" 
+              :class="{ active: activeSection === 'mcp' }"
+              @click="activeSection = 'mcp'"
+            >
+              <ion-icon :icon="serverOutline" />
+              <span>MCP Server</span>
             </button>
           </nav>
         </aside>
@@ -857,6 +870,147 @@
               </button>
             </div>
           </section>
+
+          <!-- MCP Server Section -->
+          <section v-if="activeSection === 'mcp'" class="content-section">
+            <h2 class="section-title">MCP Server</h2>
+            <p class="section-description">Expose HydraNote capabilities via the Model Context Protocol (MCP) for integration with external LLM tools.</p>
+
+            <!-- Only available in Electron -->
+            <div v-if="!isMcpAvailable" class="connection-status error">
+              <ion-icon :icon="alertCircleOutline" />
+              <span>MCP Server is only available in the Electron desktop app.</span>
+            </div>
+
+            <div v-else class="config-panel">
+              <div class="config-fields">
+                <!-- Enable MCP Server Toggle -->
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Enable MCP Server</label>
+                    <span class="toggle-description">Start a local MCP server for external tool integration</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="mcpSettings.enabled" @change="handleMcpToggle" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <!-- Server Status -->
+                <div v-if="mcpSettings.enabled" class="field-group">
+                  <label>Server Status</label>
+                  <div class="connection-status" :class="mcpServerRunning ? 'success' : 'warning'">
+                    <ion-icon :icon="mcpServerRunning ? checkmarkCircleOutline : alertCircleOutline" />
+                    <span>{{ mcpServerRunning ? 'Running' : 'Stopped' }}</span>
+                    <span class="status-url" v-if="mcpServerRunning">http://127.0.0.1:{{ mcpSettings.port }}/mcp</span>
+                  </div>
+                </div>
+
+                <!-- Port Configuration -->
+                <div class="field-group">
+                  <label>Port</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model.number="mcpSettings.port"
+                      type="number"
+                      min="1024"
+                      max="65535"
+                      placeholder="3847"
+                    />
+                  </div>
+                  <span class="field-hint">
+                    Default port is 3847. Only listens on localhost (127.0.0.1).
+                  </span>
+                </div>
+
+                <!-- Bearer Token -->
+                <div class="field-group">
+                  <label>Bearer Token</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model="mcpSettings.bearerToken"
+                      :type="showMcpToken ? 'text' : 'password'"
+                      placeholder="Click 'Generate Token' to create one"
+                      readonly
+                    />
+                    <button class="toggle-visibility" @click="showMcpToken = !showMcpToken">
+                      <ion-icon :icon="showMcpToken ? eyeOffOutline : eyeOutline" />
+                    </button>
+                    <button class="btn btn-icon" @click="copyMcpToken" title="Copy token">
+                      <ion-icon :icon="copyOutline" />
+                    </button>
+                  </div>
+                  <div class="button-row" style="margin-top: 8px;">
+                    <button class="btn btn-secondary" @click="handleGenerateToken" :disabled="generatingToken">
+                      <ion-spinner v-if="generatingToken" name="crescent" />
+                      <ion-icon v-else :icon="refreshOutline" />
+                      <span>Generate Token</span>
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    This token is required for authentication. Keep it secret.
+                  </span>
+                </div>
+
+                <!-- Download Configuration -->
+                <div class="field-group">
+                  <label>MCP Configuration</label>
+                  <p class="field-hint" style="margin-bottom: 8px;">
+                    Download the configuration file to use with MCP clients (Claude Desktop, etc.)
+                  </p>
+                  <button class="btn btn-primary" @click="handleDownloadMcpConfig" :disabled="!mcpSettings.bearerToken">
+                    <ion-icon :icon="downloadOutline" />
+                    <span>Download MCP Config</span>
+                  </button>
+                </div>
+
+                <!-- Available Tools Info -->
+                <div class="field-group">
+                  <label>Available Tools</label>
+                  <div class="tools-list">
+                    <div class="tool-item">
+                      <code>list_projects</code>
+                      <span>List all projects/workspaces</span>
+                    </div>
+                    <div class="tool-item">
+                      <code>get_project</code>
+                      <span>Get project details</span>
+                    </div>
+                    <div class="tool-item">
+                      <code>list_files</code>
+                      <span>List files in a project</span>
+                    </div>
+                    <div class="tool-item">
+                      <code>read_file</code>
+                      <span>Read file content</span>
+                    </div>
+                    <div class="tool-item">
+                      <code>search</code>
+                      <span>Semantic search across documents</span>
+                    </div>
+                    <div class="tool-item">
+                      <code>create_note</code>
+                      <span>Create a new note</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- MCP Status -->
+                <div v-if="mcpStatus" class="connection-status" :class="mcpStatus.success ? 'success' : 'error'">
+                  <ion-icon :icon="mcpStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+                  <span>{{ mcpStatus.message }}</span>
+                </div>
+              </div>
+
+              <!-- Save Button -->
+              <div class="action-buttons">
+                <button class="btn btn-primary" @click="handleSaveMcp">
+                  <ion-icon :icon="saveOutline" />
+                  <span>Save Settings</span>
+                </button>
+              </div>
+            </div>
+          </section>
         </main>
       </div>
     </ion-content>
@@ -902,6 +1056,9 @@ import {
   searchOutline,
   trashOutline,
   refreshOutline,
+  serverOutline,
+  copyOutline,
+  downloadOutline,
 } from 'ionicons/icons';
 import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS } from '@/types';
@@ -936,7 +1093,15 @@ import {
   saveIndexerSettings,
   testIndexerConnection,
   reindexAllFiles,
+  // MCP settings
+  loadMCPSettings,
+  saveMCPSettings,
+  generateMCPToken,
+  getMCPServerStatus,
+  generateMCPConfig,
+  isMCPAvailable,
 } from '@/services';
+import type { MCPSettings } from '@/services';
 
 // Provider configurations for modularity
 const providerConfigs: { id: LLMProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
@@ -966,7 +1131,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'storage'>('providers');
+const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'storage' | 'mcp'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -1053,7 +1218,19 @@ const reindexing = ref(false);
 const reindexProgress = ref<{ current: number; total: number; fileName: string } | null>(null);
 const reindexStatus = ref<{ success: boolean; message: string } | null>(null);
 
-onMounted(() => {
+// MCP Server section state
+const isMcpAvailable = ref(false);
+const mcpSettings = ref<MCPSettings>({
+  enabled: false,
+  port: 3847,
+  bearerToken: '',
+});
+const showMcpToken = ref(false);
+const generatingToken = ref(false);
+const mcpServerRunning = ref(false);
+const mcpStatus = ref<{ success: boolean; message: string } | null>(null);
+
+onMounted(async () => {
   settings.value = loadSettings();
   fsSettings.value = loadFileSystemSettings();
   webSearchSettings.value = loadWebSearchSettings();
@@ -1063,6 +1240,14 @@ onMounted(() => {
   // Start file watcher if enabled
   if (fsSettings.value.enabled && fsSettings.value.watchForChanges) {
     startFileWatcher();
+  }
+  
+  // Load MCP settings if available
+  isMcpAvailable.value = isMCPAvailable();
+  if (isMcpAvailable.value) {
+    mcpSettings.value = await loadMCPSettings();
+    const status = await getMCPServerStatus();
+    mcpServerRunning.value = status.running;
   }
 });
 
@@ -1439,6 +1624,162 @@ async function handleReindexAll() {
     };
   } finally {
     reindexing.value = false;
+  }
+}
+
+// MCP Server handlers
+async function handleMcpToggle() {
+  mcpStatus.value = null;
+  
+  if (mcpSettings.value.enabled && !mcpSettings.value.bearerToken) {
+    // Generate a token first
+    await handleGenerateToken();
+    if (!mcpSettings.value.bearerToken) {
+      mcpSettings.value.enabled = false;
+      return;
+    }
+  }
+  
+  // Save and apply settings
+  const result = await saveMCPSettings(mcpSettings.value);
+  
+  if (result.success) {
+    const status = await getMCPServerStatus();
+    mcpServerRunning.value = status.running;
+    
+    mcpStatus.value = {
+      success: true,
+      message: mcpSettings.value.enabled ? 'MCP server enabled' : 'MCP server disabled',
+    };
+  } else {
+    mcpStatus.value = {
+      success: false,
+      message: result.error || 'Failed to update MCP server',
+    };
+  }
+}
+
+async function handleGenerateToken() {
+  generatingToken.value = true;
+  mcpStatus.value = null;
+  
+  try {
+    const result = await generateMCPToken();
+    
+    if (result.success && result.token) {
+      mcpSettings.value.bearerToken = result.token;
+      
+      const toast = await toastController.create({
+        message: 'New token generated',
+        duration: 2000,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    } else {
+      mcpStatus.value = {
+        success: false,
+        message: result.error || 'Failed to generate token',
+      };
+    }
+  } catch (error) {
+    mcpStatus.value = {
+      success: false,
+      message: error instanceof Error ? error.message : 'Failed to generate token',
+    };
+  } finally {
+    generatingToken.value = false;
+  }
+}
+
+async function copyMcpToken() {
+  if (!mcpSettings.value.bearerToken) return;
+  
+  try {
+    await navigator.clipboard.writeText(mcpSettings.value.bearerToken);
+    
+    const toast = await toastController.create({
+      message: 'Token copied to clipboard',
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to copy token',
+      duration: 2000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+async function handleDownloadMcpConfig() {
+  if (!mcpSettings.value.bearerToken) {
+    const toast = await toastController.create({
+      message: 'Please generate a token first',
+      duration: 2000,
+      color: 'warning',
+      position: 'top',
+    });
+    await toast.present();
+    return;
+  }
+  
+  try {
+    const configJson = generateMCPConfig(mcpSettings.value);
+    const blob = new Blob([configJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'hydranote-mcp.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    const toast = await toastController.create({
+      message: 'MCP configuration downloaded',
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: 'Failed to download configuration',
+      duration: 2000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+async function handleSaveMcp() {
+  mcpStatus.value = null;
+  
+  const result = await saveMCPSettings(mcpSettings.value);
+  
+  if (result.success) {
+    const status = await getMCPServerStatus();
+    mcpServerRunning.value = status.running;
+    
+    const toast = await toastController.create({
+      message: 'MCP settings saved',
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  } else {
+    mcpStatus.value = {
+      success: false,
+      message: result.error || 'Failed to save MCP settings',
+    };
   }
 }
 </script>
@@ -2229,5 +2570,59 @@ ion-content {
   background: linear-gradient(90deg, var(--hn-purple), var(--hn-purple-light));
   border-radius: 4px;
   transition: width 0.2s ease;
+}
+
+/* MCP Server Section */
+.status-url {
+  margin-left: auto;
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-deep);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+}
+
+.tool-item code {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.85rem;
+  color: var(--hn-purple-light);
+  background: var(--hn-purple-muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+  min-width: 140px;
+}
+
+.tool-item span {
+  font-size: 0.9rem;
+  color: var(--hn-text-secondary);
+}
+
+.btn-icon {
+  padding: 8px;
+  min-width: auto;
+  background: transparent;
+  border: 1px solid var(--hn-border-default);
+}
+
+.btn-icon:hover {
+  background: var(--hn-bg-medium);
+  border-color: var(--hn-border-strong);
 }
 </style>

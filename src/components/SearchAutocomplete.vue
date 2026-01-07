@@ -52,15 +52,23 @@
                 <ion-icon :icon="folderOutline" />
               </div>
               <div class="result-content">
-                <div class="result-name" v-html="highlightMatch(item.name, searchQuery)" />
-                <div v-if="item.description" class="result-meta">{{ item.description }}</div>
+                <div
+                  class="result-name"
+                  v-html="highlightMatch(item.name, searchQuery)"
+                />
+                <div v-if="item.description" class="result-meta">
+                  {{ item.description }}
+                </div>
               </div>
             </div>
           </template>
 
           <!-- Files Section -->
           <template v-if="filteredFiles.length > 0">
-            <div class="section-header" :class="{ 'has-top-border': filteredProjects.length > 0 }">
+            <div
+              class="section-header"
+              :class="{ 'has-top-border': filteredProjects.length > 0 }"
+            >
               <span class="section-title">Files</span>
               <span class="section-count">{{ filteredFiles.length }}</span>
             </div>
@@ -68,25 +76,39 @@
               v-for="(item, index) in filteredFiles"
               :key="'file-' + item.id"
               class="search-result-item"
-              :class="{ 'is-selected': (index + filteredProjects.length) === selectedIndex }"
+              :class="{
+                'is-selected':
+                  index + filteredProjects.length === selectedIndex,
+              }"
               @click="selectFile(item)"
               @mouseenter="selectedIndex = index + filteredProjects.length"
             >
-              <div class="result-icon" :style="{ color: getFileIconColor(item.type) }">
+              <div
+                class="result-icon"
+                :style="{ color: getFileIconColor(item.type) }"
+              >
                 <ion-icon :icon="getFileIcon(item.type)" />
               </div>
               <div class="result-content">
-                <div class="result-name" v-html="highlightMatch(item.name, searchQuery)" />
+                <div
+                  class="result-name"
+                  v-html="highlightMatch(item.name, searchQuery)"
+                />
                 <div class="result-meta">
                   <span class="result-project">{{ item.projectName }}</span>
-                  <span v-if="item.path !== item.name" class="result-path">• {{ item.path }}</span>
+                  <span v-if="item.path !== item.name" class="result-path"
+                    >• {{ item.path }}</span
+                  >
                 </div>
               </div>
             </div>
           </template>
 
           <!-- No Results -->
-          <div v-if="filteredResults.length === 0 && searchQuery.length >= 2" class="no-results">
+          <div
+            v-if="filteredResults.length === 0 && searchQuery.length >= 2"
+            class="no-results"
+          >
             No files found for "{{ searchQuery }}"
           </div>
         </template>
@@ -103,8 +125,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
-import { IonIcon, IonSpinner } from '@ionic/vue';
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { IonIcon, IonSpinner } from "@ionic/vue";
 import {
   searchOutline,
   closeCircleOutline,
@@ -113,9 +135,9 @@ import {
   imageOutline,
   folderOutline,
   logoMarkdown,
-} from 'ionicons/icons';
-import { getAllFilesForAutocomplete, getAllProjects } from '@/services';
-import type { Project, SupportedFileType } from '@/types';
+} from "ionicons/icons";
+import { getAllFilesForAutocomplete, getAllProjects } from "@/services";
+import type { Project, SupportedFileType } from "@/types";
 
 // Types
 interface FileItem {
@@ -129,20 +151,20 @@ interface FileItem {
 
 interface SearchResult {
   item: FileItem | Project;
-  type: 'file' | 'project';
+  type: "file" | "project";
   score: number;
 }
 
 // Emits
 const emit = defineEmits<{
-  (e: 'select-file', file: FileItem): void;
-  (e: 'select-project', project: Project): void;
+  (e: "select-file", file: FileItem): void;
+  (e: "select-project", project: Project): void;
 }>();
 
 // Refs
 const containerRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
-const searchQuery = ref('');
+const searchQuery = ref("");
 const selectedIndex = ref(0);
 const showDropdown = ref(false);
 const isLoading = ref(false);
@@ -157,22 +179,22 @@ let dataLoaded = false;
 function fuzzyScore(text: string, query: string): number {
   const textLower = text.toLowerCase();
   const queryLower = query.toLowerCase();
-  
+
   // Exact match
   if (textLower === queryLower) return 1.0;
-  
+
   // Starts with query
   if (textLower.startsWith(queryLower)) return 0.9;
-  
+
   // Contains query
   if (textLower.includes(queryLower)) return 0.7;
-  
+
   // Fuzzy character match
   let queryIndex = 0;
   let consecutiveMatches = 0;
   let maxConsecutive = 0;
   let matchCount = 0;
-  
+
   for (let i = 0; i < textLower.length && queryIndex < queryLower.length; i++) {
     if (textLower[i] === queryLower[queryIndex]) {
       matchCount++;
@@ -183,54 +205,56 @@ function fuzzyScore(text: string, query: string): number {
       consecutiveMatches = 0;
     }
   }
-  
+
   if (queryIndex === queryLower.length) {
     // All query chars found
-    const score = (matchCount / textLower.length) * 0.3 + (maxConsecutive / queryLower.length) * 0.3;
+    const score =
+      (matchCount / textLower.length) * 0.3 +
+      (maxConsecutive / queryLower.length) * 0.3;
     return Math.min(0.6, score);
   }
-  
+
   return 0;
 }
 
 // Filtered results
 const filteredProjects = computed(() => {
   if (!searchQuery.value || searchQuery.value.length < 1) return [];
-  
+
   const query = searchQuery.value.trim();
-  
+
   return allProjects.value
-    .map(project => ({
+    .map((project) => ({
       item: project,
       score: Math.max(
         fuzzyScore(project.name, query),
-        fuzzyScore(project.description || '', query) * 0.5
-      )
+        fuzzyScore(project.description || "", query) * 0.5,
+      ),
     }))
-    .filter(r => r.score > 0.1)
+    .filter((r) => r.score > 0.1)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
-    .map(r => r.item);
+    .map((r) => r.item);
 });
 
 const filteredFiles = computed(() => {
   if (!searchQuery.value || searchQuery.value.length < 1) return [];
-  
+
   const query = searchQuery.value.trim();
-  
+
   return allFiles.value
-    .map(file => ({
+    .map((file) => ({
       item: file,
       score: Math.max(
         fuzzyScore(file.name, query),
         fuzzyScore(file.path, query) * 0.8,
-        fuzzyScore(file.projectName, query) * 0.3
-      )
+        fuzzyScore(file.projectName, query) * 0.3,
+      ),
     }))
-    .filter(r => r.score > 0.1)
+    .filter((r) => r.score > 0.1)
     .sort((a, b) => b.score - a.score)
     .slice(0, 10)
-    .map(r => r.item);
+    .map((r) => r.item);
 });
 
 const filteredResults = computed(() => {
@@ -239,32 +263,32 @@ const filteredResults = computed(() => {
 
 // Dropdown positioning
 const dropdownStyle = computed(() => {
-  if (!dropdownRect.value) return { display: 'none' };
-  
+  if (!dropdownRect.value) return { display: "none" };
+
   return {
-    position: 'fixed' as const,
+    position: "fixed" as const,
     top: `${dropdownRect.value.bottom + 4}px`,
     left: `${dropdownRect.value.left}px`,
     width: `${Math.max(dropdownRect.value.width, 360)}px`,
-    maxWidth: '450px',
+    maxWidth: "450px",
   };
 });
 
 // Load data
 async function loadData() {
   if (dataLoaded) return;
-  
+
   isLoading.value = true;
   try {
     const [files, projects] = await Promise.all([
       getAllFilesForAutocomplete(),
-      getAllProjects()
+      getAllProjects(),
     ]);
     allFiles.value = files;
     allProjects.value = projects;
     dataLoaded = true;
   } catch (error) {
-    console.error('Failed to load search data:', error);
+    console.error("Failed to load search data:", error);
   } finally {
     isLoading.value = false;
   }
@@ -278,7 +302,7 @@ function handleInput() {
 // Keyboard navigation
 function handleKeydown(event: KeyboardEvent) {
   if (!showDropdown.value) {
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       clearSearch();
       inputRef.value?.blur();
     }
@@ -288,19 +312,19 @@ function handleKeydown(event: KeyboardEvent) {
   const totalResults = filteredResults.value.length;
 
   switch (event.key) {
-    case 'ArrowDown':
+    case "ArrowDown":
       event.preventDefault();
       selectedIndex.value = Math.min(selectedIndex.value + 1, totalResults - 1);
       break;
-    case 'ArrowUp':
+    case "ArrowUp":
       event.preventDefault();
       selectedIndex.value = Math.max(selectedIndex.value - 1, 0);
       break;
-    case 'Enter':
+    case "Enter":
       event.preventDefault();
       handleEnterSelect();
       break;
-    case 'Escape':
+    case "Escape":
       event.preventDefault();
       showDropdown.value = false;
       inputRef.value?.blur();
@@ -310,7 +334,7 @@ function handleKeydown(event: KeyboardEvent) {
 
 function handleEnterSelect() {
   const projectsLen = filteredProjects.value.length;
-  
+
   if (selectedIndex.value < projectsLen) {
     const project = filteredProjects.value[selectedIndex.value];
     if (project) selectProject(project);
@@ -343,14 +367,14 @@ function updateDropdownPosition() {
 
 // Select handlers
 function selectFile(file: FileItem) {
-  emit('select-file', file);
+  emit("select-file", file);
   clearSearch();
   showDropdown.value = false;
   inputRef.value?.blur();
 }
 
 function selectProject(project: Project) {
-  emit('select-project', project);
+  emit("select-project", project);
   clearSearch();
   showDropdown.value = false;
   inputRef.value?.blur();
@@ -358,21 +382,21 @@ function selectProject(project: Project) {
 
 // Clear search
 function clearSearch() {
-  searchQuery.value = '';
+  searchQuery.value = "";
   selectedIndex.value = 0;
 }
 
 // Get file icon based on type
 function getFileIcon(fileType: string): string {
   switch (fileType) {
-    case 'md':
+    case "md":
       return logoMarkdown;
-    case 'pdf':
+    case "pdf":
       return documentTextOutline;
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'webp':
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "webp":
       return imageOutline;
     default:
       return documentOutline;
@@ -381,38 +405,41 @@ function getFileIcon(fileType: string): string {
 
 function getFileIconColor(fileType: string): string {
   switch (fileType) {
-    case 'md':
-      return 'var(--hn-purple)';
-    case 'pdf':
-      return 'var(--hn-danger)';
-    case 'docx':
-      return 'var(--hn-green)';
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'webp':
-      return 'var(--hn-purple-light)';
+    case "md":
+      return "var(--hn-purple)";
+    case "pdf":
+      return "var(--hn-danger)";
+    case "docx":
+      return "var(--hn-green)";
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "webp":
+      return "var(--hn-purple-light)";
     default:
-      return 'var(--hn-text-secondary)';
+      return "var(--hn-text-secondary)";
   }
 }
 
 // Highlight matching text
 function highlightMatch(text: string, query: string): string {
   if (!query) return text;
-  
-  const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
-  return text.replace(regex, '<mark>$1</mark>');
+
+  const regex = new RegExp(`(${escapeRegex(query)})`, "gi");
+  return text.replace(regex, "<mark>$1</mark>");
 }
 
 // Escape regex special characters
 function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Click outside handler
 function handleClickOutside(event: MouseEvent) {
-  if (containerRef.value && !containerRef.value.contains(event.target as Node)) {
+  if (
+    containerRef.value &&
+    !containerRef.value.contains(event.target as Node)
+  ) {
     showDropdown.value = false;
   }
 }
@@ -424,13 +451,13 @@ async function refresh() {
 }
 
 onMounted(() => {
-  document.addEventListener('click', handleClickOutside);
-  window.addEventListener('resize', updateDropdownPosition);
+  document.addEventListener("click", handleClickOutside);
+  window.addEventListener("resize", updateDropdownPosition);
 });
 
 onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside);
-  window.removeEventListener('resize', updateDropdownPosition);
+  document.removeEventListener("click", handleClickOutside);
+  window.removeEventListener("resize", updateDropdownPosition);
 });
 
 // Expose methods
@@ -455,7 +482,9 @@ defineExpose({
   border-radius: 8px;
   padding: 0 12px;
   height: 36px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .search-input-wrapper:focus-within {
@@ -670,5 +699,3 @@ defineExpose({
   border-radius: 4px;
 }
 </style>
-
-

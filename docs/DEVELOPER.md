@@ -16,7 +16,8 @@ This document provides technical documentation for developers working on HydraNo
 10. [Setup Wizard](#setup-wizard)
 11. [Routing](#routing)
 12. [Configuration](#configuration)
-13. [File Structure](#file-structure)
+13. [MCP Server](#mcp-server)
+14. [File Structure](#file-structure)
 
 ---
 
@@ -1832,6 +1833,7 @@ src/
 │   ├── embeddingService.ts   # Multi-provider embeddings (OpenAI/Gemini/Ollama)
 │   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
+│   ├── mcpService.ts         # MCP server tool handlers (Electron only)
 │   ├── noteService.ts        # AddNote pipeline
 │   ├── projectService.ts     # Project management (with FS sync)
 │   ├── setupWizardService.ts # First-run setup wizard state management
@@ -1846,7 +1848,7 @@ src/
 └── views/
     ├── SetupWizardPage.vue   # First-run configuration wizard
     ├── WorkspacePage.vue     # Main unified workspace layout (file type routing)
-    └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage)
+    └── SettingsPage.vue      # Settings (AI Providers, AI Instructions, Web Research, Storage, MCP Server)
 ```
 
 ---
@@ -1882,5 +1884,129 @@ import { OpenAiIcon, ClaudeIcon, GeminiIcon } from '@/icons';
 ```
 
 All icons inherit attributes via `v-bind="$attrs"` and use `fill="currentColor"` to respect the parent's text color.
+
+---
+
+## MCP Server
+
+HydraNote includes a local MCP (Model Context Protocol) server that exposes app capabilities to external LLM tools like Claude Desktop.
+
+### Overview
+
+The MCP server:
+- Runs only in Electron (desktop app)
+- Binds to `127.0.0.1` (localhost only) for security
+- Requires bearer token authentication
+- Exposes read-only access to data plus note creation
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        MCP Client                                │
+│            (Claude Desktop, other LLM tools)                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ HTTP (Bearer Token Auth)
+┌─────────────────────────────────────────────────────────────────┐
+│                     Electron Main Process                        │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    MCP Server                              │  │
+│  │  • HTTP transport on 127.0.0.1:3847                       │  │
+│  │  • Bearer token validation                                 │  │
+│  │  • Tool routing                                            │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼ IPC                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Ionic Renderer Process                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    MCP Service                             │  │
+│  │  • Tool execution handlers                                 │  │
+│  │  • DuckDB query execution                                  │  │
+│  │  • Project/file operations                                 │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                  DuckDB WASM                               │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Available Tools
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `list_projects` | Get all projects/workspaces | (none) |
+| `get_project` | Get project details | `projectId: string` |
+| `list_files` | List files in a project | `projectId: string`, `asTree?: boolean` |
+| `read_file` | Read file content | `projectId: string`, `fileId?: string`, `fileName?: string` |
+| `search` | Semantic search across documents | `query: string`, `projectId?: string`, `maxResults?: number` |
+| `create_note` | Create a new note | `projectId: string`, `content: string`, `directory?: string`, `tags?: string[]` |
+
+### Configuration
+
+Settings are stored in the Electron user data directory (`mcp-settings.json`):
+
+```typescript
+interface MCPSettings {
+  enabled: boolean;     // Whether server is enabled
+  port: number;         // Default: 3847
+  bearerToken: string;  // Auto-generated authentication token
+}
+```
+
+### MCP Configuration File
+
+Users can download a configuration file from Settings to use with MCP clients:
+
+```json
+{
+  "mcpServers": {
+    "hydranote": {
+      "url": "http://127.0.0.1:3847/mcp",
+      "transport": {
+        "type": "streamable-http"
+      },
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
+
+### Security
+
+- **Localhost only**: Server binds to `127.0.0.1`, never `0.0.0.0`
+- **Bearer token required**: All requests must include valid token
+- **Read-only SQL**: Only SELECT statements allowed in `duckdb_query`
+- **Row limits**: Query results capped at 1000 rows
+- **Timeouts**: 30-second timeout for tool execution
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `electron/src/mcpServer.ts` | MCP server implementation |
+| `electron/src/index.ts` | Server startup integration |
+| `electron/src/preload.ts` | IPC API exposure |
+| `src/services/mcpService.ts` | Renderer-side tool handlers |
+
+### MCP Service Functions
+
+| Function | Description |
+|----------|-------------|
+| `initializeMCPService()` | Set up IPC listeners for tool requests |
+| `loadMCPSettings()` | Load settings from Electron main process |
+| `saveMCPSettings()` | Save settings to Electron main process |
+| `generateMCPToken()` | Generate new bearer token |
+| `getMCPServerStatus()` | Check if server is running |
+| `generateMCPConfig()` | Generate downloadable config JSON |
+| `isMCPAvailable()` | Check if MCP is available (Electron only) |
 
 
