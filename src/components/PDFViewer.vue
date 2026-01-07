@@ -250,12 +250,30 @@ async function loadPDF() {
     // Render all pages (or use virtual scrolling for large documents)
     renderedPages.value = Array.from({ length: totalPages.value }, (_, i) => i + 1);
     
+    // Wait for Vue to create canvas elements in the DOM
     await nextTick();
+    
+    // Auto fit-to-width: calculate scale before rendering
+    let initialScale = 1.0;
+    if (pdfContainer.value && pdfDoc.value) {
+      const containerWidth = pdfContainer.value.clientWidth - 48; // Account for padding
+      const firstPage = await pdfDoc.value.getPage(1);
+      const viewport = firstPage.getViewport({ scale: 1 });
+      initialScale = containerWidth / viewport.width;
+    }
+    scale.value = initialScale;
+    
+    // Set loading to false BEFORE rendering so the canvas elements exist in the DOM
+    // (they're inside a v-else block that only renders when loading is false)
+    loading.value = false;
+    
+    // Wait for Vue to create the canvas elements now that loading is false
+    await nextTick();
+    
     await renderAllPages();
   } catch (err) {
     console.error('Failed to load PDF:', err);
     error.value = 'Failed to load PDF. The file may be corrupted or password-protected.';
-  } finally {
     loading.value = false;
   }
 }
