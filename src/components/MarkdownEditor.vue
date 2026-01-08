@@ -136,6 +136,19 @@
                 <ion-icon :icon="timeOutline" slot="start" />
                 <ion-label>Version History</ion-label>
               </ion-item>
+              <ion-item-divider class="export-divider">Export</ion-item-divider>
+              <ion-item button @click="handleExport('pdf')" :detail="false">
+                <ion-icon :icon="documentOutline" slot="start" />
+                <ion-label>Export as PDF</ion-label>
+              </ion-item>
+              <ion-item button @click="handleExport('docx')" :detail="false">
+                <ion-icon :icon="readerOutline" slot="start" />
+                <ion-label>Export as DOCX</ion-label>
+              </ion-item>
+              <ion-item button @click="handleExport('md')" :detail="false">
+                <ion-icon :icon="codeSlashOutline" slot="start" />
+                <ion-label>Export as Markdown</ion-label>
+              </ion-item>
             </ion-list>
           </ion-content>
         </ion-popover>
@@ -341,6 +354,7 @@ import {
   IonContent,
   IonList,
   IonItem,
+  IonItemDivider,
   IonLabel,
   IonModal,
   IonHeader,
@@ -354,6 +368,7 @@ import {
   documentTextOutline,
   documentOutline,
   codeOutline,
+  codeSlashOutline,
   gridOutline,
   eyeOutline,
   saveOutline,
@@ -375,6 +390,8 @@ import {
   chevronBackOutline,
   chevronForwardOutline,
   chatbubbleOutline,
+  readerOutline,
+  downloadOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
@@ -386,7 +403,10 @@ import {
   getVersionHistory,
   getVersionContent,
   createRestoreVersion,
+  exportToFile,
+  getFileNameWithoutExtension as getBaseName,
 } from '@/services';
+import type { DocumentFormat } from '@/types';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -883,6 +903,41 @@ function handleOpenFormatModal() {
   showActionsMenu.value = false;
   formatInstructions.value = '';
   showFormatModal.value = true;
+}
+
+// ============================================
+// Export Handlers
+// ============================================
+
+async function handleExport(format: DocumentFormat) {
+  showActionsMenu.value = false;
+  
+  // Get title from file name or use default
+  const title = props.currentFile?.name 
+    ? getBaseName(props.currentFile.name)
+    : 'Untitled Note';
+  
+  // Use export service
+  const result = await exportToFile(title, content.value, format);
+  
+  // Show feedback
+  if (result.success) {
+    const toast = await toastController.create({
+      message: `Exported as ${result.fileName}`,
+      duration: 2000,
+      position: 'top',
+      color: 'success',
+    });
+    await toast.present();
+  } else {
+    const toast = await toastController.create({
+      message: result.error || 'Failed to export file',
+      duration: 3000,
+      position: 'top',
+      color: result.error === 'No content to export' ? 'warning' : 'danger',
+    });
+    await toast.present();
+  }
 }
 
 async function handleRunFormatting() {
@@ -1488,6 +1543,22 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
 
 .actions-popover-content ion-item:hover ion-icon {
   color: var(--hn-teal);
+}
+
+.actions-popover-content ion-item-divider.export-divider {
+  --background: transparent;
+  --color: var(--hn-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --padding-top: 10px;
+  --padding-bottom: 4px;
+  min-height: 28px;
+  border-top: 1px solid var(--hn-border-subtle);
+  margin-top: 4px;
 }
 
 /* Rename Container */
