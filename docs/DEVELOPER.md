@@ -177,6 +177,57 @@ Raw Text → Decide Project* ──────────────►├─
 
 This reduces from 4 sequential LLM calls to 2 sequential phases (1 LLM + 2 parallel LLM calls + 1 LLM).
 
+### Export Service (`exportService.ts`)
+
+Handles file export operations for downloading content in different formats (PDF, DOCX, Markdown).
+
+#### Key Functions
+
+| Function | Description |
+|----------|-------------|
+| `exportToFile(title, content, format, options?)` | Export content and trigger download |
+| `exportToPDF(title, content, options?)` | Convenience wrapper for PDF export |
+| `exportToDOCX(title, content, options?)` | Convenience wrapper for DOCX export |
+| `exportToMarkdown(title, content, options?)` | Convenience wrapper for Markdown export |
+| `generateExportBlob(title, content, format)` | Generate document blob without downloading |
+| `getFileNameWithoutExtension(filePath)` | Extract base name from file path |
+| `getExtensionForFormat(format)` | Get file extension for a format |
+| `getMimeTypeForFormat(format)` | Get MIME type for a format |
+
+#### Types
+
+```typescript
+interface ExportResult {
+  success: boolean;
+  fileName: string;
+  error?: string;
+}
+
+interface ExportOptions {
+  customFileName?: string;  // Override default file name
+  autoDownload?: boolean;   // Trigger download (default: true)
+}
+```
+
+#### Usage Example
+
+```typescript
+import { exportToFile } from '@/services';
+
+// Export current content as PDF
+const result = await exportToFile('My Document', markdownContent, 'pdf');
+
+if (result.success) {
+  console.log(`Downloaded: ${result.fileName}`);
+} else {
+  console.error(`Export failed: ${result.error}`);
+}
+```
+
+#### Integration with MarkdownEditor
+
+The export service is used by the MarkdownEditor's 3-dots menu to provide "Export as PDF/DOCX/Markdown" options. The component calls `exportToFile()` and displays toast feedback based on the result.
+
 ### Tool Service (`toolService.ts`)
 
 Handles tool execution with a Planner → Executor → Checker architecture.
@@ -794,6 +845,10 @@ The editor header includes a 3-dots menu (visible when editing an existing file)
 |--------|-------------|
 | **Run AI Formatting** | Opens a modal for manually triggering AI formatting with optional custom instructions |
 | **Rename** | Enables inline editing of the file name in the header |
+| **Version History** | Opens modal showing file version history with restore options |
+| **Export as PDF** | Downloads current content as a formatted PDF file |
+| **Export as DOCX** | Downloads current content as a Word document |
+| **Export as Markdown** | Downloads current content as a Markdown file with metadata |
 
 **AI Formatting:**
 - Uses `formatNote()` from noteService
@@ -806,6 +861,14 @@ The editor header includes a 3-dots menu (visible when editing an existing file)
 - Save button confirms the rename, Escape cancels
 - Emits `rename` event to parent for processing via `renameFile()` service
 - Sidebar is refreshed after successful rename
+
+**Export:**
+- Uses `generatePDF()`, `generateDOCX()`, `generateMarkdown()` from documentGeneratorService
+- PDF: Renders markdown as formatted text with proper headings and lists
+- DOCX: Creates Word document with proper formatting (bold, italic, headings)
+- Markdown: Wraps content with title and generation date metadata
+- Uses file-saver library for downloads
+- Toast notification confirms successful export
 
 ### ChatSidebar (`ChatSidebar.vue`)
 
@@ -1829,8 +1892,10 @@ src/
 ├── services/
 │   ├── chatService.ts        # Chat session management
 │   ├── database.ts           # DuckDB operations (OPFS persistence)
+│   ├── documentGeneratorService.ts # PDF/DOCX/MD generation (for AI write tool)
 │   ├── documentProcessor.ts  # File processing (+ DOCX/PDF conversion)
 │   ├── embeddingService.ts   # Multi-provider embeddings (OpenAI/Gemini/Ollama)
+│   ├── exportService.ts      # File export with download (PDF/DOCX/MD)
 │   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
 │   ├── mcpService.ts         # MCP server tool handlers (Electron only)
