@@ -130,6 +130,20 @@ export {
   downloadBlob,
 } from './documentGeneratorService';
 
+// Export Service
+export {
+  exportToFile,
+  exportToPDF,
+  exportToDOCX,
+  exportToMarkdown,
+  generateExportBlob,
+  getFileNameWithoutExtension,
+  getExtensionForFormat,
+  getMimeTypeForFormat,
+} from './exportService';
+
+export type { ExportResult, ExportOptions } from './exportService';
+
 // Document Processor
 export {
   detectFileType,
