@@ -2789,6 +2789,217 @@ Generate ONLY the content, no explanations or meta-commentary.`,
   return response.content;
 }
 
+// Track web research progress state for generating unique child IDs
+const webResearchChildState: Map<string, { 
+  childIndex: number; 
+  childIds: Map<string, string>;
+  lastFetchBatch: string | null;
+  processedPages: Set<number>;
+}> = new Map();
+
+/**
+ * Parse web research progress messages into child execution entries
+ * Returns an array of updates (can be multiple when completing previous + starting new)
+ * 
+ * Progress messages follow patterns like:
+ * - "Checking cache..."
+ * - "Searching the web..."
+ * - "Found 5 results, fetching pages..."
+ * - "Fetching pages 1-3 of 5..."
+ * - "Processing page 1/3: Title..."
+ * - "Analyzing content (2/5)..."
+ * - "Finding relevant content..."
+ * - "Done"
+ */
+function parseWebResearchProgress(stepId: string, status: string): import("../types").ToolExecutionChild[] {
+  // Initialize state for this step if needed
+  if (!webResearchChildState.has(stepId)) {
+    webResearchChildState.set(stepId, { 
+      childIndex: 0, 
+      childIds: new Map(),
+      lastFetchBatch: null,
+      processedPages: new Set(),
+    });
+  }
+  const state = webResearchChildState.get(stepId)!;
+  const updates: import("../types").ToolExecutionChild[] = [];
+  
+  // Skip simple status messages that don't warrant a child entry
+  if (status === "Checking cache..." || status === "Found cached results" || status === "Error") {
+    return updates;
+  }
+  
+  // Searching the web
+  if (status === "Searching the web...") {
+    const childId = `${stepId}-search`;
+    state.childIds.set("search", childId);
+    updates.push({
+      id: childId,
+      label: "Searching...",
+      status: "running",
+      timestamp: new Date(),
+    });
+    return updates;
+  }
+  
+  // Found results - update search child to completed
+  const foundMatch = status.match(/^Found (\d+) results/);
+  if (foundMatch) {
+    const searchChildId = state.childIds.get("search");
+    if (searchChildId) {
+      updates.push({
+        id: searchChildId,
+        label: `Found ${foundMatch[1]} results`,
+        status: "completed",
+        timestamp: new Date(),
+      });
+    }
+    return updates;
+  }
+  
+  // Fetching pages - mark previous fetch batch as complete first
+  const fetchMatch = status.match(/^Fetching pages? (\d+)(?:-(\d+))? of (\d+)/);
+  if (fetchMatch) {
+    // Mark previous fetch batch as complete if exists
+    if (state.lastFetchBatch) {
+      const prevFetchId = state.childIds.get(state.lastFetchBatch);
+      if (prevFetchId) {
+        const prevLabel = state.lastFetchBatch.replace("fetch-", "Pages ");
+        updates.push({
+          id: prevFetchId,
+          label: prevLabel,
+          status: "completed",
+          timestamp: new Date(),
+        });
+      }
+    }
+    
+    const start = parseInt(fetchMatch[1]);
+    const end = fetchMatch[2] ? parseInt(fetchMatch[2]) : start;
+    const childId = `${stepId}-fetch-${start}`;
+    const batchKey = `fetch-${start}-${end}`;
+    const label = fetchMatch[2] 
+      ? `Fetching pages ${fetchMatch[1]}-${fetchMatch[2]}...`
+      : `Fetching page ${start}...`;
+    
+    state.childIds.set(batchKey, childId);
+    state.lastFetchBatch = batchKey;
+    
+    updates.push({
+      id: childId,
+      label,
+      status: "running",
+      timestamp: new Date(),
+    });
+    return updates;
+  }
+  
+  // Processing pages - mark last fetch batch as complete
+  const processingMatch = status.match(/^Processing (\d+) pages/);
+  if (processingMatch) {
+    // Mark last fetch batch as complete
+    if (state.lastFetchBatch) {
+      const prevFetchId = state.childIds.get(state.lastFetchBatch);
+      if (prevFetchId) {
+        const match = state.lastFetchBatch.match(/fetch-(\d+)-(\d+)/);
+        const label = match ? `Pages ${match[1]}-${match[2]}` : "Pages fetched";
+        updates.push({
+          id: prevFetchId,
+          label,
+          status: "completed",
+          timestamp: new Date(),
+        });
+      }
+      state.lastFetchBatch = null;
+    }
+    return updates;
+  }
+  
+  // Processing page - add page title as child
+  const processMatch = status.match(/^Processing page (\d+)\/(\d+): (.+)\.\.\.$/);
+  if (processMatch) {
+    const pageNum = parseInt(processMatch[1]);
+    const title = processMatch[3].substring(0, 25) + (processMatch[3].length > 25 ? "..." : "");
+    const childId = `${stepId}-page-${pageNum}`;
+    
+    // Mark previous page as complete if exists
+    if (state.processedPages.size > 0) {
+      const prevPageNum = Math.max(...state.processedPages);
+      const prevPageId = state.childIds.get(`page-${prevPageNum}`);
+      if (prevPageId) {
+        updates.push({
+          id: prevPageId,
+          label: state.childIds.get(`page-${prevPageNum}-title`) || `Page ${prevPageNum}`,
+          status: "completed",
+          timestamp: new Date(),
+        });
+      }
+    }
+    
+    state.childIds.set(`page-${pageNum}`, childId);
+    state.childIds.set(`page-${pageNum}-title`, title);
+    state.processedPages.add(pageNum);
+    
+    updates.push({
+      id: childId,
+      label: title,
+      status: "running",
+      timestamp: new Date(),
+    });
+    return updates;
+  }
+  
+  // Analyzing content - mark last page as complete
+  const analyzeMatch = status.match(/^Analyzing content \((\d+)\/(\d+)\)/);
+  if (analyzeMatch) {
+    // Mark last page as complete
+    if (state.processedPages.size > 0) {
+      const lastPageNum = Math.max(...state.processedPages);
+      const lastPageId = state.childIds.get(`page-${lastPageNum}`);
+      if (lastPageId) {
+        updates.push({
+          id: lastPageId,
+          label: state.childIds.get(`page-${lastPageNum}-title`) || `Page ${lastPageNum}`,
+          status: "completed",
+          timestamp: new Date(),
+        });
+      }
+    }
+    return updates;
+  }
+  
+  // Finding relevant content
+  if (status === "Finding relevant content...") {
+    const childId = `${stepId}-finding`;
+    state.childIds.set("finding", childId);
+    updates.push({
+      id: childId,
+      label: "Finding relevant content...",
+      status: "running",
+      timestamp: new Date(),
+    });
+    return updates;
+  }
+  
+  // Done - mark finding as complete
+  if (status === "Done") {
+    const findingId = state.childIds.get("finding");
+    if (findingId) {
+      updates.push({
+        id: findingId,
+        label: "Processing complete",
+        status: "completed",
+        timestamp: new Date(),
+      });
+    }
+    // Clean up state
+    webResearchChildState.delete(stepId);
+    return updates;
+  }
+  
+  return updates;
+}
+
 /**
  * Execute a plan step by step with context passing
  */
@@ -2797,7 +3008,7 @@ export async function executePlan(
   projectId: string | undefined,
   options: ExecutePlanOptions = {},
 ): Promise<ExecutionResult> {
-  const { onStepUpdate, onStreamChunk, stopOnFailure = false } = options;
+  const { onStepUpdate, onStreamChunk, stopOnFailure = false, onToolChildUpdate } = options;
 
   const startTime = Date.now();
   const completedSteps: CompletedStep[] = [];
@@ -2893,9 +3104,18 @@ export async function executePlan(
       };
 
       // Create progress callback that updates step detail
+      // For web research, also parse progress to create child entries
       const progressCallback = (status: string) => {
         step.detail = status;
         onStepUpdate?.(step, i, plan.steps.length);
+        
+        // Parse web research progress to create child entries
+        if (step.tool === "webResearch" && onToolChildUpdate) {
+          const childUpdates = parseWebResearchProgress(step.id, status);
+          for (const child of childUpdates) {
+            onToolChildUpdate(step.id, child);
+          }
+        }
       };
 
       const result = await executeTool(stepProjectId, toolCall, plan.originalQuery, progressCallback);
@@ -3306,11 +3526,36 @@ export async function runPlannerFlow(
     onToolLog?.(logEntry);
   };
 
+  // Handle child updates for nested tool progress (e.g., web research page fetches)
+  const handleToolChildUpdate = (stepId: string, child: import("../types").ToolExecutionChild) => {
+    const logEntry = allToolLogs.find((l) => l.id === stepId);
+    if (!logEntry) return;
+    
+    // Initialize children array if needed
+    if (!logEntry.children) {
+      logEntry.children = [];
+    }
+    
+    // Find or create child entry
+    const existingChildIndex = logEntry.children.findIndex((c) => c.id === child.id);
+    if (existingChildIndex >= 0) {
+      // Update existing child
+      logEntry.children[existingChildIndex] = child;
+    } else {
+      // Add new child
+      logEntry.children.push(child);
+    }
+    
+    // Emit updated log
+    onToolLog?.(logEntry);
+  };
+
   while (replanAttempts <= maxReplanAttempts) {
     // Execute the plan with wrapped step update and result streaming
     state.phase = "executing";
     const executionResult = await executePlan(currentPlan, projectId, {
       ...execOptions,
+      onToolChildUpdate: handleToolChildUpdate,
       onStepUpdate: wrappedOnStepUpdate,
       onStepResult: (stepId, tool, resultData) => {
         // Show tool result content immediately as it becomes available

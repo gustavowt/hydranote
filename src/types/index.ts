@@ -233,6 +233,8 @@ export interface ChatMessage {
   timestamp: Date;
   /** Optional context chunks used for this message */
   contextChunks?: SearchResult[];
+  /** Tool executions associated with this message (for assistant messages) */
+  toolExecutions?: ToolExecutionRecord[];
 }
 
 /**
@@ -1562,6 +1564,8 @@ export interface ExecutePlanOptions {
   stopOnFailure?: boolean;
   /** Maximum re-plan attempts */
   maxReplanAttempts?: number;
+  /** Callback for tool child progress updates (e.g., web research page fetches) */
+  onToolChildUpdate?: (stepId: string, child: ToolExecutionChild) => void;
 }
 
 /**
@@ -1615,6 +1619,48 @@ export interface ToolLogEntry {
   endTime?: Date;
   /** Duration in milliseconds */
   durationMs?: number;
+  /** Child execution steps (for nested tools like webResearch) */
+  children?: ToolExecutionChild[];
+}
+
+/**
+ * Child execution step for nested tools (e.g., web research page fetches)
+ */
+export interface ToolExecutionChild {
+  /** Unique child ID */
+  id: string;
+  /** Display label (e.g., "vuejs.org/guide" or "Processing results") */
+  label: string;
+  /** Current status */
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  /** Timestamp */
+  timestamp: Date;
+}
+
+/**
+ * Tool execution record for persistence in chat history
+ */
+export interface ToolExecutionRecord {
+  /** Unique record ID */
+  id: string;
+  /** Tool that was executed */
+  tool: ToolName;
+  /** Compact description for display */
+  description: string;
+  /** Final status */
+  status: ToolLogStatus;
+  /** Duration in milliseconds */
+  durationMs?: number;
+  /** Brief result preview */
+  resultPreview?: string;
+  /** Full result data (for expansion) */
+  resultData?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Execution timestamp */
+  timestamp: Date;
+  /** Child steps for nested tools */
+  children?: ToolExecutionChild[];
 }
 
 /**
