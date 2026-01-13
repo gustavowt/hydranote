@@ -109,68 +109,97 @@
               <div v-else class="message-content">{{ message.content }}</div>
               <div class="message-time">{{ formatTime(message.timestamp) }}</div>
             </div>
+            
+            <!-- Persisted tool executions for this message -->
+            <div v-if="message.toolExecutions && message.toolExecutions.length > 0" class="inline-tool-indicators persisted">
+              <div 
+                v-for="exec in message.toolExecutions" 
+                :key="exec.id"
+                class="tool-indicator"
+                :class="{ expanded: expandedToolIds.has(exec.id), 'has-children': exec.children && exec.children.length > 0 }"
+                @click="toggleToolExpansion(exec.id)"
+              >
+                <div class="tool-indicator-main">
+                  <span class="tool-indicator-icon" v-html="getToolIcon(exec.tool)"></span>
+                  <span class="tool-indicator-desc">{{ exec.description }}</span>
+                  <span v-if="exec.status === 'completed'" class="tool-indicator-duration">{{ formatDuration(exec.durationMs) }}</span>
+                  <ion-icon v-if="exec.status === 'completed'" :icon="checkmarkCircle" class="tool-indicator-status completed" />
+                  <ion-icon v-else-if="exec.status === 'failed'" :icon="closeCircle" class="tool-indicator-status failed" />
+                </div>
+                <!-- Child lines for nested tools (e.g., web research pages) -->
+                <div v-if="exec.children && exec.children.length > 0 && expandedToolIds.has(exec.id)" class="tool-indicator-children">
+                  <div 
+                    v-for="(child, idx) in exec.children" 
+                    :key="child.id"
+                    class="tool-indicator-child"
+                  >
+                    <span class="child-branch">{{ idx === exec.children.length - 1 ? '└─' : '├─' }}</span>
+                    <span class="child-label">{{ child.label }}</span>
+                    <ion-icon v-if="child.status === 'completed'" :icon="checkmarkCircle" class="child-status completed" />
+                    <ion-icon v-else-if="child.status === 'failed'" :icon="closeCircle" class="child-status failed" />
+                  </div>
+                </div>
+                <!-- Expandable result preview -->
+                <div v-if="expandedToolIds.has(exec.id) && exec.resultPreview" class="tool-indicator-preview">
+                  <pre>{{ exec.resultPreview }}</pre>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <!-- Collapsible Tool Execution Log (FIRST - chronological order) -->
-          <div v-if="toolLogs.length > 0" class="tool-log-container">
-            <div class="tool-log-header" @click="toggleToolLog">
-              <ion-icon :icon="isToolLogExpanded ? chevronUpOutline : chevronDownOutline" class="tool-log-chevron" />
-              <span class="tool-log-title">Tool Execution</span>
-              <span class="tool-log-count">{{ toolLogs.length }} {{ toolLogs.length === 1 ? 'tool' : 'tools' }}</span>
-              <span v-if="toolLogs.some(l => l.status === 'running')" class="tool-log-status-badge running">
-                <ion-spinner name="dots" class="badge-spinner" />
-                Running
-              </span>
-              <span v-else-if="toolLogs.every(l => l.status === 'completed')" class="tool-log-status-badge completed">
-                <ion-icon :icon="checkmarkCircle" class="badge-icon" />
-                Complete
-              </span>
-              <span v-else-if="toolLogs.some(l => l.status === 'failed')" class="tool-log-status-badge failed">
-                <ion-icon :icon="closeCircle" class="badge-icon" />
-                Failed
-              </span>
-            </div>
-            
-            <div v-show="isToolLogExpanded" class="tool-log-content">
-              <div 
-                v-for="log in toolLogs" 
-                :key="log.id"
-                :class="['tool-log-entry', getToolLogStatusClass(log.status)]"
-              >
-                <div class="tool-log-entry-header">
-                  <span class="tool-icon" v-html="getToolIcon(log.tool)"></span>
-                  <span class="tool-description">{{ log.description }}</span>
-                  <span v-if="log.status === 'running'" class="tool-status">
-                    <ion-spinner name="dots" class="tool-spinner" />
-                  </span>
-                  <span v-else-if="log.status === 'completed'" class="tool-status completed">
-                    <ion-icon :icon="checkmarkCircle" class="status-icon" />
-                    <span v-if="log.durationMs" class="tool-duration">{{ formatToolLogDuration(log) }}</span>
-                  </span>
-                  <span v-else-if="log.status === 'failed'" class="tool-status failed">
-                    <ion-icon :icon="closeCircle" class="status-icon" />
-                  </span>
-                </div>
-                
-                <!-- Error display -->
-                <div v-if="log.error" class="tool-log-error">
-                  {{ log.error }}
-                </div>
-                
-                <!-- Result preview (expandable) -->
-                <div v-if="log.resultPreview && log.status === 'completed'" class="tool-log-preview">
-                  <pre class="preview-content">{{ log.resultPreview }}</pre>
+          <!-- Inline Tool Indicators (real-time during execution) -->
+          <div v-if="toolLogs.length > 0" class="inline-tool-indicators live">
+            <div 
+              v-for="log in toolLogs" 
+              :key="log.id"
+              class="tool-indicator"
+              :class="{ 
+                running: log.status === 'running', 
+                expanded: expandedToolIds.has(log.id),
+                'has-children': log.children && log.children.length > 0
+              }"
+              @click="toggleToolExpansion(log.id)"
+            >
+              <div class="tool-indicator-main">
+                <span class="tool-indicator-icon" v-html="getToolIcon(log.tool)"></span>
+                <span class="tool-indicator-desc">{{ log.description }}</span>
+                <span v-if="log.status === 'running'" class="tool-indicator-spinner">
+                  <ion-spinner name="dots" />
+                </span>
+                <span v-else-if="log.status === 'completed'" class="tool-indicator-duration">{{ formatToolLogDuration(log) }}</span>
+                <ion-icon v-if="log.status === 'completed'" :icon="checkmarkCircle" class="tool-indicator-status completed" />
+                <ion-icon v-else-if="log.status === 'failed'" :icon="closeCircle" class="tool-indicator-status failed" />
+              </div>
+              
+              <!-- Child lines for nested tools (e.g., web research pages) -->
+              <div v-if="log.children && log.children.length > 0" class="tool-indicator-children">
+                <div 
+                  v-for="(child, idx) in log.children" 
+                  :key="child.id"
+                  class="tool-indicator-child"
+                  :class="{ running: child.status === 'running' }"
+                >
+                  <span class="child-branch">{{ idx === log.children.length - 1 ? '└─' : '├─' }}</span>
+                  <span class="child-label">{{ child.label }}</span>
+                  <ion-spinner v-if="child.status === 'running'" name="dots" class="child-spinner" />
+                  <ion-icon v-else-if="child.status === 'completed'" :icon="checkmarkCircle" class="child-status completed" />
+                  <ion-icon v-else-if="child.status === 'failed'" :icon="closeCircle" class="child-status failed" />
                 </div>
               </div>
               
-              <!-- Streaming tool output (shows real-time content during execution) -->
-              <div v-if="currentToolStreamingContent" class="tool-streaming-area">
-                <div class="tool-streaming-label">
-                  <ion-spinner v-if="toolLogs.some(l => l.status === 'running')" name="dots" class="streaming-spinner" />
-                  <ion-icon v-else :icon="checkmarkCircle" class="streaming-done-icon" />
-                  <span>{{ toolLogs.some(l => l.status === 'running') ? 'Processing...' : 'Result:' }}</span>
-                </div>
-                <pre class="tool-streaming-content">{{ currentToolStreamingContent }}</pre>
+              <!-- Single-line streaming preview while running -->
+              <div v-if="log.status === 'running' && currentToolStreamingContent && log.id === currentRunningToolId" class="tool-indicator-streaming">
+                <span class="streaming-preview">{{ getLastLine(currentToolStreamingContent) }}</span>
+              </div>
+              
+              <!-- Expandable result preview when completed -->
+              <div v-if="log.status === 'completed' && expandedToolIds.has(log.id) && log.resultPreview" class="tool-indicator-preview">
+                <pre>{{ log.resultPreview }}</pre>
+              </div>
+              
+              <!-- Error display -->
+              <div v-if="log.error" class="tool-indicator-error">
+                {{ log.error }}
               </div>
             </div>
           </div>
@@ -406,7 +435,7 @@ import {
   listOutline,
   playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -523,6 +552,14 @@ const formattedToolOutputs = ref<string[]>([]);
 const currentToolStreamingContent = ref(''); // Shows real-time tool output during execution
 const pendingFinalAnswer = ref(''); // Holds the final answer until next query (to keep order correct)
 
+// Inline tool indicators state
+const expandedToolIds = ref<Set<string>>(new Set());
+const currentRunningToolId = computed(() => {
+  const running = toolLogs.value.find(l => l.status === 'running');
+  return running?.id || null;
+});
+const pendingToolExecutions = ref<ToolExecutionRecord[]>([]); // Tool executions to attach to the next assistant message
+
 // Chat history state
 const showHistoryDropdown = ref(false);
 const chatHistory = ref<ChatSession[]>([]);
@@ -593,6 +630,23 @@ async function loadChatHistory() {
 
 async function handleNewChat() {
   showHistoryDropdown.value = false;
+  
+  // Reset all chat state to allow a fresh start
+  isTyping.value = false;
+  isExecutingPlan.value = false;
+  pendingPlan.value = null;
+  currentPlanStep.value = null;
+  toolLogs.value = [];
+  streamingContent.value = '';
+  currentToolStreamingContent.value = '';
+  pendingFinalAnswer.value = '';
+  pendingToolExecutions.value = [];
+  executionSteps.value = [];
+  formattedToolOutputs.value = [];
+  isToolLogExpanded.value = true;
+  activePreview.value = null;
+  expandedToolIds.value = new Set();
+  
   const session = await startNewSession(selectedProjectId.value);
   sessionId.value = session.id;
   messages.value = [];
@@ -669,8 +723,13 @@ async function sendMessage(text?: string) {
   // Commit any pending final answer from previous query to messages
   if (pendingFinalAnswer.value) {
     const prevAnswer = await addMessage(sessionId.value, 'assistant', pendingFinalAnswer.value);
+    // Attach tool executions to the message for persistence
+    if (pendingToolExecutions.value.length > 0) {
+      prevAnswer.toolExecutions = [...pendingToolExecutions.value];
+    }
     messages.value = [...messages.value, prevAnswer];
     pendingFinalAnswer.value = '';
+    pendingToolExecutions.value = [];
     toolLogs.value = [];
   }
 
@@ -819,10 +878,16 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
           scrollToBottom();
         },
         onToolLog: (log: ToolLogEntry) => {
-          // Update tool logs for UI
+          // Update tool logs for UI - create new array to trigger reactivity
           const existingIndex = toolLogs.value.findIndex(l => l.id === log.id);
           if (existingIndex >= 0) {
-            toolLogs.value[existingIndex] = log;
+            // Create a deep copy to ensure Vue detects child changes
+            const updatedLog = { ...log, children: log.children ? [...log.children] : undefined };
+            toolLogs.value = [
+              ...toolLogs.value.slice(0, existingIndex),
+              updatedLog,
+              ...toolLogs.value.slice(existingIndex + 1)
+            ];
           } else {
             toolLogs.value = [...toolLogs.value, log];
           }
@@ -869,6 +934,8 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
     // Will be committed to messages when next query is sent
     if (finalMessage.trim()) {
       pendingFinalAnswer.value = finalMessage;
+      // Capture tool executions for persistence with the message
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
 
     // Handle file creations
@@ -1070,6 +1137,10 @@ async function handleCancelPlan() {
 async function handleExecutePlan() {
   if (!pendingPlan.value) return;
 
+  // Store the plan locally and clear it immediately so the UI hides the plan box
+  const planToExecute = pendingPlan.value;
+  pendingPlan.value = null;
+  
   isExecutingPlan.value = true;
   toolLogs.value = [];
   formattedToolOutputs.value = [];
@@ -1078,18 +1149,10 @@ async function handleExecutePlan() {
   
   try {
     const result = await runPlannerFlow(
-      pendingPlan.value,
+      planToExecute,
       selectedProjectId.value,
       {
         onStepUpdate: (step, index, total) => {
-          // Update the step status in the pending plan for UI feedback
-          if (pendingPlan.value) {
-            const planStep = pendingPlan.value.steps.find(s => s.id === step.id);
-            if (planStep) {
-              planStep.status = step.status;
-              planStep.error = step.error;
-            }
-          }
           currentPlanStep.value = { step, index, total };
           // Clear streaming content when a new step starts
           if (step.status === 'running') {
@@ -1098,10 +1161,16 @@ async function handleExecutePlan() {
           scrollToBottom();
         },
         onToolLog: (log: ToolLogEntry) => {
-          // Update tool logs for UI
+          // Update tool logs for UI - create new array to trigger reactivity
           const existingIndex = toolLogs.value.findIndex(l => l.id === log.id);
           if (existingIndex >= 0) {
-            toolLogs.value[existingIndex] = log;
+            // Create a deep copy to ensure Vue detects child changes
+            const updatedLog = { ...log, children: log.children ? [...log.children] : undefined };
+            toolLogs.value = [
+              ...toolLogs.value.slice(0, existingIndex),
+              updatedLog,
+              ...toolLogs.value.slice(existingIndex + 1)
+            ];
           } else {
             toolLogs.value = [...toolLogs.value, log];
           }
@@ -1124,8 +1193,6 @@ async function handleExecutePlan() {
       }
     );
 
-    // Clear the pending plan
-    pendingPlan.value = null;
     currentPlanStep.value = null;
 
     // Collapse the tool log after completion
@@ -1151,6 +1218,8 @@ async function handleExecutePlan() {
     // Will be committed to messages when next query is sent
     if (finalMessage.trim()) {
       pendingFinalAnswer.value = finalMessage;
+      // Capture tool executions for persistence with the message
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
 
     // Handle file creations
@@ -1277,6 +1346,49 @@ function formatToolLogDuration(entry: ToolLogEntry): string {
   if (entry.durationMs === undefined) return '';
   if (entry.durationMs < 1000) return `${entry.durationMs}ms`;
   return `${(entry.durationMs / 1000).toFixed(1)}s`;
+}
+
+// Helper to format duration from milliseconds
+function formatDuration(ms?: number): string {
+  if (ms === undefined) return '';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Toggle tool indicator expansion for showing details
+function toggleToolExpansion(toolId: string) {
+  if (expandedToolIds.value.has(toolId)) {
+    expandedToolIds.value.delete(toolId);
+  } else {
+    expandedToolIds.value.add(toolId);
+  }
+  // Force reactivity update
+  expandedToolIds.value = new Set(expandedToolIds.value);
+}
+
+// Get last meaningful line from streaming content for preview
+function getLastLine(content: string): string {
+  if (!content) return '';
+  const lines = content.trim().split('\n').filter(line => line.trim());
+  const lastLine = lines[lines.length - 1] || '';
+  // Truncate if too long
+  return lastLine.length > 60 ? lastLine.substring(0, 57) + '...' : lastLine;
+}
+
+// Convert ToolLogEntry to ToolExecutionRecord for persistence
+function toolLogToRecord(log: ToolLogEntry): ToolExecutionRecord {
+  return {
+    id: log.id,
+    tool: log.tool,
+    description: log.description,
+    status: log.status,
+    durationMs: log.durationMs,
+    resultPreview: log.resultPreview,
+    resultData: log.resultData,
+    error: log.error,
+    timestamp: log.startTime,
+    children: log.children,
+  };
 }
 
 function renderMarkdown(content: string): string {
@@ -1726,16 +1838,16 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 /* Messages */
 .message {
   margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
 }
 
 .message.user {
-  display: flex;
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .message.assistant {
-  display: flex;
-  justify-content: flex-start;
+  align-items: flex-start;
 }
 
 .message-bubble {
@@ -2303,6 +2415,227 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
   margin: 0;
   line-height: 1.5;
   background: transparent;
+}
+
+/* ============================================
+   Inline Tool Indicators (Cursor-inspired)
+   ============================================ */
+
+.inline-tool-indicators {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+  padding-left: 8px;
+  width: 100%;
+}
+
+.inline-tool-indicators.persisted {
+  margin-top: 4px;
+  margin-bottom: 0;
+  padding-left: 0;
+  width: 100%;
+  max-width: 90%;
+}
+
+.tool-indicator {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--hn-text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  overflow: hidden;
+  width: 100%;
+}
+
+.tool-indicator:hover {
+  background: rgba(138, 180, 248, 0.05);
+}
+
+.tool-indicator.running {
+  background: rgba(138, 180, 248, 0.08);
+}
+
+.tool-indicator-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.tool-indicator-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.tool-indicator-desc {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--hn-text-secondary);
+}
+
+.tool-indicator-spinner {
+  flex-shrink: 0;
+}
+
+.tool-indicator-spinner ion-spinner {
+  width: 12px;
+  height: 12px;
+  color: var(--hn-purple);
+}
+
+.tool-indicator-duration {
+  font-size: 0.65rem;
+  color: var(--hn-text-muted);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.tool-indicator-status {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.tool-indicator-status.completed {
+  color: var(--hn-green);
+  opacity: 0.7;
+}
+
+.tool-indicator-status.failed {
+  color: #ff5252;
+}
+
+/* Child lines for nested tools (web research pages) */
+.tool-indicator-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+  margin-left: 18px;
+}
+
+.tool-indicator-child {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  color: var(--hn-text-muted);
+  opacity: 0.8;
+}
+
+.tool-indicator-child.running {
+  color: var(--hn-purple);
+  opacity: 1;
+}
+
+.child-branch {
+  font-family: var(--hn-font-mono);
+  color: var(--hn-border-default);
+  user-select: none;
+}
+
+.child-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.child-spinner {
+  width: 10px;
+  height: 10px;
+  color: var(--hn-purple);
+}
+
+.child-status {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.child-status.completed {
+  color: var(--hn-green);
+  opacity: 0.7;
+}
+
+.child-status.failed {
+  color: #ff5252;
+}
+
+/* Single-line streaming preview */
+.tool-indicator-streaming {
+  margin-top: 2px;
+  margin-left: 18px;
+  padding: 2px 6px;
+  background: var(--hn-bg-deep);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.streaming-preview {
+  font-family: var(--hn-font-mono);
+  font-size: 0.65rem;
+  color: var(--hn-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+/* Expandable result preview */
+.tool-indicator-preview {
+  margin-top: 4px;
+  margin-left: 18px;
+  padding: 6px 8px;
+  background: var(--hn-bg-deep);
+  border-radius: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.tool-indicator-preview pre {
+  font-family: var(--hn-font-mono);
+  font-size: 0.65rem;
+  color: var(--hn-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Error display in tool indicator */
+.tool-indicator-error {
+  margin-top: 4px;
+  margin-left: 18px;
+  padding: 4px 8px;
+  background: rgba(255, 82, 82, 0.1);
+  border-radius: 4px;
+  font-size: 0.65rem;
+  color: #ff5252;
+}
+
+/* Expand/collapse visual hint */
+.tool-indicator.has-children .tool-indicator-main::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid var(--hn-text-muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform 0.15s ease;
+  opacity: 0.5;
+  margin-right: 2px;
+}
+
+.tool-indicator.has-children.expanded .tool-indicator-main::before {
+  transform: rotate(90deg);
 }
 
 /* Generating Response Indicator */
