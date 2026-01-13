@@ -433,7 +433,7 @@
                 <!-- Model Catalog -->
                 <div class="field-group">
                   <label>Model Catalog</label>
-                  <p class="field-hint">Download a GGUF model from Hugging Face to run locally.</p>
+                  <p class="field-hint">Download a GGUF model from Hugging Face to run locally. Hover the info icon for details.</p>
                   <div class="catalog-list">
                     <div
                       v-for="model in modelCatalog"
@@ -441,7 +441,25 @@
                       class="catalog-item"
                     >
                       <div class="catalog-info">
-                        <span class="catalog-name">{{ model.name }}</span>
+                        <div class="catalog-name-row">
+                          <span class="catalog-name">{{ model.name }}</span>
+                          <div 
+                            v-if="model.bestFor || model.resourceInfo" 
+                            class="info-icon-wrapper"
+                          >
+                            <ion-icon :icon="informationCircleOutline" class="info-icon" />
+                            <div class="info-tooltip">
+                              <div v-if="model.bestFor" class="tooltip-section">
+                                <strong>Best for:</strong>
+                                <p>{{ model.bestFor }}</p>
+                              </div>
+                              <div v-if="model.resourceInfo" class="tooltip-section">
+                                <strong>System requirements:</strong>
+                                <p>{{ model.resourceInfo }}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                         <span class="catalog-desc">{{ model.description }}</span>
                       </div>
                       <button 
@@ -1210,6 +1228,7 @@ import {
   serverOutline,
   copyOutline,
   downloadOutline,
+  informationCircleOutline,
 } from 'ionicons/icons';
 import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS } from '@/types';
@@ -3241,6 +3260,12 @@ ion-content {
   gap: 4px;
 }
 
+.catalog-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .catalog-name {
   font-size: 0.95rem;
   color: var(--hn-text-primary);
@@ -3250,6 +3275,81 @@ ion-content {
 .catalog-desc {
   font-size: 0.85rem;
   color: var(--hn-text-muted);
+}
+
+/* Info icon and tooltip */
+.info-icon-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.info-icon {
+  font-size: 16px;
+  color: var(--hn-text-muted);
+  cursor: help;
+  transition: color 0.2s ease;
+}
+
+.info-icon-wrapper:hover .info-icon {
+  color: var(--hn-purple);
+}
+
+.info-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 12px;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  pointer-events: none;
+}
+
+.info-icon-wrapper:hover .info-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.info-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--hn-bg-elevated);
+}
+
+.tooltip-section {
+  margin-bottom: 10px;
+}
+
+.tooltip-section:last-child {
+  margin-bottom: 0;
+}
+
+.tooltip-section strong {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--hn-purple);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tooltip-section p {
+  font-size: 0.85rem;
+  color: var(--hn-text-secondary);
+  margin: 0;
+  line-height: 1.4;
 }
 
 .btn-small {
