@@ -328,9 +328,33 @@ The following tools auto-execute without confirmation when used alone:
 
 This improves UX for common read-only queries like "What does file X say about Y?" by removing the confirmation step.
 
-#### Tool Execution Log
+#### Inline Tool Indicators
 
-During and after execution, a collapsible log shows:
+Tool executions are displayed as **inline indicators** within the chat flow (Cursor-inspired UI):
+
+```
+[User Message]
+───────────────────────
+    🔍 Searched "config" in project    2.3s
+    📄 Read settings.ts                 1.1s  
+───────────────────────
+[Assistant Response]
+```
+
+**Features:**
+- Compact single-line display with icon, description, and duration
+- Click to expand and see result preview
+- Persisted with assistant messages in chat history
+- Nested children for multi-step tools (e.g., web research)
+
+**Web Research Nested Display:**
+```
+🌐 Web Research: "Vue best practices"       12.3s
+   ├─ vuejs.org/guide                       ✓
+   ├─ dev.to/vue-tips                       ✓
+   ├─ medium.com/vue-2024                   ✓
+   └─ Processing results                    ✓
+```
 
 | Field | Description |
 |-------|-------------|
@@ -338,10 +362,9 @@ During and after execution, a collapsible log shows:
 | Description | Human-readable step description |
 | Status | Running (spinner), Completed (checkmark), Failed (X) |
 | Duration | Execution time in ms/s |
-| Result preview | Brief preview of tool output (expandable) |
+| Result preview | Click to expand (collapsed by default) |
+| Children | Nested progress for multi-step tools |
 | Error | Error message if tool failed |
-
-The log is **expanded during execution** and **auto-collapses when complete**.
 
 #### Key Functions
 
@@ -396,6 +419,29 @@ interface ToolLogEntry {
   startTime: Date;
   endTime?: Date;
   durationMs?: number;
+  children?: ToolExecutionChild[];  // For nested tools like webResearch
+}
+
+// Child execution step for nested tools
+interface ToolExecutionChild {
+  id: string;
+  label: string;      // e.g., "vuejs.org/guide" or "Processing results"
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  timestamp: Date;
+}
+
+// Tool execution record for persistence in chat history
+interface ToolExecutionRecord {
+  id: string;
+  tool: ToolName;
+  description: string;
+  status: ToolLogStatus;
+  durationMs?: number;
+  resultPreview?: string;
+  resultData?: string;
+  error?: string;
+  timestamp: Date;
+  children?: ToolExecutionChild[];
 }
 
 // Enhanced Planner Flow Result
