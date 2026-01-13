@@ -18,6 +18,8 @@ import {
   MCPSettings,
   DEFAULT_MCP_SETTINGS,
 } from './mcpServer';
+import { getModelManager, HFModelRef } from './modelManager';
+import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
 
 // Graceful handling of unhandled errors.
 unhandled();
@@ -550,6 +552,223 @@ ipcMain.handle('mcp:stop', async () => {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to stop MCP server',
+    };
+  }
+});
+
+// ============================================
+// Local Models IPC Handlers
+// ============================================
+
+// Initialize model manager and set main window
+const modelManager = getModelManager();
+const inferenceRuntime = getInferenceRuntime();
+
+// Set main window reference after app is ready
+app.whenReady().then(() => {
+  const mainWindow = myCapacitorApp.getMainWindow();
+  modelManager.setMainWindow(mainWindow);
+  inferenceRuntime.setMainWindow(mainWindow);
+});
+
+// Get model catalog
+ipcMain.handle('models:getCatalog', async () => {
+  try {
+    const catalog = modelManager.getCatalog();
+    return { success: true, models: catalog };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get catalog',
+    };
+  }
+});
+
+// Fetch model info from Hugging Face
+ipcMain.handle('models:fetchModelInfo', async (_event, repoId: string) => {
+  try {
+    const model = await modelManager.fetchModelInfo(repoId);
+    return { success: true, model };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch model info',
+    };
+  }
+});
+
+// Get installed models
+ipcMain.handle('models:getInstalled', async () => {
+  try {
+    const models = modelManager.getInstalledModels();
+    return { success: true, models };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get installed models',
+    };
+  }
+});
+
+// Get a specific model
+ipcMain.handle('models:getModel', async (_event, modelId: string) => {
+  try {
+    const model = modelManager.getModel(modelId);
+    if (!model) {
+      return { success: false, error: 'Model not found' };
+    }
+    return { success: true, model };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get model',
+    };
+  }
+});
+
+// Install a model
+ipcMain.handle('models:install', async (_event, modelRef: HFModelRef) => {
+  try {
+    const modelId = await modelManager.installModel(modelRef);
+    return { success: true, modelId };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to install model',
+    };
+  }
+});
+
+// Cancel installation
+ipcMain.handle('models:cancelInstall', async (_event, modelId: string) => {
+  try {
+    const cancelled = modelManager.cancelInstall(modelId);
+    return { success: cancelled };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to cancel installation',
+    };
+  }
+});
+
+// Remove a model
+ipcMain.handle('models:remove', async (_event, modelId: string) => {
+  try {
+    const removed = await modelManager.removeModel(modelId);
+    return { success: removed };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to remove model',
+    };
+  }
+});
+
+// Get runtime status
+ipcMain.handle('models:getRuntimeStatus', async () => {
+  try {
+    const available = await isRuntimeAvailable();
+    if (!available) {
+      return {
+        success: true,
+        status: {
+          running: false,
+          ready: false,
+          error: 'node-llama-cpp is not installed. Run: npm install node-llama-cpp',
+        },
+      };
+    }
+    const status = inferenceRuntime.getStatus();
+    return { success: true, status };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get runtime status',
+    };
+  }
+});
+
+// Load a model into runtime
+ipcMain.handle('models:loadModel', async (_event, modelId: string, options?: { gpuLayers?: number; contextLength?: number }) => {
+  try {
+    await inferenceRuntime.loadModel(modelId, options);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to load model',
+    };
+  }
+});
+
+// Unload current model
+ipcMain.handle('models:unloadModel', async () => {
+  try {
+    await inferenceRuntime.unloadModel();
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to unload model',
+    };
+  }
+});
+
+// Run inference
+interface InferenceMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface InferenceOptions {
+  maxTokens?: number;
+  temperature?: number;
+  topP?: number;
+  stopSequences?: string[];
+  stream?: boolean;
+}
+
+ipcMain.handle('models:infer', async (_event, messages: InferenceMessage[], options?: InferenceOptions) => {
+  try {
+    const result = await inferenceRuntime.infer(messages, options);
+    return { success: true, content: result.content };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Inference failed',
+    };
+  }
+});
+
+// Get local model settings
+ipcMain.handle('models:getSettings', async () => {
+  try {
+    const settings = modelManager.getSettings();
+    return { success: true, settings };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get settings',
+    };
+  }
+});
+
+// Save local model settings
+ipcMain.handle('models:saveSettings', async (_event, settings: {
+  modelsDirectory?: string;
+  defaultGpuLayers: number;
+  defaultContextLength: number;
+  huggingFaceToken?: string;
+  autoLoadLastModel: boolean;
+}) => {
+  try {
+    modelManager.saveSettings(settings);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to save settings',
     };
   }
 });
