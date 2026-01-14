@@ -2591,7 +2591,8 @@ export async function createExecutionPlan(
 
     return plan;
   } catch (error) {
-    console.error("[PLANNER] Failed to parse plan:", error, response.content);
+    console.error("[PLANNER] Failed to parse plan:", error);
+    console.log("[PLANNER] Raw response that failed to parse:", response.content.substring(0, 500));
     
     // Return a plan with clarification needed
     return {
@@ -2599,7 +2600,7 @@ export async function createExecutionPlan(
       summary: "",
       steps: [],
       needsClarification: true,
-      clarificationQuestion: "I couldn't understand your request. Could you please rephrase what you'd like me to do?",
+      clarificationQuestion: "I had trouble understanding that request. This may be due to the local model not supporting structured output well. Please try rephrasing, or consider using a model better suited for tool use (e.g., Mistral Instruct, Llama 3 Instruct, or Functionary).",
       originalQuery: userMessage,
       createdAt: new Date(),
     };

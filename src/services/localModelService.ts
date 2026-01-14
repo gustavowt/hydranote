@@ -315,7 +315,23 @@ export async function runInference(
     content: m.content,
   }));
 
+  // DEBUG: Log what we're sending to the inference runtime
+  console.log('[LocalModelService] runInference called with:');
+  console.log('  - Message count:', inferenceMessages.length);
+  inferenceMessages.forEach((m, i) => {
+    console.log(`  - [${i}] ${m.role}: "${m.content.substring(0, 100)}${m.content.length > 100 ? '...' : ''}" (${m.content.length} chars)`);
+  });
+  console.log('  - Options:', options);
+
   const result = await window.electronAPI!.models.infer(inferenceMessages, options);
+  
+  console.log('[LocalModelService] Inference result:', {
+    success: result.success,
+    contentLength: result.content?.length,
+    error: result.error,
+    contentPreview: result.content?.substring(0, 200),
+  });
+  
   if (!result.success) {
     throw new Error(result.error || 'Inference failed');
   }

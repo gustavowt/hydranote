@@ -786,9 +786,12 @@ async function sendMessage(text?: string) {
 
     // Handle empty plan (just a conversation - no tools needed)
     if (plan.steps.length === 0) {
+      console.log('[ChatSidebar] Empty plan - direct conversation mode');
       const systemPrompt = isGlobalMode.value
         ? await buildGlobalSystemPrompt()
         : await buildSystemPrompt(selectedProjectId.value!);
+      
+      console.log('[ChatSidebar] System prompt length:', systemPrompt.length);
       
       // Build messages for LLM
       const llmMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
@@ -799,6 +802,11 @@ async function sendMessage(text?: string) {
         })),
         { role: 'user', content: messageText },
       ];
+
+      console.log('[ChatSidebar] Sending to LLM:');
+      llmMessages.forEach((m, i) => {
+        console.log(`[ChatSidebar]   [${i}] ${m.role}: ${m.content.length} chars`);
+      });
 
       // Stream response directly
       const response = await chatCompletionStreaming(
