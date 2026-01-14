@@ -471,10 +471,12 @@ export interface ToolResult {
     fileName?: string;
     fileId?: string;
     projectId?: string;
+    projectName?: string;
     fileSize?: number;
     chunkCount?: number;
     truncated?: boolean;
     downloadUrl?: string;
+    wasExisting?: boolean; // For createProject upsert - true if project already existed
   };
 }
 
