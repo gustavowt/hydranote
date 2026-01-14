@@ -1746,6 +1746,10 @@ export interface HFModelRef {
   gated?: boolean;
   /** Recommended GPU layers */
   recommendedGpuLayers?: number;
+  /** User-friendly description of what the model is best for */
+  bestFor?: string;
+  /** Resource requirements info (RAM, GPU, etc.) */
+  resourceInfo?: string;
 }
 
 /**

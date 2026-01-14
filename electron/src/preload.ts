@@ -37,6 +37,8 @@ interface HFModelRef {
   architecture?: string;
   gated?: boolean;
   recommendedGpuLayers?: number;
+  bestFor?: string;
+  resourceInfo?: string;
 }
 
 interface LocalModelSettings {

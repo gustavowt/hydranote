@@ -36,6 +36,10 @@ export interface HFModelRef {
   architecture?: string;
   gated?: boolean;
   recommendedGpuLayers?: number;
+  /** User-friendly description of what the model is best for */
+  bestFor?: string;
+  /** Resource requirements info (RAM, GPU, etc.) */
+  resourceInfo?: string;
 }
 
 export interface LocalModelFile {
@@ -108,42 +112,113 @@ const ALLOWED_DOWNLOAD_HOSTS = [
 ];
 
 // Suggested models catalog
+// Organized by use case with user-friendly descriptions
 const CATALOG_MODELS: HFModelRef[] = [
+  // ========== BEST FOR TOOL USE / STRUCTURED OUTPUT ==========
   {
-    id: 'TheBloke/Llama-2-7B-Chat-GGUF',
-    name: 'Llama 2 7B Chat',
-    description: 'Meta Llama 2 7B parameter chat model, quantized for efficient inference',
-    size: 0, // Will be fetched
+    id: 'meetkai/functionary-small-v3.2-GGUF',
+    name: 'Functionary Small v3.2',
+    description: 'Specialized for function calling and tool use',
+    size: 0,
     files: [],
     architecture: 'llama',
-    contextLength: 4096,
+    contextLength: 8192,
+    bestFor: 'Best choice for HydraNote tools (summarize, search, etc.). Specifically trained to follow instructions and output structured data.',
+    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
+  },
+  {
+    id: 'NousResearch/Hermes-2-Pro-Llama-3-8B-GGUF',
+    name: 'Hermes 2 Pro (Llama 3 8B)',
+    description: 'Excellent for tool use and complex instructions',
+    size: 0,
+    files: [],
+    architecture: 'llama',
+    contextLength: 8192,
+    bestFor: 'Great all-rounder. Excellent at following complex instructions, using tools, and having natural conversations.',
+    resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
+  },
+  {
+    id: 'NousResearch/Hermes-3-Llama-3.1-8B-GGUF',
+    name: 'Hermes 3 (Llama 3.1 8B)',
+    description: 'Latest Hermes with improved reasoning',
+    size: 0,
+    files: [],
+    architecture: 'llama',
+    contextLength: 131072,
+    bestFor: 'Newest version with better reasoning. Great for complex tasks and long documents. Supports very long context.',
+    resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
+  },
+  
+  // ========== GENERAL PURPOSE ==========
+  {
+    id: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF',
+    name: 'Llama 3.1 8B Instruct',
+    description: 'Meta\'s latest Llama model with strong instruction following',
+    size: 0,
+    files: [],
+    architecture: 'llama',
+    contextLength: 131072,
+    bestFor: 'Reliable general-purpose assistant. Good at conversations, writing, and answering questions.',
+    resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
   },
   {
     id: 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF',
     name: 'Mistral 7B Instruct v0.2',
-    description: 'Mistral AI instruction-tuned model with 32k context window',
+    description: 'Fast and efficient instruction-following model',
     size: 0,
     files: [],
     architecture: 'mistral',
     contextLength: 32768,
+    bestFor: 'Fast and capable. Good balance of speed and quality for everyday tasks.',
+    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
+  },
+  {
+    id: 'Qwen/Qwen2.5-7B-Instruct-GGUF',
+    name: 'Qwen 2.5 7B Instruct',
+    description: 'Alibaba\'s latest model with excellent instruction following',
+    size: 0,
+    files: [],
+    architecture: 'qwen2',
+    contextLength: 131072,
+    bestFor: 'Excellent at following detailed instructions. Strong at coding and structured tasks.',
+    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
+  },
+  
+  // ========== LIGHTWEIGHT / LOW RESOURCE ==========
+  {
+    id: 'microsoft/Phi-3-mini-4k-instruct-gguf',
+    name: 'Phi-3 Mini (3.8B)',
+    description: 'Microsoft\'s compact but capable model',
+    size: 0,
+    files: [],
+    architecture: 'phi3',
+    contextLength: 4096,
+    bestFor: 'Surprisingly capable for its size. Great if you have limited memory or want faster responses.',
+    resourceInfo: 'Light: Needs ~4GB RAM. Runs on most computers including older ones.',
   },
   {
     id: 'TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF',
     name: 'TinyLlama 1.1B Chat',
-    description: 'Compact 1.1B parameter model, great for testing and low-resource systems',
+    description: 'Ultra-compact model for basic tasks',
     size: 0,
     files: [],
     architecture: 'llama',
     contextLength: 2048,
+    bestFor: 'For testing or very limited hardware. Basic conversations and simple tasks only.',
+    resourceInfo: 'Very Light: Needs ~2GB RAM. Runs on almost any computer.',
   },
+  
+  // ========== LEGACY / ALTERNATIVE ==========
   {
-    id: 'TheBloke/Phi-2-GGUF',
-    name: 'Phi-2 2.7B',
-    description: 'Microsoft Phi-2 small language model with strong reasoning capabilities',
+    id: 'TheBloke/Llama-2-7B-Chat-GGUF',
+    name: 'Llama 2 7B Chat',
+    description: 'Older but well-tested chat model',
     size: 0,
     files: [],
-    architecture: 'phi',
-    contextLength: 2048,
+    architecture: 'llama',
+    contextLength: 4096,
+    bestFor: 'Stable and well-tested. Good for basic conversations if newer models don\'t work.',
+    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
 ];
 
