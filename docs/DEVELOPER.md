@@ -472,6 +472,25 @@ Step 3: write({title: "notes", content: "..."})
   → Generates content from web research context
 ```
 
+#### Upsert Behavior (createProject)
+
+The `createProject` tool uses **upsert semantics** - if a project with the same name already exists (case-insensitive), it returns success with the existing project instead of failing. This ensures:
+- Pipelines can continue even if the project already exists
+- The `projectId` context is always extracted for subsequent steps
+- No manual intervention needed for idempotent operations
+
+#### Failure Handling
+
+The executor stops execution immediately when:
+1. A step fails that provides context needed by subsequent steps
+2. A step has explicit dependencies (`dependsOn`) that failed
+3. An exception occurs during step execution
+
+When execution stops, the user receives a clear error message explaining:
+- Which step failed and why
+- Which steps were skipped as a result
+- Which steps completed successfully before the failure
+
 ### Chat Service (`chatService.ts`)
 
 Manages chat sessions, context windows, and **persistent chat history**.
