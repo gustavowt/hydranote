@@ -2202,9 +2202,42 @@ Manages the node-llama-cpp runtime for local inference.
 | `isReady()` | Check if ready for inference |
 | `loadModel(modelId, options)` | Load model into memory |
 | `unloadModel()` | Unload current model |
-| `infer(messages, options)` | Run inference |
+| `infer(messages, options)` | Run inference with proper chat formatting |
 | `stopInference()` | Stop ongoing inference |
 | `getMemoryUsage()` | Get memory statistics |
+
+#### Message Handling
+
+The inference runtime properly handles chat messages for local models:
+
+1. **Context Clearing**: The context sequence is cleared before each inference to remove leftover tokens
+2. **System Prompt**: Extracted from messages and set via `setChatHistory()` with `type: 'system'`
+3. **Conversation History**: Previous messages are set via `setChatHistory()` with proper types
+4. **User Message**: The last user message is sent via `session.prompt()`
+5. **Fallback**: If `setChatHistory()` fails, a manual prompt with embedded context is used
+
+```
+Messages Array:
+  [0] system: "You are HydraNote..."
+  [1] user: "Hello"
+  [2] assistant: "Hi there!"
+  [3] user: "What can you do?"
+                    ↓
+                    
+LlamaChatSession.setChatHistory([
+  { type: 'system', text: 'You are HydraNote...' },
+  { type: 'user', text: 'Hello' },
+  { type: 'model', response: ['Hi there!'] }  // Note: 'response' array for model
+])
+session.prompt("What can you do?")
+```
+
+**Important node-llama-cpp v3 Format Notes:**
+- System messages: `{ type: 'system', text: string }`
+- User messages: `{ type: 'user', text: string }`
+- Model responses: `{ type: 'model', response: string[] }` (uses `response` not `text`!)
+
+This ensures the model receives proper context using its native chat template (ChatML, Llama2, Mistral, etc.).
 
 ### Local Model Service (`localModelService.ts`)
 
@@ -2306,14 +2339,29 @@ settings.huggingfaceLocal = {
 
 ### Suggested Models
 
-The catalog includes pre-configured suggestions:
+The catalog includes pre-configured suggestions organized by use case:
 
+**Best for Tool Use / Structured Output:**
 | Model | Size | Description |
 |-------|------|-------------|
-| Llama 2 7B Chat | ~4GB | Meta's Llama 2 chat model |
-| Mistral 7B Instruct | ~4GB | Mistral AI instruction model |
-| TinyLlama 1.1B | ~700MB | Compact model for testing |
-| Phi-2 2.7B | ~1.6GB | Microsoft's efficient model |
+| Functionary Small v3.2 | ~6GB | Specialized for function calling and tool use |
+| Hermes 2 Pro (Llama 3 8B) | ~8GB | Excellent for tool use and complex instructions |
+| Hermes 3 (Llama 3.1 8B) | ~8GB | Latest with improved reasoning and long context |
+
+**General Purpose:**
+| Model | Size | Description |
+|-------|------|-------------|
+| Llama 3.1 8B Instruct | ~8GB | Meta's latest with strong instruction following |
+| Mistral 7B Instruct v0.2 | ~6GB | Fast and efficient instruction-following |
+| Qwen 2.5 7B Instruct | ~6GB | Excellent at following detailed instructions |
+
+**Lightweight / Low Resource:**
+| Model | Size | Description |
+|-------|------|-------------|
+| Phi-3 Mini (3.8B) | ~4GB | Compact but capable, good for limited memory |
+| TinyLlama 1.1B Chat | ~2GB | Ultra-compact for testing or very limited hardware |
+
+**Note:** For best results with HydraNote's tool system (summarize, search, etc.), use Functionary or Hermes models as they're specifically trained for structured output.
 
 ### Files
 
