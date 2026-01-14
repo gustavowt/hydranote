@@ -105,6 +105,107 @@ interface ElectronMCPToolResponse {
   error?: string;
 }
 
+// ============================================
+// Local Models Types
+// ============================================
+
+// Model file reference
+interface ElectronHFModelFile {
+  filename: string;
+  sha256?: string;
+  size: number;
+  isPrimary?: boolean;
+}
+
+// Hugging Face model reference
+interface ElectronHFModelRef {
+  id: string;
+  name: string;
+  description: string;
+  size: number;
+  files: ElectronHFModelFile[];
+  quantization?: string;
+  contextLength?: number;
+  architecture?: string;
+  gated?: boolean;
+  recommendedGpuLayers?: number;
+}
+
+// Local model file
+interface ElectronLocalModelFile {
+  filename: string;
+  path: string;
+  size: number;
+  sha256?: string;
+  downloaded: boolean;
+}
+
+// Local model registry entry
+interface ElectronLocalModel {
+  id: string;
+  huggingFaceId: string;
+  name: string;
+  version: string;
+  files: ElectronLocalModelFile[];
+  state: 'not_installed' | 'downloading' | 'installed' | 'failed' | 'paused';
+  installedAt?: string;
+  lastUsed?: string;
+  totalSize: number;
+  downloadedSize: number;
+  primaryModelPath?: string;
+  architecture?: string;
+  contextLength?: number;
+  error?: string;
+}
+
+// Download progress event
+interface ElectronModelDownloadProgress {
+  modelId: string;
+  currentFile: string;
+  fileDownloaded: number;
+  fileTotal: number;
+  totalDownloaded: number;
+  totalSize: number;
+  speed: number;
+  eta?: number;
+  status: string;
+}
+
+// Runtime status
+interface ElectronRuntimeStatus {
+  running: boolean;
+  loadedModelId?: string;
+  loadedModelName?: string;
+  memoryUsage?: number;
+  gpuMemoryUsage?: number;
+  ready: boolean;
+  error?: string;
+}
+
+// Local model settings
+interface ElectronLocalModelSettings {
+  modelsDirectory?: string;
+  defaultGpuLayers: number;
+  defaultContextLength: number;
+  huggingFaceToken?: string;
+  autoLoadLastModel: boolean;
+}
+
+// Inference options
+interface ElectronLocalInferenceOptions {
+  maxTokens?: number;
+  temperature?: number;
+  topP?: number;
+  stopSequences?: string[];
+  stream?: boolean;
+}
+
+// Inference message
+interface ElectronInferenceMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 // Electron API interface
 interface ElectronAPI {
   // File System Operations
@@ -138,6 +239,43 @@ interface ElectronAPI {
     stop: () => Promise<{ success: boolean; error?: string }>;
     onToolRequest: (callback: (request: ElectronMCPToolRequest) => void) => void;
     sendToolResponse: (requestId: string, response: ElectronMCPToolResponse) => void;
+  };
+  // Local Models Operations
+  models: {
+    /** Get available models from catalog */
+    getCatalog: () => Promise<{ success: boolean; models?: ElectronHFModelRef[]; error?: string }>;
+    /** Fetch model info from Hugging Face */
+    fetchModelInfo: (repoId: string) => Promise<{ success: boolean; model?: ElectronHFModelRef; error?: string }>;
+    /** Get installed models from local registry */
+    getInstalled: () => Promise<{ success: boolean; models?: ElectronLocalModel[]; error?: string }>;
+    /** Get a specific installed model */
+    getModel: (modelId: string) => Promise<{ success: boolean; model?: ElectronLocalModel; error?: string }>;
+    /** Start downloading a model */
+    install: (modelRef: ElectronHFModelRef) => Promise<{ success: boolean; modelId?: string; error?: string }>;
+    /** Cancel an ongoing download */
+    cancelInstall: (modelId: string) => Promise<{ success: boolean; error?: string }>;
+    /** Remove an installed model */
+    remove: (modelId: string) => Promise<{ success: boolean; error?: string }>;
+    /** Get runtime status */
+    getRuntimeStatus: () => Promise<{ success: boolean; status?: ElectronRuntimeStatus; error?: string }>;
+    /** Load a model into the runtime */
+    loadModel: (modelId: string, options?: { gpuLayers?: number; contextLength?: number }) => Promise<{ success: boolean; error?: string }>;
+    /** Unload the current model */
+    unloadModel: () => Promise<{ success: boolean; error?: string }>;
+    /** Run inference (non-streaming) */
+    infer: (messages: ElectronInferenceMessage[], options?: ElectronLocalInferenceOptions) => Promise<{ success: boolean; content?: string; error?: string }>;
+    /** Get local model settings */
+    getSettings: () => Promise<{ success: boolean; settings?: ElectronLocalModelSettings; error?: string }>;
+    /** Save local model settings */
+    saveSettings: (settings: ElectronLocalModelSettings) => Promise<{ success: boolean; error?: string }>;
+    /** Listen for download progress events */
+    onDownloadProgress: (callback: (event: unknown, progress: ElectronModelDownloadProgress) => void) => void;
+    /** Listen for runtime status changes */
+    onRuntimeStatusChange: (callback: (event: unknown, status: ElectronRuntimeStatus) => void) => void;
+    /** Remove download progress listener */
+    offDownloadProgress: () => void;
+    /** Remove runtime status listener */
+    offRuntimeStatusChange: () => void;
   };
   // App info
   platform: string;

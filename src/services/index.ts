@@ -321,3 +321,28 @@ export {
 } from './mcpService';
 
 export type { MCPSettings } from './mcpService';
+
+// Local Model Service (Hugging Face models)
+export {
+  isLocalModelsAvailable,
+  getModelCatalog,
+  fetchModelInfo,
+  getInstalledModels,
+  getInstalledModel,
+  installModel,
+  cancelInstallation,
+  removeModel,
+  onDownloadProgress,
+  getRuntimeStatus,
+  onRuntimeStatusChange,
+  loadModel,
+  unloadModel,
+  runInference,
+  loadLocalModelSettings,
+  saveLocalModelSettings,
+  // Utility functions
+  formatFileSize,
+  formatSpeed,
+  formatEta,
+  getProgressPercent,
+} from './localModelService';
