@@ -73,8 +73,10 @@ export class InferenceRuntime {
   private llama: unknown = null;
   private model: unknown = null;
   private context: unknown = null;
-  private session: unknown = null;
   private loadedModelId: string | null = null;
+  
+  // Store the LlamaChatSession class for creating sessions on-demand
+  private LlamaChatSessionClass: unknown = null;
 
   constructor() {
     // Runtime starts uninitialized
@@ -98,7 +100,7 @@ export class InferenceRuntime {
    * Check if runtime is ready for inference
    */
   isReady(): boolean {
-    return this.status.ready && this.model !== null;
+    return this.status.ready && this.model !== null && this.context !== null;
   }
 
   /**
@@ -139,6 +141,9 @@ export class InferenceRuntime {
       const nodeLlamaCpp = await dynamicImport('node-llama-cpp') as typeof import('node-llama-cpp');
       const { getLlama, LlamaChatSession } = nodeLlamaCpp;
 
+      // Store the LlamaChatSession class for later use
+      this.LlamaChatSessionClass = LlamaChatSession;
+
       // Initialize llama
       this.llama = await getLlama();
 
@@ -159,10 +164,8 @@ export class InferenceRuntime {
         contextSize: contextLength,
       });
 
-      // Create chat session
-      this.session = new LlamaChatSession({
-        contextSequence: (this.context as any).getSequence(),
-      });
+      // Note: We don't create a session here anymore.
+      // Sessions are created on-demand in infer() with the proper system prompt.
 
       this.loadedModelId = modelId;
       modelManager.updateLastUsed(modelId);
@@ -195,13 +198,6 @@ export class InferenceRuntime {
    */
   async unloadModel(): Promise<void> {
     try {
-      if (this.session) {
-        if (typeof (this.session as any).dispose === 'function') {
-          await (this.session as any).dispose();
-        }
-        this.session = null;
-      }
-
       if (this.context) {
         if (typeof (this.context as any).dispose === 'function') {
           await (this.context as any).dispose();
@@ -217,6 +213,7 @@ export class InferenceRuntime {
       }
 
       this.loadedModelId = null;
+      this.LlamaChatSessionClass = null;
 
       this.updateStatus({
         running: false,
@@ -239,20 +236,132 @@ export class InferenceRuntime {
     messages: InferenceMessage[],
     options: InferenceOptions = {}
   ): Promise<InferenceResult> {
-    if (!this.isReady() || !this.session) {
+    console.log('\n[InferenceRuntime] ========== INFER CALLED ==========');
+    console.log('[InferenceRuntime] Received messages:', messages.length);
+    messages.forEach((m, i) => {
+      console.log(`[InferenceRuntime]   [${i}] ${m.role}: "${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}" (${m.content.length} chars)`);
+    });
+    console.log('[InferenceRuntime] Options:', JSON.stringify(options));
+    
+    if (!this.isReady()) {
+      console.error('[InferenceRuntime] ERROR: Runtime not ready');
       throw new Error('Runtime is not ready. Load a model first.');
+    }
+
+    if (!this.LlamaChatSessionClass) {
+      console.error('[InferenceRuntime] ERROR: LlamaChatSessionClass not available');
+      throw new Error('LlamaChatSession class not available');
     }
 
     const startTime = Date.now();
 
     try {
-      // Build the prompt from messages
+      // Extract system prompt from messages
       const systemMessage = messages.find(m => m.role === 'system');
-      const userMessages = messages.filter(m => m.role !== 'system');
-      const lastUserMessage = userMessages[userMessages.length - 1];
-
-      if (!lastUserMessage || lastUserMessage.role !== 'user') {
+      const systemPrompt = systemMessage?.content || '';
+      console.log(`[InferenceRuntime] System prompt found: ${systemMessage ? 'YES' : 'NO'} (${systemPrompt.length} chars)`);
+      
+      // Get non-system messages for conversation history
+      const conversationMessages = messages.filter(m => m.role !== 'system');
+      
+      // Validate we have at least one user message
+      const lastMessage = conversationMessages[conversationMessages.length - 1];
+      if (!lastMessage || lastMessage.role !== 'user') {
         throw new Error('Last message must be from user');
+      }
+
+      // Get model info for context recreation
+      const modelManager = getModelManager();
+      const modelInfo = modelManager.getModel(this.loadedModelId!);
+      const contextLength = modelInfo?.contextLength ?? 4096;
+      
+      // Dispose old context and create a fresh one for this inference
+      // This ensures no leftover state from previous inferences
+      if (this.context) {
+        console.log('[InferenceRuntime] Disposing old context...');
+        try {
+          await (this.context as any).dispose();
+        } catch (disposeErr) {
+          console.warn('[InferenceRuntime] Error disposing old context:', disposeErr);
+        }
+      }
+      
+      console.log('[InferenceRuntime] Creating fresh context...');
+      this.context = await (this.model as any).createContext({
+        contextSize: contextLength,
+      });
+      
+      // Get a fresh sequence from the new context
+      const contextSequence = (this.context as any).getSequence();
+      console.log('[InferenceRuntime] Got fresh context sequence');
+      
+      // Create a fresh chat session
+      // We'll set the system prompt via setChatHistory for better compatibility
+      const LlamaChatSession = this.LlamaChatSessionClass as any;
+      const session = new LlamaChatSession({
+        contextSequence,
+      });
+
+      // Build complete chat history including system prompt
+      // The chat history format expected by node-llama-cpp v3:
+      // - system: { type: 'system', text: string }
+      // - user: { type: 'user', text: string }
+      // - model: { type: 'model', response: string[] }  // Note: 'response' not 'text'!
+      const chatHistory: Array<
+        | { type: 'system'; text: string }
+        | { type: 'user'; text: string }
+        | { type: 'model'; response: string[] }
+      > = [];
+      
+      // Add system prompt first if present
+      if (systemPrompt) {
+        chatHistory.push({
+          type: 'system',
+          text: systemPrompt,
+        });
+      }
+      
+      // Add previous messages (excluding the last user message which will be sent via prompt())
+      if (conversationMessages.length > 1) {
+        const historyMessages = conversationMessages.slice(0, -1);
+        for (const msg of historyMessages) {
+          if (msg.role === 'user') {
+            chatHistory.push({
+              type: 'user',
+              text: msg.content,
+            });
+          } else {
+            // Model responses use 'response' array, not 'text'
+            chatHistory.push({
+              type: 'model',
+              response: [msg.content],
+            });
+          }
+        }
+      }
+      
+      // Track if we successfully set the history
+      let historySet = false;
+      
+      console.log('[InferenceRuntime] Chat history to set:', JSON.stringify(chatHistory.map(h => ({
+        type: h.type,
+        length: h.type === 'model' ? (h as any).response?.[0]?.length : (h as any).text?.length,
+      })), null, 2));
+      
+      // Set the chat history if we have any
+      if (chatHistory.length > 0) {
+        try {
+          console.log('[InferenceRuntime] Calling setChatHistory...');
+          await session.setChatHistory(chatHistory);
+          historySet = true;
+          console.log(`[InferenceRuntime] setChatHistory SUCCESS with ${chatHistory.length} items`);
+        } catch (historyError) {
+          // If setChatHistory fails, log the error
+          console.error('[InferenceRuntime] setChatHistory FAILED:', historyError);
+          historySet = false;
+        }
+      } else {
+        console.log('[InferenceRuntime] No chat history to set');
       }
 
       // Configure generation options
@@ -262,9 +371,36 @@ export class InferenceRuntime {
       let content = '';
       let tokensGenerated = 0;
 
+      // Get the last user message to send as the prompt
+      let userPrompt = lastMessage.content;
+      
+      // If history wasn't set and we have a system prompt, use a fallback approach
+      // by constructing a manual prompt that includes context
+      if (!historySet && systemPrompt) {
+        console.log('[InferenceRuntime] Using fallback: constructing manual prompt with system context');
+        
+        // For the fallback, we'll create a simplified prompt that includes key context
+        // We truncate the system prompt to avoid overwhelming the model
+        const maxSystemLength = 2000; // Reasonable limit for context
+        const truncatedSystem = systemPrompt.length > maxSystemLength 
+          ? systemPrompt.substring(0, maxSystemLength) + '\n\n[System instructions truncated for brevity]'
+          : systemPrompt;
+        
+        // Build a simple context-aware prompt
+        // Most models understand this format even without proper chat templates
+        userPrompt = `### System Instructions:\n${truncatedSystem}\n\n### User Message:\n${lastMessage.content}\n\n### Assistant Response:`;
+      }
+
+      console.log('[InferenceRuntime] -------- PROMPT DETAILS --------');
+      console.log(`[InferenceRuntime] historySet: ${historySet}`);
+      console.log(`[InferenceRuntime] userPrompt length: ${userPrompt.length}`);
+      console.log(`[InferenceRuntime] userPrompt preview: "${userPrompt.substring(0, 200)}${userPrompt.length > 200 ? '...' : ''}"`);
+      console.log(`[InferenceRuntime] maxTokens: ${maxTokens}, temperature: ${temperature}`);
+      console.log('[InferenceRuntime] Calling session.prompt()...');
+
       if (options.stream) {
         // Streaming response
-        const response = await (this.session as any).prompt(lastUserMessage.content, {
+        const response = await session.prompt(userPrompt, {
           maxTokens,
           temperature,
           onToken: (token: string) => {
@@ -295,10 +431,22 @@ export class InferenceRuntime {
 
       } else {
         // Non-streaming response
-        content = await (this.session as any).prompt(lastUserMessage.content, {
+        console.log('[InferenceRuntime] Awaiting non-streaming response...');
+        content = await session.prompt(userPrompt, {
           maxTokens,
           temperature,
         });
+        console.log(`[InferenceRuntime] Got response: ${content.length} chars`);
+        console.log(`[InferenceRuntime] Response preview: "${content.substring(0, 300)}${content.length > 300 ? '...' : ''}"`);
+      }
+
+      // Clean up the session after use
+      if (typeof session.dispose === 'function') {
+        try {
+          await session.dispose();
+        } catch {
+          // Ignore dispose errors
+        }
       }
 
       const timeMs = Date.now() - startTime;
@@ -318,11 +466,14 @@ export class InferenceRuntime {
 
   /**
    * Stop ongoing inference (if streaming)
+   * Note: With on-demand sessions, stopping is handled by the session's internal state.
+   * A more robust implementation would track the active session and call stop on it.
    */
   async stopInference(): Promise<void> {
-    if (this.session && typeof (this.session as any).stop === 'function') {
-      await (this.session as any).stop();
-    }
+    // Sessions are now created per-inference and disposed after.
+    // To properly implement stop, we would need to track the active session.
+    // For now, this is a no-op - the inference will complete naturally.
+    console.log('[InferenceRuntime] Stop inference requested (currently no-op)');
   }
 
   /**

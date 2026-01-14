@@ -730,10 +730,20 @@ interface InferenceOptions {
 }
 
 ipcMain.handle('models:infer', async (_event, messages: InferenceMessage[], options?: InferenceOptions) => {
+  console.log('\n[IPC:models:infer] Received inference request');
+  console.log('[IPC:models:infer] Messages count:', messages?.length);
+  if (messages) {
+    messages.forEach((m, i) => {
+      console.log(`[IPC:models:infer]   [${i}] ${m.role}: ${m.content?.length || 0} chars`);
+    });
+  }
+  
   try {
     const result = await inferenceRuntime.infer(messages, options);
+    console.log('[IPC:models:infer] Success! Content length:', result.content?.length);
     return { success: true, content: result.content };
   } catch (error) {
+    console.error('[IPC:models:infer] Error:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Inference failed',
