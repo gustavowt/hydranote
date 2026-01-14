@@ -309,7 +309,7 @@ export interface ManagedContext {
 /**
  * LLM Provider type
  */
-export type LLMProvider = 'openai' | 'ollama' | 'anthropic' | 'google';
+export type LLMProvider = 'openai' | 'ollama' | 'anthropic' | 'google' | 'huggingface_local';
 
 /**
  * OpenAI configuration
@@ -345,6 +345,18 @@ export interface GoogleConfig {
 }
 
 /**
+ * Hugging Face Local model configuration
+ */
+export interface HuggingFaceLocalConfig {
+  /** Local model ID (from registry) */
+  modelId: string;
+  /** Context window size */
+  contextLength?: number;
+  /** Number of layers to offload to GPU */
+  gpuLayers?: number;
+}
+
+/**
  * Complete LLM settings
  */
 export interface LLMSettings {
@@ -353,6 +365,7 @@ export interface LLMSettings {
   ollama: OllamaConfig;
   anthropic: AnthropicConfig;
   google: GoogleConfig;
+  huggingfaceLocal: HuggingFaceLocalConfig;
   /** Note formatting settings (Phase 9) */
   noteSettings: NoteSettings;
 }
@@ -377,6 +390,11 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   google: {
     apiKey: '',
     model: 'gemini-2.5-flash',
+  },
+  huggingfaceLocal: {
+    modelId: '',
+    contextLength: 4096,
+    gpuLayers: 0,
   },
   noteSettings: {
     formatInstructions: '',
@@ -1680,3 +1698,221 @@ export interface EnhancedPlannerFlowResult {
   /** Whether the flow completed successfully */
   success: boolean;
 }
+
+// ============================================
+// Local Model Types (Hugging Face)
+// ============================================
+
+/**
+ * Model installation state
+ */
+export type ModelInstallState = 'not_installed' | 'downloading' | 'installed' | 'failed' | 'paused';
+
+/**
+ * Hugging Face model file reference
+ */
+export interface HFModelFile {
+  /** File name (e.g., "llama-2-7b.Q4_K_M.gguf") */
+  filename: string;
+  /** SHA256 checksum for verification */
+  sha256?: string;
+  /** File size in bytes */
+  size: number;
+  /** Whether this is the primary model file */
+  isPrimary?: boolean;
+}
+
+/**
+ * Hugging Face model reference (from catalog)
+ */
+export interface HFModelRef {
+  /** Hugging Face repository ID (e.g., "TheBloke/Llama-2-7B-GGUF") */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Model description */
+  description: string;
+  /** Total size in bytes (all files) */
+  size: number;
+  /** List of model files */
+  files: HFModelFile[];
+  /** Quantization type (e.g., "Q4_K_M", "Q5_K_S") */
+  quantization?: string;
+  /** Maximum context length */
+  contextLength?: number;
+  /** Model architecture (e.g., "llama", "mistral") */
+  architecture?: string;
+  /** Whether model requires authentication */
+  gated?: boolean;
+  /** Recommended GPU layers */
+  recommendedGpuLayers?: number;
+}
+
+/**
+ * Local model file (downloaded)
+ */
+export interface LocalModelFile {
+  /** File name */
+  filename: string;
+  /** Full path on disk */
+  path: string;
+  /** File size in bytes */
+  size: number;
+  /** SHA256 checksum (verified) */
+  sha256?: string;
+  /** Download state */
+  downloaded: boolean;
+}
+
+/**
+ * Local model registry entry
+ */
+export interface LocalModel {
+  /** Local model ID (UUID) */
+  id: string;
+  /** Hugging Face repository ID */
+  huggingFaceId: string;
+  /** Display name */
+  name: string;
+  /** Model version/revision */
+  version: string;
+  /** List of downloaded files */
+  files: LocalModelFile[];
+  /** Current installation state */
+  state: ModelInstallState;
+  /** When model was installed */
+  installedAt?: Date;
+  /** When model was last used */
+  lastUsed?: Date;
+  /** Total size in bytes */
+  totalSize: number;
+  /** Downloaded size in bytes */
+  downloadedSize: number;
+  /** Path to primary model file */
+  primaryModelPath?: string;
+  /** Model architecture */
+  architecture?: string;
+  /** Maximum context length */
+  contextLength?: number;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Model download progress event
+ */
+export interface ModelDownloadProgress {
+  /** Model ID */
+  modelId: string;
+  /** Current file being downloaded */
+  currentFile: string;
+  /** Bytes downloaded for current file */
+  fileDownloaded: number;
+  /** Total bytes for current file */
+  fileTotal: number;
+  /** Total bytes downloaded across all files */
+  totalDownloaded: number;
+  /** Total bytes to download */
+  totalSize: number;
+  /** Download speed in bytes per second */
+  speed: number;
+  /** Estimated time remaining in seconds */
+  eta?: number;
+  /** Current status message */
+  status: string;
+}
+
+/**
+ * Inference runtime status
+ */
+export interface RuntimeStatus {
+  /** Whether runtime is active */
+  running: boolean;
+  /** Currently loaded model ID */
+  loadedModelId?: string;
+  /** Loaded model name */
+  loadedModelName?: string;
+  /** Memory usage in bytes */
+  memoryUsage?: number;
+  /** GPU memory usage in bytes */
+  gpuMemoryUsage?: number;
+  /** Whether model is ready for inference */
+  ready: boolean;
+  /** Error message if runtime failed */
+  error?: string;
+}
+
+/**
+ * Model inference options
+ */
+export interface LocalInferenceOptions {
+  /** Maximum tokens to generate */
+  maxTokens?: number;
+  /** Temperature for sampling */
+  temperature?: number;
+  /** Top-p nucleus sampling */
+  topP?: number;
+  /** Stop sequences */
+  stopSequences?: string[];
+  /** Stream output */
+  stream?: boolean;
+}
+
+/**
+ * Local model settings
+ */
+export interface LocalModelSettings {
+  /** Models storage directory (defaults to userData/models) */
+  modelsDirectory?: string;
+  /** Default GPU layers to use */
+  defaultGpuLayers: number;
+  /** Default context length */
+  defaultContextLength: number;
+  /** Hugging Face API token for gated models */
+  huggingFaceToken?: string;
+  /** Auto-load last used model on startup */
+  autoLoadLastModel: boolean;
+}
+
+/**
+ * Default local model settings
+ */
+export const DEFAULT_LOCAL_MODEL_SETTINGS: LocalModelSettings = {
+  defaultGpuLayers: 0,
+  defaultContextLength: 4096,
+  autoLoadLastModel: false,
+};
+
+/**
+ * Suggested local models for the catalog
+ */
+export const SUGGESTED_LOCAL_MODELS: Partial<HFModelRef>[] = [
+  {
+    id: 'TheBloke/Llama-2-7B-Chat-GGUF',
+    name: 'Llama 2 7B Chat',
+    description: 'Meta Llama 2 7B parameter chat model, quantized for efficient inference',
+    architecture: 'llama',
+    contextLength: 4096,
+  },
+  {
+    id: 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF',
+    name: 'Mistral 7B Instruct v0.2',
+    description: 'Mistral AI instruction-tuned model with 32k context window',
+    architecture: 'mistral',
+    contextLength: 32768,
+  },
+  {
+    id: 'TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF',
+    name: 'TinyLlama 1.1B Chat',
+    description: 'Compact 1.1B parameter model, great for testing and low-resource systems',
+    architecture: 'llama',
+    contextLength: 2048,
+  },
+  {
+    id: 'TheBloke/Phi-2-GGUF',
+    name: 'Phi-2 2.7B',
+    description: 'Microsoft Phi-2 small language model with strong reasoning capabilities',
+    architecture: 'phi',
+    contextLength: 2048,
+  },
+];

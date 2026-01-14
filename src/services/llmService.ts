@@ -1,6 +1,6 @@
 /**
  * LLM Service
- * Handles communication with OpenAI and Ollama LLM providers
+ * Handles communication with OpenAI, Ollama, Anthropic, Google, and local Hugging Face LLM providers
  */
 
 import type {
@@ -12,8 +12,10 @@ import type {
   NoteSettings,
   AnthropicConfig,
   GoogleConfig,
+  HuggingFaceLocalConfig,
 } from '../types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
+import { isLocalModelsAvailable, runInference, getRuntimeStatus, loadModel } from './localModelService';
 
 const STORAGE_KEY = 'hydranote_llm_settings';
 
@@ -66,6 +68,8 @@ export function isConfigured(): boolean {
       return !!settings.anthropic.apiKey;
     case 'google':
       return !!settings.google.apiKey;
+    case 'huggingface_local':
+      return !!settings.huggingfaceLocal?.modelId;
     default:
       return false;
   }
@@ -737,6 +741,93 @@ async function streamGoogle(
 }
 
 // ============================================
+// Hugging Face Local API
+// ============================================
+
+/**
+ * Check and ensure the model is loaded before inference
+ */
+async function ensureModelLoaded(config: HuggingFaceLocalConfig): Promise<void> {
+  if (!isLocalModelsAvailable()) {
+    throw new Error('Local models are only available in the Electron app');
+  }
+
+  const status = await getRuntimeStatus();
+  
+  // If a different model is loaded, we need to load the correct one
+  if (status.loadedModelId !== config.modelId) {
+    await loadModel(config.modelId, {
+      gpuLayers: config.gpuLayers,
+      contextLength: config.contextLength,
+    });
+  }
+  
+  // Verify the model is ready
+  const newStatus = await getRuntimeStatus();
+  if (!newStatus.ready) {
+    throw new Error(newStatus.error || 'Model failed to load');
+  }
+}
+
+/**
+ * Call local Hugging Face model for completion
+ */
+async function callHuggingFaceLocal(
+  request: LLMCompletionRequest,
+  config: HuggingFaceLocalConfig
+): Promise<LLMCompletionResponse> {
+  await ensureModelLoaded(config);
+
+  const content = await runInference(request.messages, {
+    maxTokens: request.maxTokens ?? 2048,
+    temperature: request.temperature ?? 0.7,
+    stream: false,
+  });
+
+  return {
+    content,
+    finishReason: 'stop',
+  };
+}
+
+/**
+ * Stream completion from local Hugging Face model
+ * Note: True streaming would require IPC event handling
+ * For now, this fetches the complete response and emits it as chunks
+ */
+async function streamHuggingFaceLocal(
+  request: LLMCompletionRequest,
+  config: HuggingFaceLocalConfig,
+  onChunk: LLMStreamCallback
+): Promise<LLMCompletionResponse> {
+  await ensureModelLoaded(config);
+
+  // TODO: Implement true streaming via IPC events
+  // For now, get the full response and simulate streaming
+  const content = await runInference(request.messages, {
+    maxTokens: request.maxTokens ?? 2048,
+    temperature: request.temperature ?? 0.7,
+    stream: false, // Would be true with proper IPC streaming
+  });
+
+  // Emit the content in small chunks to simulate streaming
+  const chunkSize = 20;
+  for (let i = 0; i < content.length; i += chunkSize) {
+    const chunk = content.slice(i, i + chunkSize);
+    onChunk(chunk, false);
+    // Small delay to simulate streaming
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
+  onChunk('', true);
+
+  return {
+    content,
+    finishReason: 'stop',
+  };
+}
+
+// ============================================
 // Main API
 // ============================================
 
@@ -772,6 +863,12 @@ export async function chatCompletion(
         throw new Error('Google API key not configured. Please add your API key in Settings.');
       }
       return callGoogle(request, settings.google);
+    
+    case 'huggingface_local':
+      if (!settings.huggingfaceLocal?.modelId) {
+        throw new Error('No local model selected. Please select a model in Settings.');
+      }
+      return callHuggingFaceLocal(request, settings.huggingfaceLocal);
     
     default:
       throw new Error(`Unknown LLM provider: ${settings.provider}`);
@@ -812,6 +909,14 @@ export async function chatCompletionStreaming(
         throw new Error('Google API key not configured. Please add your API key in Settings.');
       }
       return streamGoogle(request, settings.google, onChunk);
+    
+    case 'huggingface_local':
+      if (!settings.huggingfaceLocal?.modelId) {
+        throw new Error('No local model selected. Please select a model in Settings.');
+      }
+      // Note: Streaming for local models would be handled differently
+      // For now, we call non-streaming and emit the full result
+      return streamHuggingFaceLocal(request, settings.huggingfaceLocal, onChunk);
     
     default:
       throw new Error(`Unknown LLM provider: ${settings.provider}`);
