@@ -845,4 +845,3 @@ export function parseLineNumberSpec(
   
   return { startLine, endLine };
 }
-

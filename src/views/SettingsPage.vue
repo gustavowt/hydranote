@@ -329,6 +329,157 @@
               </div>
             </div>
 
+            <!-- Local Model Configuration -->
+            <div v-if="settings.provider === 'huggingface_local'" class="config-panel">
+              <h3 class="config-title">Local Model Configuration</h3>
+              
+              <div v-if="!localModelsAvailable" class="notice warning">
+                <ion-icon :icon="alertCircleOutline" />
+                <span>Local models are only available in the desktop (Electron) app.</span>
+              </div>
+
+              <div v-else class="config-fields">
+                <!-- Runtime Status -->
+                <div v-if="runtimeStatus" class="runtime-status" :class="{ ready: runtimeStatus.ready, loading: loadingModel }">
+                  <div class="status-row">
+                    <span class="status-label">Runtime:</span>
+                    <span v-if="loadingModel" class="status-value text-loading">
+                      <ion-spinner name="crescent" /> Loading model...
+                    </span>
+                    <span v-else class="status-value" :class="runtimeStatus.ready ? 'text-success' : 'text-muted'">
+                      {{ runtimeStatus.ready ? 'Ready' : 'Not loaded' }}
+                    </span>
+                  </div>
+                  <div v-if="runtimeStatus.loadedModelName" class="status-row">
+                    <span class="status-label">Loaded:</span>
+                    <span class="status-value">{{ runtimeStatus.loadedModelName }}</span>
+                  </div>
+                  <div v-if="runtimeStatus.error && !loadingModel" class="status-row error">
+                    <ion-icon :icon="alertCircleOutline" />
+                    <span>{{ runtimeStatus.error }}</span>
+                  </div>
+                </div>
+
+                <!-- Installed Models -->
+                <div class="field-group">
+                  <label>Installed Models</label>
+                  <div v-if="loadingLocalModels" class="loading-state">
+                    <ion-spinner name="crescent" />
+                    <span>Loading models...</span>
+                  </div>
+                  <div v-else-if="installedModels.length === 0" class="empty-state">
+                    <ion-icon :icon="cubeOutline" />
+                    <span>No models installed. Download one from the catalog below.</span>
+                  </div>
+                  <div v-else class="models-list">
+                    <button
+                      v-for="model in installedModels"
+                      :key="model.id"
+                      class="model-item"
+                      :class="{ 
+                        selected: settings.huggingfaceLocal?.modelId === model.id,
+                        downloading: model.state === 'downloading'
+                      }"
+                      @click="selectLocalModel(model)"
+                      :disabled="model.state !== 'installed'"
+                    >
+                      <ion-icon :icon="cubeOutline" />
+                      <div class="model-item-info">
+                        <span class="model-name">{{ model.name }}</span>
+                        <span class="model-size">{{ formatFileSize(model.totalSize) }}</span>
+                      </div>
+                      <span v-if="model.state === 'downloading'" class="model-status downloading">
+                        Downloading...
+                      </span>
+                      <span v-else-if="model.state === 'failed'" class="model-status failed">
+                        Failed
+                      </span>
+                      <ion-icon
+                        v-else-if="settings.huggingfaceLocal?.modelId === model.id"
+                        :icon="checkmarkOutline"
+                        class="check-icon"
+                      />
+                      <button 
+                        class="remove-model-btn" 
+                        @click.stop="handleRemoveModel(model.id)"
+                        title="Remove model"
+                      >
+                        <ion-icon :icon="trashOutline" />
+                      </button>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Download Progress -->
+                <div v-if="downloadProgress" class="download-progress">
+                  <div class="progress-header">
+                    <span class="progress-label">Downloading: {{ downloadProgress.currentFile }}</span>
+                    <span class="progress-stats">
+                      {{ formatSpeed(downloadProgress.speed) }} · ETA: {{ formatEta(downloadProgress.eta || 0) }}
+                    </span>
+                  </div>
+                  <div class="progress-bar">
+                    <div 
+                      class="progress-fill" 
+                      :style="{ width: getProgressPercent(downloadProgress) + '%' }"
+                    />
+                  </div>
+                  <div class="progress-footer">
+                    <span>{{ formatFileSize(downloadProgress.totalDownloaded) }} / {{ formatFileSize(downloadProgress.totalSize) }}</span>
+                    <button class="cancel-btn" @click="handleCancelDownload">Cancel</button>
+                  </div>
+                </div>
+
+                <!-- Model Catalog -->
+                <div class="field-group">
+                  <label>Model Catalog</label>
+                  <p class="field-hint">Download a GGUF model from Hugging Face to run locally.</p>
+                  <div class="catalog-list">
+                    <div
+                      v-for="model in modelCatalog"
+                      :key="model.id"
+                      class="catalog-item"
+                    >
+                      <div class="catalog-info">
+                        <span class="catalog-name">{{ model.name }}</span>
+                        <span class="catalog-desc">{{ model.description }}</span>
+                      </div>
+                      <button 
+                        class="btn btn-small"
+                        @click="handleInstallModel(model)"
+                        :disabled="installingModel !== null || isModelInstalled(model.id)"
+                      >
+                        <ion-spinner v-if="installingModel === model.id" name="crescent" />
+                        <span v-else-if="isModelInstalled(model.id)">Installed</span>
+                        <span v-else>Download</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- HuggingFace Token (for gated models) -->
+                <div class="field-group">
+                  <label>Hugging Face Token (Optional)</label>
+                  <div class="input-wrapper">
+                    <input
+                      v-model="localModelToken"
+                      :type="showHfToken ? 'text' : 'password'"
+                      placeholder="hf_..."
+                    />
+                    <button class="toggle-visibility" @click="showHfToken = !showHfToken">
+                      <ion-icon :icon="showHfToken ? eyeOffOutline : eyeOutline" />
+                    </button>
+                  </div>
+                  <span class="field-hint">
+                    Required for gated/private models. Get your token at
+                    <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">
+                      huggingface.co/settings/tokens
+                    </a>
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <!-- Connection Status -->
             <div v-if="connectionStatus" :class="['connection-status', connectionStatus.success ? 'success' : 'error']">
               <ion-icon :icon="connectionStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
@@ -1060,13 +1211,14 @@ import {
   copyOutline,
   downloadOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS } from '@/types';
 import { 
   OpenAiIcon, 
   ClaudeIcon, 
   GeminiIcon, 
   OllamaIcon,
+  HuggingFaceIcon,
   SearxngIcon,
   BraveIcon,
   DuckDuckGoIcon,
@@ -1100,6 +1252,23 @@ import {
   getMCPServerStatus,
   generateMCPConfig,
   isMCPAvailable,
+  // Local models
+  isLocalModelsAvailable,
+  getInstalledModels,
+  getModelCatalog,
+  installModel,
+  removeModel,
+  cancelInstallation,
+  onDownloadProgress,
+  getRuntimeStatus,
+  loadLocalModelSettings,
+  saveLocalModelSettings,
+  loadModel,
+  unloadModel,
+  formatFileSize,
+  formatSpeed,
+  formatEta,
+  getProgressPercent,
 } from '@/services';
 import type { MCPSettings } from '@/services';
 
@@ -1128,6 +1297,12 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
     name: 'Ollama',
     description: 'Local LLMs: Llama, Mistral, etc.',
     iconComponent: OllamaIcon,
+  },
+  {
+    id: 'huggingface_local',
+    name: 'Local Model',
+    description: 'Run Hugging Face GGUF models locally',
+    iconComponent: HuggingFaceIcon,
   },
 ];
 
@@ -1230,18 +1405,33 @@ const generatingToken = ref(false);
 const mcpServerRunning = ref(false);
 const mcpStatus = ref<{ success: boolean; message: string } | null>(null);
 
+// Local Models section state
+const localModelsAvailable = ref(false);
+const installedModels = ref<LocalModel[]>([]);
+const modelCatalog = ref<HFModelRef[]>([]);
+const loadingLocalModels = ref(false);
+const downloadProgress = ref<ModelDownloadProgress | null>(null);
+const runtimeStatus = ref<RuntimeStatus | null>(null);
+const installingModel = ref<string | null>(null);
+const loadingModel = ref(false);
+const showHfToken = ref(false);
+let progressUnsubscribe: (() => void) | null = null;
+
+// Local model token (stored separately from settings for security)
+const localModelToken = ref('');
+
 onMounted(async () => {
   settings.value = loadSettings();
   fsSettings.value = loadFileSystemSettings();
   webSearchSettings.value = loadWebSearchSettings();
   indexerSettings.value = loadIndexerSettings();
   isFileSystemSupported.value = isFileSystemAccessSupported();
-  
+
   // Start file watcher if enabled
   if (fsSettings.value.enabled && fsSettings.value.watchForChanges) {
     startFileWatcher();
   }
-  
+
   // Load MCP settings if available
   isMcpAvailable.value = isMCPAvailable();
   if (isMcpAvailable.value) {
@@ -1249,11 +1439,37 @@ onMounted(async () => {
     const status = await getMCPServerStatus();
     mcpServerRunning.value = status.running;
   }
+
+  // Load local models if available
+  localModelsAvailable.value = isLocalModelsAvailable();
+  if (localModelsAvailable.value) {
+    await loadLocalModelsData();
+    
+    // Subscribe to download progress
+    progressUnsubscribe = onDownloadProgress((progress) => {
+      downloadProgress.value = progress;
+      if (progress.status === 'completed') {
+        downloadProgress.value = null;
+        installingModel.value = null;
+        loadLocalModelsData(); // Refresh the list
+      }
+    });
+
+    // Load settings including token
+    const localSettings = await loadLocalModelSettings();
+    localModelToken.value = localSettings.huggingFaceToken || '';
+  }
 });
 
 onUnmounted(() => {
   // Stop file watcher when leaving settings
   stopFileWatcher();
+  
+  // Unsubscribe from download progress
+  if (progressUnsubscribe) {
+    progressUnsubscribe();
+    progressUnsubscribe = null;
+  }
 });
 
 async function handleSave() {
@@ -1780,6 +1996,180 @@ async function handleSaveMcp() {
       success: false,
       message: result.error || 'Failed to save MCP settings',
     };
+  }
+}
+
+// ============================================
+// Local Models Functions
+// ============================================
+
+async function loadLocalModelsData() {
+  loadingLocalModels.value = true;
+  
+  try {
+    const [installed, catalog, status] = await Promise.all([
+      getInstalledModels(),
+      getModelCatalog(),
+      getRuntimeStatus(),
+    ]);
+    
+    installedModels.value = installed;
+    modelCatalog.value = catalog;
+    runtimeStatus.value = status;
+  } catch (error) {
+    console.error('Failed to load local models:', error);
+  } finally {
+    loadingLocalModels.value = false;
+  }
+}
+
+async function selectLocalModel(model: LocalModel) {
+  if (model.state === 'installed') {
+    // Update settings with selected model
+    settings.value.huggingfaceLocal = {
+      ...settings.value.huggingfaceLocal,
+      modelId: model.id,
+    };
+    
+    // Load the model into runtime
+    loadingModel.value = true;
+    runtimeStatus.value = {
+      ...runtimeStatus.value,
+      running: true,
+      ready: false,
+      loadedModelId: model.id,
+      loadedModelName: model.name,
+    } as RuntimeStatus;
+    
+    try {
+      await loadModel(model.id, {
+        gpuLayers: settings.value.huggingfaceLocal.gpuLayers,
+        contextLength: settings.value.huggingfaceLocal.contextLength,
+      });
+      
+      // Refresh runtime status
+      runtimeStatus.value = await getRuntimeStatus();
+      
+      const toast = await toastController.create({
+        message: `Model "${model.name}" loaded successfully`,
+        duration: 2000,
+        color: 'success',
+        position: 'top',
+      });
+      await toast.present();
+    } catch (error) {
+      runtimeStatus.value = {
+        running: false,
+        ready: false,
+        error: error instanceof Error ? error.message : 'Failed to load model',
+      };
+      
+      const toast = await toastController.create({
+        message: error instanceof Error ? error.message : 'Failed to load model',
+        duration: 3000,
+        color: 'danger',
+        position: 'top',
+      });
+      await toast.present();
+    } finally {
+      loadingModel.value = false;
+    }
+  }
+}
+
+function isModelInstalled(huggingFaceId: string): boolean {
+  return installedModels.value.some(m => m.huggingFaceId === huggingFaceId && m.state === 'installed');
+}
+
+async function handleInstallModel(modelRef: HFModelRef) {
+  installingModel.value = modelRef.id;
+  
+  try {
+    // First fetch full model info to get file list
+    const fullModelInfo = await import('@/services').then(s => s.fetchModelInfo(modelRef.id));
+    
+    // Start the installation
+    await installModel(fullModelInfo);
+    
+    const toast = await toastController.create({
+      message: `Started downloading ${modelRef.name}...`,
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+    
+    // Refresh the list
+    await loadLocalModelsData();
+  } catch (error) {
+    installingModel.value = null;
+    
+    const toast = await toastController.create({
+      message: error instanceof Error ? error.message : 'Failed to install model',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+async function handleRemoveModel(modelId: string) {
+  try {
+    await removeModel(modelId);
+    
+    // If this was the selected model, clear the selection
+    if (settings.value.huggingfaceLocal?.modelId === modelId) {
+      settings.value.huggingfaceLocal.modelId = '';
+    }
+    
+    const toast = await toastController.create({
+      message: 'Model removed',
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+    
+    // Refresh the list
+    await loadLocalModelsData();
+  } catch (error) {
+    const toast = await toastController.create({
+      message: error instanceof Error ? error.message : 'Failed to remove model',
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  }
+}
+
+async function handleCancelDownload() {
+  if (downloadProgress.value) {
+    try {
+      await cancelInstallation(downloadProgress.value.modelId);
+      downloadProgress.value = null;
+      installingModel.value = null;
+      
+      // Refresh the list
+      await loadLocalModelsData();
+      
+      const toast = await toastController.create({
+        message: 'Download cancelled',
+        duration: 2000,
+        color: 'warning',
+        position: 'top',
+      });
+      await toast.present();
+    } catch (error) {
+      const toast = await toastController.create({
+        message: error instanceof Error ? error.message : 'Failed to cancel download',
+        duration: 3000,
+        color: 'danger',
+        position: 'top',
+      });
+      await toast.present();
+    }
   }
 }
 </script>
@@ -2624,5 +3014,247 @@ ion-content {
 .btn-icon:hover {
   background: var(--hn-bg-medium);
   border-color: var(--hn-border-strong);
+}
+
+/* Local Models Section */
+.runtime-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.runtime-status.ready {
+  border-color: var(--hn-green-light);
+  background: var(--hn-green-muted);
+}
+
+.runtime-status.loading {
+  border-color: var(--hn-purple);
+  background: var(--hn-purple-muted);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-row.error {
+  color: var(--hn-danger);
+}
+
+.status-label {
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+  min-width: 60px;
+}
+
+.status-value {
+  font-size: 0.9rem;
+  color: var(--hn-text-primary);
+}
+
+.status-value.text-success {
+  color: var(--hn-green-light);
+}
+
+.status-value.text-muted {
+  color: var(--hn-text-muted);
+}
+
+.status-value.text-loading {
+  color: var(--hn-purple);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-value.text-loading ion-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.loading-state,
+.empty-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--hn-bg-deep);
+  border: 1px dashed var(--hn-border-default);
+  border-radius: 8px;
+  color: var(--hn-text-muted);
+  font-size: 0.9rem;
+}
+
+.empty-state ion-icon {
+  font-size: 1.5rem;
+}
+
+.model-item {
+  position: relative;
+}
+
+.model-item-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-name {
+  font-size: 0.95rem;
+  color: var(--hn-text-primary);
+}
+
+.model-size {
+  font-size: 0.8rem;
+  color: var(--hn-text-muted);
+}
+
+.model-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.model-status.downloading {
+  background: var(--hn-purple-muted);
+  color: var(--hn-purple);
+}
+
+.model-status.failed {
+  background: var(--hn-danger-muted);
+  color: var(--hn-danger);
+}
+
+.remove-model-btn {
+  opacity: 0;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  color: var(--hn-text-muted);
+  cursor: pointer;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.model-item:hover .remove-model-btn {
+  opacity: 1;
+}
+
+.remove-model-btn:hover {
+  color: var(--hn-danger);
+}
+
+/* Download Progress */
+.download-progress {
+  padding: 16px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-purple);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.progress-label {
+  font-size: 0.9rem;
+  color: var(--hn-text-primary);
+}
+
+.progress-stats {
+  font-size: 0.8rem;
+  color: var(--hn-text-muted);
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--hn-bg-deepest);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--hn-purple) 0%, var(--hn-purple-light) 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--hn-text-muted);
+}
+
+.cancel-btn {
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--hn-border-default);
+  border-radius: 4px;
+  color: var(--hn-text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-btn:hover {
+  border-color: var(--hn-danger);
+  color: var(--hn-danger);
+}
+
+/* Model Catalog */
+.catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.catalog-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+}
+
+.catalog-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.catalog-name {
+  font-size: 0.95rem;
+  color: var(--hn-text-primary);
+  font-weight: 500;
+}
+
+.catalog-desc {
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+}
+
+.btn-small {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  min-width: 90px;
 }
 </style>

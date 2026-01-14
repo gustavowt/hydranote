@@ -18,6 +18,7 @@ This document provides technical documentation for developers working on HydraNo
 12. [Configuration](#configuration)
 13. [MCP Server](#mcp-server)
 14. [File Structure](#file-structure)
+15. [Local Models (Hugging Face)](#local-models-hugging-face)
 
 ---
 
@@ -2120,4 +2121,207 @@ Users can download a configuration file from Settings to use with MCP clients:
 | `generateMCPConfig()` | Generate downloadable config JSON |
 | `isMCPAvailable()` | Check if MCP is available (Electron only) |
 
+---
+
+## Local Models (Hugging Face)
+
+HydraNote supports running local GGUF models from Hugging Face, enabling offline AI capabilities without API dependencies.
+
+### Overview
+
+The local models feature:
+- Downloads GGUF models from Hugging Face Hub
+- Runs inference locally using node-llama-cpp
+- Stores models in the user data directory
+- Supports GPU acceleration (via Metal on macOS, CUDA on supported systems)
+
+### Architecture
+
+```
+Renderer Process
+┌───────────────────────────────────────────────────────────────┐
+│                 localModelService.ts                          │
+│  • Model catalog                                              │
+│  • Download progress subscription                             │
+│  • Runtime status subscription                                │
+│  • Inference API                                              │
+└───────────────────────────────────────────────────────────────┘
+                            │
+                            ▼ IPC
+
+Electron Main Process
+┌───────────────────────────────────────────────────────────────┐
+│                    modelManager.ts                            │
+│  • Download orchestration                                     │
+│  • Local registry (JSON)                                      │
+│  • File integrity verification                                │
+├───────────────────────────────────────────────────────────────┤
+│                  inferenceRuntime.ts                          │
+│  • node-llama-cpp adapter                                     │
+│  • Model loading/unloading                                    │
+│  • Inference execution                                        │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Storage Structure
+
+```
+userData/
+  models/
+    registry.json              # Model registry
+    TheBloke--Llama-2-7B-GGUF/
+      llama-2-7b.Q4_K_M.gguf   # Model file
+    TheBloke--Mistral-7B-Instruct-v0.2-GGUF/
+      mistral-7b-instruct.Q4_K_M.gguf
+  model-settings.json          # User preferences
+```
+
+### Model Manager (`modelManager.ts`)
+
+Handles model downloads and registry management.
+
+| Function | Description |
+|----------|-------------|
+| `getCatalog()` | Get suggested models catalog |
+| `fetchModelInfo(repoId)` | Fetch model info from Hugging Face API |
+| `getInstalledModels()` | Get all installed models |
+| `getModel(modelId)` | Get a specific model |
+| `installModel(modelRef)` | Start downloading a model |
+| `cancelInstall(modelId)` | Cancel ongoing download |
+| `removeModel(modelId)` | Delete model files |
+| `getSettings()` | Get local model settings |
+| `saveSettings(settings)` | Save settings |
+
+### Inference Runtime (`inferenceRuntime.ts`)
+
+Manages the node-llama-cpp runtime for local inference.
+
+| Function | Description |
+|----------|-------------|
+| `getStatus()` | Get current runtime status |
+| `isReady()` | Check if ready for inference |
+| `loadModel(modelId, options)` | Load model into memory |
+| `unloadModel()` | Unload current model |
+| `infer(messages, options)` | Run inference |
+| `stopInference()` | Stop ongoing inference |
+| `getMemoryUsage()` | Get memory statistics |
+
+### Local Model Service (`localModelService.ts`)
+
+Frontend service for interacting with local models via IPC.
+
+| Function | Description |
+|----------|-------------|
+| `isLocalModelsAvailable()` | Check if running in Electron |
+| `getModelCatalog()` | Get suggested models |
+| `fetchModelInfo(repoId)` | Fetch model details |
+| `getInstalledModels()` | List installed models |
+| `installModel(modelRef)` | Install a model |
+| `cancelInstallation(modelId)` | Cancel download |
+| `removeModel(modelId)` | Remove installed model |
+| `onDownloadProgress(callback)` | Subscribe to download progress |
+| `getRuntimeStatus()` | Get runtime status |
+| `onRuntimeStatusChange(callback)` | Subscribe to status changes |
+| `loadModel(modelId, options)` | Load model for inference |
+| `unloadModel()` | Unload current model |
+| `runInference(messages, options)` | Run inference |
+| `loadLocalModelSettings()` | Load settings |
+| `saveLocalModelSettings(settings)` | Save settings |
+
+### Types
+
+```typescript
+// Model installation state
+type ModelInstallState = 'not_installed' | 'downloading' | 'installed' | 'failed' | 'paused';
+
+// Hugging Face model reference
+interface HFModelRef {
+  id: string;           // e.g., "TheBloke/Llama-2-7B-GGUF"
+  name: string;
+  description: string;
+  size: number;
+  files: HFModelFile[];
+  quantization?: string;
+  contextLength?: number;
+  architecture?: string;
+  gated?: boolean;
+}
+
+// Local model registry entry
+interface LocalModel {
+  id: string;
+  huggingFaceId: string;
+  name: string;
+  version: string;
+  files: LocalModelFile[];
+  state: ModelInstallState;
+  installedAt?: Date;
+  lastUsed?: Date;
+  totalSize: number;
+  downloadedSize: number;
+  primaryModelPath?: string;
+}
+
+// Runtime status
+interface RuntimeStatus {
+  running: boolean;
+  loadedModelId?: string;
+  loadedModelName?: string;
+  memoryUsage?: number;
+  gpuMemoryUsage?: number;
+  ready: boolean;
+  error?: string;
+}
+
+// Local model settings
+interface LocalModelSettings {
+  modelsDirectory?: string;
+  defaultGpuLayers: number;
+  defaultContextLength: number;
+  huggingFaceToken?: string;
+  autoLoadLastModel: boolean;
+}
+```
+
+### LLM Provider Integration
+
+Local models are integrated as the `huggingface_local` provider in the LLM service:
+
+```typescript
+// In Settings, select "Local Model" as provider
+settings.provider = 'huggingface_local';
+settings.huggingfaceLocal = {
+  modelId: 'uuid-of-installed-model',
+  contextLength: 4096,
+  gpuLayers: 0,
+};
+```
+
+### Security Considerations
+
+- **Download allowlist**: Only downloads from `huggingface.co` and its CDN domains
+- **Checksum verification**: SHA256 verification of downloaded files
+- **Localhost only**: No external network access for inference
+- **Token security**: HuggingFace tokens stored securely (not in localStorage)
+
+### Suggested Models
+
+The catalog includes pre-configured suggestions:
+
+| Model | Size | Description |
+|-------|------|-------------|
+| Llama 2 7B Chat | ~4GB | Meta's Llama 2 chat model |
+| Mistral 7B Instruct | ~4GB | Mistral AI instruction model |
+| TinyLlama 1.1B | ~700MB | Compact model for testing |
+| Phi-2 2.7B | ~1.6GB | Microsoft's efficient model |
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `electron/src/modelManager.ts` | Download and registry management |
+| `electron/src/inferenceRuntime.ts` | node-llama-cpp adapter |
+| `electron/src/preload.ts` | Models API exposure |
+| `src/services/localModelService.ts` | Frontend IPC wrapper |
+| `src/icons/HuggingFaceIcon.vue` | Provider icon |
 
