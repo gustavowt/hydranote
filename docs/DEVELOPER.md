@@ -126,22 +126,23 @@ These functions handle both database AND file system sync automatically:
 
 ### Note Service (`noteService.ts`)
 
-Handles the AddNote tool pipeline for creating Markdown notes.
+Provides AI-powered note formatting and organization functions. These functions are used internally by the `write` tool when creating Markdown files.
 
 #### Key Functions
 
 | Function | Description |
 |----------|-------------|
-| `formatNote(rawText, metadata?)` | Transform raw text to structured Markdown |
-| `generateNoteTitle(content)` | Generate a title from note content |
+| `formatNote(rawText, metadata?)` | Transform raw text to structured Markdown (used by write tool for MD files) |
+| `generateNoteTitle(content)` | Generate a title from note content (used when title not provided) |
 | `titleToSlug(title)` | Convert title to URL-safe filename |
-| `decideNoteDirectory(projectId, title, metadata?)` | AI-decide best directory |
+| `decideNoteDirectory(projectId, title, metadata?)` | AI-decide best directory (used when path not provided) |
 | `decideNoteDirectoryWithDirs(projectId, title, dirs, metadata?)` | AI-decide directory (with pre-fetched dirs for parallel execution) |
-| `addNote(params)` | Full pipeline: format → title → directory → save → index |
-| `globalAddNote(params, onProgress?)` | Dashboard flow with project routing |
+| `getProjectDirectories(projectId)` | Get existing directories for a project |
+| `generateUniqueFileName(projectId, slug, dir)` | Generate unique filename avoiding collisions |
+| `globalAddNote(params, onProgress?)` | Dashboard flow with project routing (standalone pipeline) |
 | `decideTargetProject(content, tags?)` | AI-decide which project for a note |
 
-#### AddNote Pipeline (Phase 9 + Phase 13 Optimization)
+#### Write Tool Pipeline for Markdown Files
 
 **Original Sequential Flow:**
 ```
@@ -240,8 +241,7 @@ Handles tool execution with a Planner → Executor → Checker architecture.
 | `read` | Read file content | read, open, show, view |
 | `search` | Semantic search | search, find, buscar, encontrar |
 | `summarize` | Summarize documents | summarize, summary, tl;dr |
-| `write` | Generate documents (PDF/DOCX/MD) | write, create, generate |
-| `addNote` | Create and save notes | add note, save note, criar nota |
+| `write` | Create files (AI pipeline for all formats) | write, create, generate, add note, save note |
 | `updateFile` | Update sections in existing files | update, edit, modify, replace, insert |
 | `webResearch` | Search the web for information | web search, google, look up online, current news |
 | `createProject` | Create a new project (global mode) | create project, new project |
@@ -575,11 +575,21 @@ interface WriteToolParams {
 - Encoding: UTF-8
 - Heading-aware chunking for indexing
 
-### AddNote Tool (Phase 9)
+### Write Tool - Markdown AI Pipeline
 
-Creates formatted Markdown notes within a project.
+When the `write` tool is used with `format: "md"`, it automatically applies the AI pipeline:
 
-#### Parameters
+1. **Content Formatting**: Always formats content via `formatNote()` LLM
+2. **Title Generation**: Generates title via `generateNoteTitle()` if not provided
+3. **Directory Decision**: Decides directory via `decideNoteDirectory()` if not provided
+
+For PDF/DOCX formats:
+- Title is generated if not provided (via `generateNoteTitle()`)
+- Directory is decided if not provided (via `decideNoteDirectory()`)
+- Content is generated if empty
+- Content is NOT formatted (only MD files are formatted)
+
+#### Internal Types (used by noteService)
 
 ```typescript
 interface AddNoteParams {
@@ -1354,7 +1364,7 @@ When AI suggests creating a new project:
 ```typescript
 type SupportedFileType = 'pdf' | 'txt' | 'docx' | 'md' | 'png' | 'jpg' | 'jpeg' | 'webp';
 type ProjectStatus = 'created' | 'indexing' | 'indexed' | 'error';
-type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'webResearch';
+type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
 type DocumentFormat = 'pdf' | 'docx' | 'md';
 type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
 type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic';
@@ -1965,7 +1975,7 @@ src/
 │   ├── fileSystemService.ts  # File System Access API wrapper
 │   ├── llmService.ts         # LLM API calls
 │   ├── mcpService.ts         # MCP server tool handlers (Electron only)
-│   ├── noteService.ts        # AddNote pipeline
+│   ├── noteService.ts        # AI note formatting pipeline (used by write tool)
 │   ├── projectService.ts     # Project management (with FS sync)
 │   ├── setupWizardService.ts # First-run setup wizard state management
 │   ├── syncService.ts        # Bidirectional file system sync
@@ -2345,7 +2355,7 @@ settings.provider = 'huggingface_local';
 settings.huggingfaceLocal = {
   modelId: 'uuid-of-installed-model',
   contextLength: 4096,
-  gpuLayers: 0,
+  gpuLayers: -1, // -1 = auto (node-llama-cpp detects optimal GPU layers based on VRAM)
 };
 ```
 
@@ -2374,11 +2384,7 @@ The catalog includes pre-configured suggestions organized by use case:
 | Mistral 7B Instruct v0.2 | ~6GB | Fast and efficient instruction-following |
 | Qwen 2.5 7B Instruct | ~6GB | Excellent at following detailed instructions |
 
-**Lightweight / Low Resource:**
-| Model | Size | Description |
-|-------|------|-------------|
-| Phi-3 Mini (3.8B) | ~4GB | Compact but capable, good for limited memory |
-| TinyLlama 1.1B Chat | ~2GB | Ultra-compact for testing or very limited hardware |
+**Important:** HydraNote requires models that can reliably produce structured JSON output for the Planner/Executor/Checker system. Smaller or older models (like TinyLlama, Llama 2, Phi-3) have been excluded from the catalog as they cannot reliably generate the required JSON structures for tool calling.
 
 **Note:** For best results with HydraNote's tool system (summarize, search, etc.), use Functionary or Hermes models as they're specifically trained for structured output.
 
@@ -2392,3 +2398,106 @@ The catalog includes pre-configured suggestions organized by use case:
 | `src/services/localModelService.ts` | Frontend IPC wrapper |
 | `src/icons/HuggingFaceIcon.vue` | Provider icon |
 
+---
+
+## Building & Distribution
+
+### Local Development
+
+```bash
+# Start the web dev server
+npm run dev
+
+# Build the web app
+npm run build
+
+# Sync to Electron
+npx cap sync @capacitor-community/electron
+
+# Start Electron in development mode
+cd electron && npm run electron:start
+```
+
+### Building for Distribution
+
+#### macOS (from macOS)
+
+```bash
+npm run build
+npx cap sync @capacitor-community/electron
+cd electron
+npm run electron:make -- --mac
+```
+
+Output: `electron/dist/*.dmg`
+
+#### Windows (from Windows)
+
+```bash
+npm run build
+npx cap sync @capacitor-community/electron
+cd electron
+npm run electron:make -- --win
+```
+
+Output: `electron/dist/*.exe` (NSIS installer)
+
+### GitHub Actions (CI/CD)
+
+The project includes a GitHub Actions workflow for building Windows installers on GitHub's infrastructure.
+
+**Workflow file:** `.github/workflows/build-windows.yml`
+
+#### Triggering Builds
+
+| Method | How | Use Case |
+|--------|-----|----------|
+| **Manual** | Actions → "Build Windows" → "Run workflow" | Testing builds |
+| **Version tag** | `git tag v1.0.0 && git push origin v1.0.0` | Release builds |
+
+#### Retrieving Installers
+
+1. **From Artifacts (testing):**
+   - Go to **Actions** → Select the workflow run
+   - Scroll to **Artifacts** section at bottom
+   - Download `HydraNote-Windows-Installer`
+   - Artifacts expire after 30 days
+
+2. **From Releases (production):**
+   - If `GH_TOKEN` secret is set, installers auto-publish to **Releases**
+   - Users can download directly from the release page
+
+#### Required Secrets
+
+| Secret | Purpose | How to Create |
+|--------|---------|---------------|
+| `GH_TOKEN` | Publish to GitHub Releases | Settings → Secrets → New secret (use a PAT with `repo` scope) |
+
+### electron-builder Configuration
+
+The build configuration is in `electron/electron-builder.config.json`:
+
+```json
+{
+  "appId": "io.hydranote.app",
+  "win": {
+    "target": "nsis",
+    "icon": "assets/appIcon.ico"
+  },
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": "dmg"
+  },
+  "nsis": {
+    "allowElevation": true,
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
+```
+
+### Cross-Compilation Notes
+
+- **macOS → Windows:** Not supported due to native dependencies (`node-llama-cpp`)
+- **Windows → macOS:** Not supported (code signing requires macOS)
+- **Use GitHub Actions** for cross-platform builds
