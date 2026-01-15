@@ -20,6 +20,7 @@ import {
 } from './mcpServer';
 import { getModelManager, HFModelRef } from './modelManager';
 import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
+import { getEmbeddingRuntime, isEmbeddingRuntimeAvailable } from './embeddingRuntime';
 
 // Graceful handling of unhandled errors.
 unhandled();
@@ -563,12 +564,14 @@ ipcMain.handle('mcp:stop', async () => {
 // Initialize model manager and set main window
 const modelManager = getModelManager();
 const inferenceRuntime = getInferenceRuntime();
+const embeddingRuntime = getEmbeddingRuntime();
 
 // Set main window reference after app is ready
 app.whenReady().then(() => {
   const mainWindow = myCapacitorApp.getMainWindow();
   modelManager.setMainWindow(mainWindow);
   inferenceRuntime.setMainWindow(mainWindow);
+  embeddingRuntime.setMainWindow(mainWindow);
 });
 
 // Get model catalog
@@ -779,6 +782,111 @@ ipcMain.handle('models:saveSettings', async (_event, settings: {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to save settings',
+    };
+  }
+});
+
+// ============================================
+// Local Embeddings IPC Handlers (Hugging Face)
+// ============================================
+
+// Get embedding model catalog
+ipcMain.handle('embeddings:getCatalog', async () => {
+  try {
+    const catalog = embeddingRuntime.getCatalog();
+    return { success: true, models: catalog };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get embedding catalog',
+    };
+  }
+});
+
+// Get embedding runtime status
+ipcMain.handle('embeddings:getStatus', async () => {
+  try {
+    const available = await isEmbeddingRuntimeAvailable();
+    if (!available) {
+      return {
+        success: true,
+        status: {
+          status: 'error' as const,
+          error: '@huggingface/transformers is not installed',
+        },
+      };
+    }
+    const status = embeddingRuntime.getStatus();
+    return { success: true, status };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get embedding status',
+    };
+  }
+});
+
+// Load embedding model
+ipcMain.handle('embeddings:loadModel', async (_event, modelId: string) => {
+  try {
+    await embeddingRuntime.loadModel(modelId);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to load embedding model',
+    };
+  }
+});
+
+// Unload embedding model
+ipcMain.handle('embeddings:unloadModel', async () => {
+  try {
+    await embeddingRuntime.unloadModel();
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to unload embedding model',
+    };
+  }
+});
+
+// Generate embedding for single text
+ipcMain.handle('embeddings:generate', async (_event, text: string, modelId?: string) => {
+  try {
+    const result = await embeddingRuntime.generateEmbedding(text, modelId);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate embedding',
+    };
+  }
+});
+
+// Generate embeddings for multiple texts (batch)
+ipcMain.handle('embeddings:generateBatch', async (_event, texts: string[], modelId?: string) => {
+  try {
+    const result = await embeddingRuntime.generateEmbeddings(texts, modelId);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate embeddings batch',
+    };
+  }
+});
+
+// Clear embedding model cache
+ipcMain.handle('embeddings:clearCache', async (_event, modelId?: string) => {
+  try {
+    await embeddingRuntime.clearModelCache(modelId);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to clear cache',
     };
   }
 });

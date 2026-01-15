@@ -84,6 +84,21 @@ interface RuntimeStatus {
   error?: string;
 }
 
+// Local Embeddings Types
+interface HFEmbeddingRuntimeStatus {
+  status: 'not_loaded' | 'loading' | 'ready' | 'error';
+  loadedModel?: string;
+  error?: string;
+  progress?: number;
+}
+
+interface SuggestedEmbeddingModel {
+  id: string;
+  name: string;
+  description: string;
+  dimensions: number;
+}
+
 // Expose Electron APIs to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // File System Operations
@@ -214,6 +229,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Remove runtime status listener
     offRuntimeStatusChange: () => {
       ipcRenderer.removeAllListeners('models:runtime-status');
+    },
+  },
+  // Local Embeddings Operations (Hugging Face Transformers.js)
+  embeddings: {
+    // Get embedding model catalog
+    getCatalog: () => ipcRenderer.invoke('embeddings:getCatalog'),
+    // Get embedding runtime status
+    getStatus: () => ipcRenderer.invoke('embeddings:getStatus'),
+    // Load an embedding model
+    loadModel: (modelId: string) => ipcRenderer.invoke('embeddings:loadModel', modelId),
+    // Unload current embedding model
+    unloadModel: () => ipcRenderer.invoke('embeddings:unloadModel'),
+    // Generate embedding for single text
+    generate: (text: string, modelId?: string) => ipcRenderer.invoke('embeddings:generate', text, modelId),
+    // Generate embeddings for multiple texts (batch)
+    generateBatch: (texts: string[], modelId?: string) => ipcRenderer.invoke('embeddings:generateBatch', texts, modelId),
+    // Clear model cache (useful for corrupted downloads)
+    clearCache: (modelId?: string) => ipcRenderer.invoke('embeddings:clearCache', modelId),
+    // Listen for status updates
+    onStatusChange: (callback: (status: HFEmbeddingRuntimeStatus) => void) => {
+      ipcRenderer.on('embeddings:status', (_event, status: HFEmbeddingRuntimeStatus) => {
+        callback(status);
+      });
+    },
+    // Remove status listener
+    offStatusChange: () => {
+      ipcRenderer.removeAllListeners('embeddings:status');
     },
   },
   // App info
