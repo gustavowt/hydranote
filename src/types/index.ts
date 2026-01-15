@@ -133,7 +133,7 @@ export interface EmbeddingConfig {
 /**
  * Available embedding providers (separate from LLM providers)
  */
-export type EmbeddingProvider = 'openai' | 'gemini' | 'ollama';
+export type EmbeddingProvider = 'openai' | 'gemini' | 'ollama' | 'huggingface_local';
 
 /**
  * OpenAI embedding configuration
@@ -160,6 +160,14 @@ export interface OllamaEmbeddingConfig {
 }
 
 /**
+ * Hugging Face Local embedding configuration
+ * Models are downloaded and run locally via Transformers.js
+ */
+export interface HuggingFaceLocalEmbeddingConfig {
+  model: string; // Hugging Face model ID (e.g., 'Xenova/all-MiniLM-L6-v2')
+}
+
+/**
  * Indexer settings - independent from LLM provider
  * Users can mix and match: e.g., Claude for chat + OpenAI for embeddings
  */
@@ -168,6 +176,7 @@ export interface IndexerSettings {
   openai: OpenAIEmbeddingConfig;
   gemini: GeminiEmbeddingConfig;
   ollama: OllamaEmbeddingConfig;
+  huggingfaceLocal: HuggingFaceLocalEmbeddingConfig;
 }
 
 /**
@@ -186,6 +195,9 @@ export const DEFAULT_INDEXER_SETTINGS: IndexerSettings = {
   ollama: {
     baseUrl: 'http://localhost:11434',
     model: 'nomic-embed-text',
+  },
+  huggingfaceLocal: {
+    model: 'Xenova/all-MiniLM-L6-v2',
   },
 };
 
@@ -213,6 +225,33 @@ export const OPENAI_EMBEDDING_MODELS = [
 export const GEMINI_EMBEDDING_MODELS = [
   { name: 'text-embedding-004', description: 'Latest model, 768 dimensions' },
 ] as const;
+
+/**
+ * Suggested Hugging Face local embedding models
+ * These are ONNX-optimized models that run with Transformers.js
+ */
+export const SUGGESTED_HF_LOCAL_EMBEDDING_MODELS = [
+  { id: 'nomic-ai/nomic-embed-text-v1.5', name: 'Nomic Embed v1.5', description: 'High quality, fast (768 dims, ~137MB)', dimensions: 768 },
+  { id: 'Xenova/all-MiniLM-L6-v2', name: 'MiniLM L6 v2', description: 'Fast & compact (384 dims, ~23MB)', dimensions: 384 },
+  { id: 'Xenova/bge-small-en-v1.5', name: 'BGE Small EN', description: 'High quality small (384 dims, ~33MB)', dimensions: 384 },
+  { id: 'Xenova/gte-small', name: 'GTE Small', description: 'Alibaba GTE small (384 dims, ~33MB)', dimensions: 384 },
+  { id: 'Xenova/bge-base-en-v1.5', name: 'BGE Base EN', description: 'Best quality (768 dims, ~109MB)', dimensions: 768 },
+] as const;
+
+/**
+ * Hugging Face local embedding model status
+ */
+export type HFEmbeddingModelStatus = 'not_loaded' | 'loading' | 'ready' | 'error';
+
+/**
+ * Hugging Face local embedding runtime status
+ */
+export interface HFEmbeddingRuntimeStatus {
+  status: HFEmbeddingModelStatus;
+  loadedModel?: string;
+  error?: string;
+  progress?: number; // 0-100 during loading
+}
 
 // ============================================
 // Chat Types (Phase 2)

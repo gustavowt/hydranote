@@ -206,6 +206,40 @@ interface ElectronInferenceMessage {
   content: string;
 }
 
+// ============================================
+// Local Embeddings Types (Hugging Face)
+// ============================================
+
+// Embedding runtime status
+interface ElectronHFEmbeddingRuntimeStatus {
+  status: 'not_loaded' | 'loading' | 'ready' | 'error';
+  loadedModel?: string;
+  error?: string;
+  progress?: number;
+}
+
+// Suggested embedding model
+interface ElectronSuggestedEmbeddingModel {
+  id: string;
+  name: string;
+  description: string;
+  dimensions: number;
+}
+
+// Embedding result
+interface ElectronEmbeddingResult {
+  success: boolean;
+  embedding?: number[];
+  error?: string;
+}
+
+// Batch embedding result
+interface ElectronBatchEmbeddingResult {
+  success: boolean;
+  embeddings?: number[][];
+  error?: string;
+}
+
 // Electron API interface
 interface ElectronAPI {
   // File System Operations
@@ -276,6 +310,27 @@ interface ElectronAPI {
     offDownloadProgress: () => void;
     /** Remove runtime status listener */
     offRuntimeStatusChange: () => void;
+  };
+  // Local Embeddings Operations (Hugging Face Transformers.js)
+  embeddings: {
+    /** Get embedding model catalog */
+    getCatalog: () => Promise<{ success: boolean; models?: ElectronSuggestedEmbeddingModel[]; error?: string }>;
+    /** Get embedding runtime status */
+    getStatus: () => Promise<{ success: boolean; status?: ElectronHFEmbeddingRuntimeStatus; error?: string }>;
+    /** Load an embedding model */
+    loadModel: (modelId: string) => Promise<{ success: boolean; error?: string }>;
+    /** Unload current embedding model */
+    unloadModel: () => Promise<{ success: boolean; error?: string }>;
+    /** Generate embedding for single text */
+    generate: (text: string, modelId?: string) => Promise<ElectronEmbeddingResult>;
+    /** Generate embeddings for multiple texts (batch) */
+    generateBatch: (texts: string[], modelId?: string) => Promise<ElectronBatchEmbeddingResult>;
+    /** Clear model cache (useful for corrupted downloads) */
+    clearCache: (modelId?: string) => Promise<{ success: boolean; error?: string }>;
+    /** Listen for status updates */
+    onStatusChange: (callback: (status: ElectronHFEmbeddingRuntimeStatus) => void) => void;
+    /** Remove status listener */
+    offStatusChange: () => void;
   };
   // App info
   platform: string;

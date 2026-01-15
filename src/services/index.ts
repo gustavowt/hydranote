@@ -188,6 +188,11 @@ export {
   detectStaleEmbeddings,
   reindexStaleFiles,
   reindexAllFiles,
+  // Hugging Face local embeddings (Electron only)
+  isHuggingFaceLocalAvailable,
+  getHuggingFaceLocalStatus,
+  onHuggingFaceLocalStatusChange,
+  getHuggingFaceLocalCatalog,
 } from './embeddingService';
 
 export type { StaleFile, ReindexProgressCallback } from './embeddingService';

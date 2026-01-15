@@ -1,11 +1,11 @@
 /**
  * Embedding Service
  * Handles generation of embeddings for text chunks
- * Supports multiple providers: OpenAI, Gemini, Ollama
+ * Supports multiple providers: OpenAI, Gemini, Ollama, Hugging Face Local
  * Provider configuration is independent from LLM settings
  */
 
-import type { Chunk, Embedding, IndexerSettings } from "../types";
+import type { Chunk, Embedding, IndexerSettings, HFEmbeddingRuntimeStatus } from "../types";
 import { DEFAULT_INDEXER_SETTINGS } from "../types";
 
 const INDEXER_STORAGE_KEY = "hydranote_indexer_settings";
@@ -28,6 +28,7 @@ export function loadIndexerSettings(): IndexerSettings {
         openai: { ...DEFAULT_INDEXER_SETTINGS.openai, ...parsed.openai },
         gemini: { ...DEFAULT_INDEXER_SETTINGS.gemini, ...parsed.gemini },
         ollama: { ...DEFAULT_INDEXER_SETTINGS.ollama, ...parsed.ollama },
+        huggingfaceLocal: { ...DEFAULT_INDEXER_SETTINGS.huggingfaceLocal, ...parsed.huggingfaceLocal },
       };
     }
   } catch {
@@ -56,9 +57,19 @@ export function isIndexerConfigured(): boolean {
       return !!settings.gemini.apiKey;
     case "ollama":
       return !!settings.ollama.baseUrl && !!settings.ollama.model;
+    case "huggingface_local":
+      // Hugging Face local requires Electron and a selected model
+      return isHuggingFaceLocalAvailable() && !!settings.huggingfaceLocal.model;
     default:
       return false;
   }
+}
+
+/**
+ * Check if Hugging Face local embeddings are available (Electron only)
+ */
+export function isHuggingFaceLocalAvailable(): boolean {
+  return !!(window.electronAPI?.embeddings);
 }
 
 /**
@@ -73,6 +84,8 @@ export function getIndexerProviderName(): string {
       return "Google Gemini";
     case "ollama":
       return `Ollama (${settings.ollama.model})`;
+    case "huggingface_local":
+      return `Hugging Face Local (${settings.huggingfaceLocal.model.split('/').pop()})`;
     default:
       return "Unknown";
   }
@@ -192,6 +205,79 @@ async function generateEmbeddingOllama(
 }
 
 // ============================================
+// Hugging Face Local Embedding Provider (Electron)
+// ============================================
+
+/**
+ * Generate embedding using Hugging Face Transformers.js (runs in Electron)
+ */
+async function generateEmbeddingHuggingFaceLocal(
+  text: string,
+  model: string
+): Promise<number[]> {
+  if (!isHuggingFaceLocalAvailable()) {
+    throw new Error("Hugging Face local embeddings are only available in the Electron app");
+  }
+
+  const result = await window.electronAPI!.embeddings.generate(text, model);
+  
+  if (!result.success || !result.embedding) {
+    throw new Error(result.error || "Failed to generate embedding");
+  }
+
+  return result.embedding;
+}
+
+/**
+ * Get Hugging Face local embedding runtime status
+ */
+export async function getHuggingFaceLocalStatus(): Promise<HFEmbeddingRuntimeStatus | null> {
+  if (!isHuggingFaceLocalAvailable()) {
+    return null;
+  }
+
+  const result = await window.electronAPI!.embeddings.getStatus();
+  if (!result.success || !result.status) {
+    return { status: 'error', error: result.error };
+  }
+
+  return result.status;
+}
+
+/**
+ * Subscribe to Hugging Face local embedding status changes
+ */
+export function onHuggingFaceLocalStatusChange(
+  callback: (status: HFEmbeddingRuntimeStatus) => void
+): () => void {
+  if (!isHuggingFaceLocalAvailable()) {
+    return () => {};
+  }
+
+  window.electronAPI!.embeddings.onStatusChange(callback);
+
+  return () => {
+    window.electronAPI!.embeddings.offStatusChange();
+  };
+}
+
+/**
+ * Get Hugging Face local embedding model catalog
+ */
+export async function getHuggingFaceLocalCatalog(): Promise<Array<{id: string; name: string; description: string; dimensions: number}>> {
+  if (!isHuggingFaceLocalAvailable()) {
+    return [];
+  }
+
+  const result = await window.electronAPI!.embeddings.getCatalog();
+  if (!result.success) {
+    return [];
+  }
+
+  return result.models || [];
+}
+
+// ============================================
 // Local Fallback (for unconfigured state)
 // ============================================
 
@@ -282,6 +368,15 @@ export async function generateEmbedding(text: string): Promise<number[]> {
           text,
           settings.ollama.baseUrl,
           settings.ollama.model
+        );
+      }
+      break;
+
+    case "huggingface_local":
+      if (isHuggingFaceLocalAvailable() && settings.huggingfaceLocal.model) {
+        return generateEmbeddingHuggingFaceLocal(
+          text,
+          settings.huggingfaceLocal.model
         );
       }
       break;
