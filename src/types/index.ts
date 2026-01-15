@@ -254,7 +254,7 @@ export interface ChatSession {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'addNote' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
 
 /**
  * Tool definition for system prompt
@@ -352,7 +352,7 @@ export interface HuggingFaceLocalConfig {
   modelId: string;
   /** Context window size */
   contextLength?: number;
-  /** Number of layers to offload to GPU */
+  /** Number of layers to offload to GPU. -1 = auto (detect optimal based on VRAM), 0 = CPU only */
   gpuLayers?: number;
 }
 
@@ -394,7 +394,7 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   huggingfaceLocal: {
     modelId: '',
     contextLength: 4096,
-    gpuLayers: 0,
+    gpuLayers: -1, // -1 = auto (let node-llama-cpp detect optimal GPU layers)
   },
   noteSettings: {
     formatInstructions: '',
@@ -1870,7 +1870,7 @@ export interface LocalInferenceOptions {
 export interface LocalModelSettings {
   /** Models storage directory (defaults to userData/models) */
   modelsDirectory?: string;
-  /** Default GPU layers to use */
+  /** Default GPU layers to use. -1 = auto (detect optimal based on VRAM), 0 = CPU only */
   defaultGpuLayers: number;
   /** Default context length */
   defaultContextLength: number;
@@ -1884,7 +1884,7 @@ export interface LocalModelSettings {
  * Default local model settings
  */
 export const DEFAULT_LOCAL_MODEL_SETTINGS: LocalModelSettings = {
-  defaultGpuLayers: 0,
+  defaultGpuLayers: -1, // -1 = auto (let node-llama-cpp detect optimal GPU layers based on VRAM)
   defaultContextLength: 4096,
   autoLoadLastModel: false,
 };

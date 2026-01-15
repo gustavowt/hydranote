@@ -148,16 +148,27 @@ export class InferenceRuntime {
       this.llama = await getLlama();
 
       // Load the model
-      const gpuLayers = options.gpuLayers ?? 0;
+      // gpuLayers: -1 or undefined = let node-llama-cpp auto-detect optimal GPU layers based on VRAM
+      // gpuLayers: 0 = CPU only
+      // gpuLayers: N (positive) = specific number of layers on GPU
+      const gpuLayers = options.gpuLayers;
+      const isAutoGpu = gpuLayers === undefined || gpuLayers === -1;
       const contextLength = options.contextLength ?? model.contextLength ?? 4096;
 
       console.log(`[InferenceRuntime] Loading model: ${model.primaryModelPath}`);
-      console.log(`[InferenceRuntime] GPU layers: ${gpuLayers}, Context: ${contextLength}`);
+      console.log(`[InferenceRuntime] GPU layers: ${isAutoGpu ? 'auto (node-llama-cpp will detect optimal based on VRAM)' : gpuLayers}, Context: ${contextLength}`);
+      console.log(`[InferenceRuntime] Detected GPU type: ${(this.llama as any).gpu || 'none/cpu'}`);
 
-      this.model = await (this.llama as any).loadModel({
+      // Only pass gpuLayers if explicitly set to a non-auto value
+      // When undefined or -1, node-llama-cpp auto-detects optimal layers based on available VRAM
+      const loadOptions: { modelPath: string; gpuLayers?: number } = {
         modelPath: model.primaryModelPath,
-        gpuLayers,
-      });
+      };
+      if (!isAutoGpu) {
+        loadOptions.gpuLayers = gpuLayers;
+      }
+
+      this.model = await (this.llama as any).loadModel(loadOptions);
 
       // Create context
       this.context = await (this.model as any).createContext({

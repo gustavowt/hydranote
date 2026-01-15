@@ -90,7 +90,7 @@ export interface LocalModelSettings {
 }
 
 export const DEFAULT_LOCAL_MODEL_SETTINGS: LocalModelSettings = {
-  defaultGpuLayers: 0,
+  defaultGpuLayers: -1, // -1 = auto (let node-llama-cpp detect optimal GPU layers based on VRAM)
   defaultContextLength: 4096,
   autoLoadLastModel: false,
 };
@@ -184,42 +184,6 @@ const CATALOG_MODELS: HFModelRef[] = [
     resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
   
-  // ========== LIGHTWEIGHT / LOW RESOURCE ==========
-  {
-    id: 'microsoft/Phi-3-mini-4k-instruct-gguf',
-    name: 'Phi-3 Mini (3.8B)',
-    description: 'Microsoft\'s compact but capable model',
-    size: 0,
-    files: [],
-    architecture: 'phi3',
-    contextLength: 4096,
-    bestFor: 'Surprisingly capable for its size. Great if you have limited memory or want faster responses.',
-    resourceInfo: 'Light: Needs ~4GB RAM. Runs on most computers including older ones.',
-  },
-  {
-    id: 'TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF',
-    name: 'TinyLlama 1.1B Chat',
-    description: 'Ultra-compact model for basic tasks',
-    size: 0,
-    files: [],
-    architecture: 'llama',
-    contextLength: 2048,
-    bestFor: 'For testing or very limited hardware. Basic conversations and simple tasks only.',
-    resourceInfo: 'Very Light: Needs ~2GB RAM. Runs on almost any computer.',
-  },
-  
-  // ========== LEGACY / ALTERNATIVE ==========
-  {
-    id: 'TheBloke/Llama-2-7B-Chat-GGUF',
-    name: 'Llama 2 7B Chat',
-    description: 'Older but well-tested chat model',
-    size: 0,
-    files: [],
-    architecture: 'llama',
-    contextLength: 4096,
-    bestFor: 'Stable and well-tested. Good for basic conversations if newer models don\'t work.',
-    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
-  },
 ];
 
 // ============================================
