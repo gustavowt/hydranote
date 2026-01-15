@@ -776,12 +776,6 @@ async function callHuggingFaceLocal(
   request: LLMCompletionRequest,
   config: HuggingFaceLocalConfig
 ): Promise<LLMCompletionResponse> {
-  console.log('[LLMService] callHuggingFaceLocal called');
-  console.log('[LLMService] Request messages:', request.messages.length);
-  request.messages.forEach((m, i) => {
-    console.log(`[LLMService]   [${i}] ${m.role}: ${m.content.length} chars - "${m.content.substring(0, 60)}..."`);
-  });
-  
   await ensureModelLoaded(config);
 
   const content = await runInference(request.messages, {
@@ -789,8 +783,6 @@ async function callHuggingFaceLocal(
     temperature: request.temperature ?? 0.7,
     stream: false,
   });
-
-  console.log('[LLMService] Got content:', content.length, 'chars');
 
   return {
     content,
@@ -808,16 +800,8 @@ async function streamHuggingFaceLocal(
   config: HuggingFaceLocalConfig,
   onChunk: LLMStreamCallback
 ): Promise<LLMCompletionResponse> {
-  console.log('[LLMService] streamHuggingFaceLocal called');
-  console.log('[LLMService] Request messages:', request.messages.length);
-  request.messages.forEach((m, i) => {
-    console.log(`[LLMService]   [${i}] ${m.role}: ${m.content.length} chars`);
-  });
-  
   await ensureModelLoaded(config);
 
-  console.log('[LLMService] Model loaded, calling runInference...');
-  
   // TODO: Implement true streaming via IPC events
   // For now, get the full response and simulate streaming
   const content = await runInference(request.messages, {
@@ -825,9 +809,6 @@ async function streamHuggingFaceLocal(
     temperature: request.temperature ?? 0.7,
     stream: false, // Would be true with proper IPC streaming
   });
-
-  console.log('[LLMService] Got content from runInference:', content.length, 'chars');
-  console.log('[LLMService] Content preview:', content.substring(0, 200));
 
   // Emit the content in small chunks to simulate streaming
   const chunkSize = 20;

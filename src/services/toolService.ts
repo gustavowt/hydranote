@@ -840,7 +840,11 @@ export async function executeAddNoteTool(
 
 /**
  * Execute the createProject tool
- * Creates a new project
+ * Creates a new project or returns existing one (upsert behavior)
+ * 
+ * This is idempotent - if a project with the same name exists,
+ * it returns success with the existing project info instead of failing.
+ * This ensures pipelines can continue even if the project already exists.
  */
 export async function executeCreateProjectTool(params: {
   name: string;
@@ -864,10 +868,17 @@ export async function executeCreateProjectTool(params: {
     );
 
     if (existingProject) {
+      // Return success with existing project (upsert behavior)
+      // This allows pipelines to continue using the existing project
       return {
-        success: false,
+        success: true,
         tool: "createProject",
-        error: `A project named "${name}" already exists.`,
+        data: `Using existing project "${existingProject.name}".`,
+        metadata: {
+          projectId: existingProject.id,
+          projectName: existingProject.name,
+          wasExisting: true,
+        },
       };
     }
 
@@ -881,8 +892,9 @@ export async function executeCreateProjectTool(params: {
       tool: "createProject",
       data: `Project "${project.name}" has been created successfully.${syncError ? `\n\n⚠️ Note: Folder sync failed: ${syncError}` : ""}${params.description ? `\n\n**Description:** ${params.description}` : ""}`,
       metadata: {
-        fileId: project.id,
-        fileName: project.name,
+        projectId: project.id,
+        projectName: project.name,
+        wasExisting: false,
       },
     };
   } catch (error) {
@@ -1944,10 +1956,6 @@ export async function executeTool(
   userMessage?: string,
   onProgress?: (status: string) => void,
 ): Promise<ToolResult> {
-  console.log(`[TOOL:${call.tool}] ========== START ==========`);
-  console.log(`[TOOL:${call.tool}] projectId:`, projectId);
-  console.log(`[TOOL:${call.tool}] params:`, JSON.stringify(call.params, null, 2));
-  
   let result: ToolResult;
   const startTime = Date.now();
   
@@ -1961,14 +1969,6 @@ export async function executeTool(
       error: error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
-  
-  const duration = Date.now() - startTime;
-  console.log(`[TOOL:${call.tool}] Result - success:`, result.success);
-  if (!result.success) {
-    console.log(`[TOOL:${call.tool}] Error:`, result.error);
-  }
-  console.log(`[TOOL:${call.tool}] Duration: ${duration}ms`);
-  console.log(`[TOOL:${call.tool}] ========== END ==========`);
   
   return result;
 }
@@ -2313,40 +2313,24 @@ export interface ParsedToolCalls {
  * Looks for ```tool_call blocks and extracts the JSON
  */
 export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
-  console.log("[PARSE] Parsing response for tool_call blocks...");
-  console.log("[PARSE] Content length:", content.length);
-  
   const toolCalls: ToolCall[] = [];
 
   // Pattern to match ```tool_call ... ``` blocks
   const toolCallPattern = /```tool_call\s*\n?([\s\S]*?)```/g;
 
-  // Check if content contains the pattern at all
-  const hasPattern = content.includes("```tool_call");
-  console.log("[PARSE] Contains ```tool_call pattern:", hasPattern);
-
   let match;
-  let matchCount = 0;
   while ((match = toolCallPattern.exec(content)) !== null) {
-    matchCount++;
     const jsonStr = match[1].trim();
-    console.log(`[PARSE] Match ${matchCount} - Raw JSON:`, jsonStr.substring(0, 200));
     try {
       const parsed = JSON.parse(jsonStr);
-      console.log(`[PARSE] Match ${matchCount} - Parsed tool:`, parsed.tool);
       if (parsed.tool && typeof parsed.tool === "string") {
         toolCalls.push({
           tool: parsed.tool as ToolName,
           params: parsed.params || {},
         });
-        console.log(`[PARSE] Match ${matchCount} - Added to toolCalls`);
-      } else {
-        console.log(`[PARSE] Match ${matchCount} - Missing or invalid tool property`);
       }
-    } catch (e) {
+    } catch {
       // Invalid JSON in tool call block, skip it
-      console.warn(`[PARSE] Match ${matchCount} - Failed to parse JSON:`, e);
-      console.warn(`[PARSE] Match ${matchCount} - JSON string was:`, jsonStr);
     }
   }
 
@@ -2355,10 +2339,6 @@ export function parseToolCallsFromResponse(content: string): ParsedToolCalls {
     .replace(toolCallPattern, "")
     .replace(/\n{3,}/g, "\n\n") // Clean up excessive newlines
     .trim();
-
-  console.log("[PARSE] Total matches found:", matchCount);
-  console.log("[PARSE] Valid tool calls:", toolCalls.length);
-  console.log("[PARSE] hasToolCalls:", toolCalls.length > 0);
 
   return {
     textContent,
@@ -2590,10 +2570,7 @@ export async function createExecutionPlan(
     };
 
     return plan;
-  } catch (error) {
-    console.error("[PLANNER] Failed to parse plan:", error);
-    console.log("[PLANNER] Raw response that failed to parse:", response.content.substring(0, 500));
-    
+  } catch {
     // Return a plan with clarification needed
     return {
       id: crypto.randomUUID(),
@@ -2653,7 +2630,7 @@ function extractContextFromResult(
 
     case "createProject":
       context.projectId = result.metadata?.projectId;
-      context.projectName = params.name;
+      context.projectName = result.metadata?.projectName || params.name;
       break;
 
     case "write":
@@ -3018,9 +2995,6 @@ export async function executePlan(
     projectId,
   };
 
-  console.log("[EXECUTOR] Starting plan execution:", plan.id);
-  console.log("[EXECUTOR] Steps count:", plan.steps.length);
-
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i];
     const stepStartTime = Date.now();
@@ -3029,16 +3003,12 @@ export async function executePlan(
     step.status = "running";
     onStepUpdate?.(step, i, plan.steps.length);
 
-    console.log(`[EXECUTOR] Step ${i + 1}/${plan.steps.length}: ${step.tool} - ${step.description}`);
-
     // Check dependencies
     const unmetDependencies = (step.dependsOn || []).filter(
       (depId) => !completedSteps.some((cs) => cs.stepId === depId),
     );
 
     if (unmetDependencies.length > 0) {
-      console.log("[EXECUTOR] Unmet dependencies:", unmetDependencies);
-      
       // Check if dependencies failed
       const failedDeps = unmetDependencies.filter((depId) =>
         failedSteps.some((fs) => fs.stepId === depId),
@@ -3087,14 +3057,19 @@ export async function executePlan(
       }
 
       // Resolve project ID for the step
+      // Priority: 1) enrichedParams.project (resolved), 2) accumulatedContext.projectId, 3) original projectId
       let stepProjectId = projectId;
+      
       if (enrichedParams.project) {
         // Could be a project ID or name, try to resolve
         const resolvedId = await resolveProjectForTool(projectId, enrichedParams.project);
         if (resolvedId) {
           stepProjectId = resolvedId;
         }
-      } else if (accumulatedContext.projectId && typeof accumulatedContext.projectId === "string") {
+      }
+      
+      // Fall back to accumulatedContext.projectId if stepProjectId is still undefined
+      if (!stepProjectId && accumulatedContext.projectId && typeof accumulatedContext.projectId === "string") {
         stepProjectId = accumulatedContext.projectId;
       }
 
@@ -3138,8 +3113,6 @@ export async function executePlan(
 
         // Emit step result for streaming display
         options.onStepResult?.(step.id, step.tool, result.data);
-
-        console.log("[EXECUTOR] Step completed successfully. Extracted context:", Object.keys(extractedContext));
       } else {
         step.status = "failed";
         step.error = result.error;
@@ -3148,13 +3121,23 @@ export async function executePlan(
           stepId: step.id,
           tool: step.tool,
           error: result.error || "Unknown error",
-          recoverable: true,
+          recoverable: false,
         });
 
-        console.log("[EXECUTOR] Step failed:", result.error);
+        // Check if this failure would block subsequent steps
+        // Stop execution if:
+        // 1. This step provides context that later steps need
+        // 2. Later steps have explicit dependencies on this step
+        // 3. stopOnFailure is explicitly requested
+        const providesContext = step.providesContext || [];
+        const hasLaterDependents = plan.steps.slice(i + 1).some(
+          (laterStep) =>
+            laterStep.dependsOn?.includes(step.id) ||
+            laterStep.contextNeeded?.some((ctx) => providesContext.includes(ctx))
+        );
 
-        if (stopOnFailure) {
-          console.log("[EXECUTOR] Stopping due to failure");
+        if (stopOnFailure || hasLaterDependents) {
+          onStepUpdate?.(step, i, plan.steps.length);
           break;
         }
       }
@@ -3171,9 +3154,9 @@ export async function executePlan(
 
       console.error("[EXECUTOR] Step error:", error);
 
-      if (stopOnFailure) {
-        break;
-      }
+      // Always stop on exceptions - they are unrecoverable
+      onStepUpdate?.(step, i, plan.steps.length);
+      break;
     }
 
     onStepUpdate?.(step, i, plan.steps.length);
@@ -3192,12 +3175,6 @@ export async function executePlan(
     allSuccessful: failedSteps.length === 0,
   };
 
-  console.log("[EXECUTOR] Execution complete:", {
-    completed: completedSteps.length,
-    failed: failedSteps.length,
-    duration: executionResult.totalDurationMs,
-  });
-
   return executionResult;
 }
 
@@ -3208,34 +3185,70 @@ function generateFinalResponse(
   plan: ExecutionPlan,
   completedSteps: CompletedStep[],
   failedSteps: FailedStep[],
-  context: Record<string, unknown>,
+  _context: Record<string, unknown>,
 ): string {
   const parts: string[] = [];
 
+  // Check if execution stopped early due to a blocking failure
+  const totalSteps = plan.steps.length;
+  const processedSteps = completedSteps.length + failedSteps.length;
+  const stoppedEarly = processedSteps < totalSteps && failedSteps.length > 0;
+
+  // If we have failures, show them prominently first
+  if (failedSteps.length > 0) {
+    const lastFailure = failedSteps[failedSteps.length - 1];
+    const failedStep = plan.steps.find((s) => s.id === lastFailure.stepId);
+    
+    if (stoppedEarly) {
+      parts.push("⚠️ **Execution stopped due to an error:**");
+      parts.push("");
+      parts.push(`**${failedStep?.description || lastFailure.tool}** failed:`);
+      parts.push(`> ${lastFailure.error}`);
+      parts.push("");
+      
+      // Show which steps were skipped
+      const skippedSteps = plan.steps.filter(
+        (s) => !completedSteps.some((cs) => cs.stepId === s.id) && 
+               !failedSteps.some((fs) => fs.stepId === s.id)
+      );
+      if (skippedSteps.length > 0) {
+        parts.push("**Skipped steps:**");
+        for (const step of skippedSteps) {
+          parts.push(`- ⏭️ ${step.description}`);
+        }
+        parts.push("");
+      }
+    } else {
+      parts.push("**Failed:**");
+      for (const step of failedSteps) {
+        const originalStep = plan.steps.find((s) => s.id === step.stepId);
+        parts.push(`- ❌ ${originalStep?.description || step.tool}: ${step.error}`);
+      }
+      parts.push("");
+    }
+  }
+
+  // Show completed steps
   if (completedSteps.length > 0) {
     parts.push("**Completed:**");
     for (const step of completedSteps) {
       const originalStep = plan.steps.find((s) => s.id === step.stepId);
       const icon = getToolIcon(step.tool);
       parts.push(`- ${icon} ${originalStep?.description || step.tool}`);
-      
+
       // Add relevant details
       if (step.result.metadata?.fileName) {
         parts.push(`  → Created: ${step.result.metadata.fileName}`);
       }
+      if (step.result.metadata?.projectName && step.tool === "createProject") {
+        const wasExisting = step.result.metadata?.wasExisting;
+        parts.push(`  → ${wasExisting ? "Using" : "Created"}: ${step.result.metadata.projectName}`);
+      }
     }
   }
 
-  if (failedSteps.length > 0) {
-    parts.push("");
-    parts.push("**Failed:**");
-    for (const step of failedSteps) {
-      const originalStep = plan.steps.find((s) => s.id === step.stepId);
-      parts.push(`- ❌ ${originalStep?.description || step.tool}: ${step.error}`);
-    }
-  }
-
-  if (completedSteps.length === plan.steps.length) {
+  // Success message only if all steps completed
+  if (completedSteps.length === totalSteps && failedSteps.length === 0) {
     parts.push("");
     parts.push("✅ All tasks completed successfully!");
   }
@@ -3666,8 +3679,6 @@ export async function runPlannerFlow(
     state.phase = "replanning";
     replanAttempts++;
     state.replanAttempts = replanAttempts;
-
-    console.log(`[FLOW] Replanning attempt ${replanAttempts}/${maxReplanAttempts}`);
 
     // Get project files again (they may have changed)
     const projectFiles = projectId
