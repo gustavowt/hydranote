@@ -1,0 +1,60 @@
+name: Build Windows
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Manual trigger from Actions tab
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install root dependencies
+        run: npm ci
+      
+      - name: Build web app
+        run: npm run build
+      
+      - name: Sync to Electron
+        run: npx cap sync @capacitor-community/electron
+      
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: npm ci
+      
+      - name: Build Windows installer
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npm run electron:make -- --win
+      
+      # Upload as artifact (available for all builds)
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HydraNote-Windows-Installer
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.exe.blockmap
+          retention-days: 30
+          if-no-files-found: error
+      
+      # Also upload the unpacked version for debugging
+      - name: Upload unpacked app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HydraNote-Windows-Unpacked
+          path: electron/dist/win-unpacked
+          retention-days: 7
+          if-no-files-found: warn
