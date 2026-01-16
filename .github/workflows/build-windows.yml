@@ -35,11 +35,23 @@ jobs:
         working-directory: electron
         run: npm ci
       
-      - name: Build Windows installer
+      - name: Build Electron app
+        working-directory: electron
+        run: npm run build
+      
+      # Build without publishing (for manual triggers / testing)
+      - name: Build Windows installer (no publish)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        working-directory: electron
+        run: npx electron-builder build -c ./electron-builder.config.json --win --publish never
+      
+      # Build and publish to GitHub Releases (for version tags)
+      - name: Build Windows installer (publish to GitHub)
+        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: electron
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: npm run electron:make -- --win
+        run: npx electron-builder build -c ./electron-builder.config.json --win --publish always
       
       # Upload as artifact (available for all builds)
       - name: Upload Windows installer artifact
