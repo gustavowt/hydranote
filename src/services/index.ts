@@ -87,7 +87,6 @@ export {
   executeSearchTool,
   executeSummarizeTool,
   executeWriteTool,
-  executeAddNoteTool,
   executeUpdateFileTool,
   executeCreateProjectTool,
   executeMoveFileTool,

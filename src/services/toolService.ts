@@ -46,7 +46,14 @@ import {
 } from "./projectService";
 import { chatCompletion, chatCompletionStreaming } from "./llmService";
 import { generateDocument } from "./documentGeneratorService";
-import { addNote, addNoteWithTitle } from "./noteService";
+import {
+  formatNote,
+  generateNoteTitle,
+  titleToSlug,
+  decideNoteDirectoryWithDirs,
+  getProjectDirectories,
+  generateUniqueFileName,
+} from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
 import {
   parseLineNumberSpec,
@@ -659,8 +666,9 @@ function buildFilePath(fileName: string, directory: string): string {
 
 /**
  * Execute the write tool
- * Creates a new file in the project. For Markdown files, saves directly to project.
- * For PDF/DOCX, generates and stores in project with optional download.
+ * Creates a new file in the project.
+ * For all formats: AI generates title if not provided, AI decides directory if not provided.
+ * For Markdown: Also formats content via LLM.
  */
 export async function executeWriteTool(
   projectId: string,
@@ -669,8 +677,6 @@ export async function executeWriteTool(
 ): Promise<ToolResult> {
   try {
     const format = params.format || DEFAULT_WRITE_CONFIG.defaultFormat;
-    const title = params.title || "New Document";
-    const directory = params.path || ""; // Root of project by default
 
     // Validate format
     if (!DEFAULT_WRITE_CONFIG.supportedFormats.includes(format)) {
@@ -686,20 +692,51 @@ export async function executeWriteTool(
     if (!content) {
       content = await generateDocumentContent(
         projectId,
-        title,
-        userMessage || `Generate a document about ${title}`,
+        params.title || "New Document",
+        userMessage || `Generate a document about ${params.title || "the topic"}`,
       );
     }
 
-    // For Markdown files: Save directly to project using centralized function
+    // Common: Check if title/directory are provided
+    const titleProvided = params.title && params.title.trim().length > 0;
+    const directoryProvided = params.path && params.path.trim().length > 0;
+
+    // For Markdown files: Use the full AI pipeline (formatting, title generation, directory decision)
     if (format === "md") {
-      const fileName = titleToFileName(title) + ".md";
-      const fullPath = buildFilePath(fileName, directory);
+      // Run format, title generation (if needed), and directory fetch in PARALLEL
+      const [formattedContent, generatedTitle, existingDirectories] = await Promise.all([
+        // Always format content for MD files
+        formatNote(content),
+        // Generate title if not provided
+        titleProvided ? Promise.resolve(params.title!) : generateNoteTitle(content),
+        // Pre-fetch directories for decision (only if directory not provided)
+        directoryProvided ? Promise.resolve([]) : getProjectDirectories(projectId),
+      ]);
+
+      const finalTitle = generatedTitle;
+      const slug = titleToSlug(finalTitle);
+
+      // Decide directory if not explicitly provided
+      let targetDirectory: string;
+      if (directoryProvided) {
+        targetDirectory = params.path!;
+      } else {
+        const { targetDirectory: decidedDir } = await decideNoteDirectoryWithDirs(
+          projectId,
+          finalTitle,
+          existingDirectories,
+        );
+        targetDirectory = decidedDir;
+      }
+
+      // Generate unique filename
+      const fileName = await generateUniqueFileName(projectId, slug, targetDirectory);
+      const fullPath = targetDirectory ? `${targetDirectory}/${fileName}` : fileName;
 
       // Add title as H1 if content doesn't start with a heading
-      const finalContent = content.trim().startsWith("#")
-        ? content
-        : `# ${title}\n\n${content}`;
+      const finalContent = formattedContent.trim().startsWith("#")
+        ? formattedContent
+        : `# ${finalTitle}\n\n${formattedContent}`;
 
       // Use centralized createFile (handles DB + file system sync)
       const file = await projectCreateFile(
@@ -715,9 +752,9 @@ export async function executeWriteTool(
       return {
         success: true,
         tool: "write",
-        data: `File "${fullPath}" has been created in the project.\n\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${directory || "project root"}`,
+        data: `File "${file.name}" has been created.\n\n**Title:** ${finalTitle}\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${targetDirectory || "project root"}`,
         metadata: {
-          fileName: fullPath,
+          fileName: file.name,
           fileId: file.id,
           projectId,
           fileSize: file.size,
@@ -726,13 +763,37 @@ export async function executeWriteTool(
       };
     }
 
-    // For PDF/DOCX: Generate document and store in project
-    const result = await generateDocument(projectId, title, content, format);
+    // For PDF/DOCX: AI generates title and decides directory (no content formatting)
+    // Run title generation and directory fetch in PARALLEL
+    const [generatedTitle, existingDirectories] = await Promise.all([
+      // Generate title if not provided
+      titleProvided ? Promise.resolve(params.title!) : generateNoteTitle(content),
+      // Pre-fetch directories for decision (only if directory not provided)
+      directoryProvided ? Promise.resolve([]) : getProjectDirectories(projectId),
+    ]);
+
+    const finalTitle = generatedTitle;
+
+    // Decide directory if not explicitly provided
+    let targetDirectory: string;
+    if (directoryProvided) {
+      targetDirectory = params.path!;
+    } else {
+      const { targetDirectory: decidedDir } = await decideNoteDirectoryWithDirs(
+        projectId,
+        finalTitle,
+        existingDirectories,
+      );
+      targetDirectory = decidedDir;
+    }
+
+    // Generate document with AI-decided title and directory
+    const result = await generateDocument(projectId, finalTitle, content, format, targetDirectory);
 
     return {
       success: true,
       tool: "write",
-      data: `Document "${result.fileName}" has been created.\n\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}`,
+      data: `Document "${result.fileName}" has been created.\n\n**Title:** ${finalTitle}\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}\n**Location:** ${targetDirectory || "project root"}`,
       metadata: {
         fileName: result.fileName,
         fileId: result.fileId,
@@ -758,80 +819,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// ============================================
-// AddNote Tool Implementation (Phase 9)
-// ============================================
-
-/**
- * Execute the addNote tool
- * Creates a formatted note and saves it to the project
- */
-export async function executeAddNoteTool(
-  projectId: string,
-  params: { content: string; title?: string; topic?: string; tags?: string },
-): Promise<ToolResult> {
-  try {
-    const content = params.content;
-
-    if (!content || content.trim().length === 0) {
-      return {
-        success: false,
-        tool: "addNote",
-        error: "Note content is required",
-      };
-    }
-
-    // Build context metadata
-    const contextMetadata: NoteContextMetadata = {};
-    if (params.topic) contextMetadata.topic = params.topic;
-    if (params.tags)
-      contextMetadata.tags = params.tags.split(",").map((t) => t.trim());
-
-    // Execute the addNote pipeline
-    let result;
-    if (params.title) {
-      result = await addNoteWithTitle(
-        projectId,
-        content,
-        params.title,
-        contextMetadata,
-      );
-    } else {
-      result = await addNote({
-        projectId,
-        rawNoteText: content,
-        contextMetadata,
-      });
-    }
-
-    if (!result.success) {
-      return {
-        success: false,
-        tool: "addNote",
-        error: result.error || "Failed to create note",
-      };
-    }
-
-    return {
-      success: true,
-      tool: "addNote",
-      data: `Note "${result.title}" has been created and saved.\n\n**Location:** ${result.filePath}\n**Directory:** ${result.directory}`,
-      metadata: {
-        fileName: result.filePath,
-        fileId: result.fileId,
-        projectId,
-        truncated: false,
-      },
-    };
-  } catch (error) {
-    return {
-      success: false,
-      tool: "addNote",
-      error: error instanceof Error ? error.message : "Failed to create note",
-    };
-  }
 }
 
 // ============================================
@@ -2115,40 +2102,12 @@ async function executeToolInternal(
         targetProjectId,
         {
           format: (call.params.format as DocumentFormat) || "md",
-          title: call.params.title || "New Document",
-          content: call.params.content || "",
+          title: call.params.title || "", // Optional - AI generates if empty for MD files
+          content: call.params.content || call.params.text || call.params.note || "",
           path: call.params.path || call.params.directory || "",
         },
         userMessage,
       );
-    }
-
-    case "addNote": {
-      const targetProjectId = await resolveProjectForTool(
-        projectId,
-        call.params.project,
-      );
-
-      if (!targetProjectId) {
-        return {
-          success: false,
-          tool: "addNote",
-          error:
-            "Project is required. Please specify which project to add the note to.",
-        };
-      }
-
-      return executeAddNoteTool(targetProjectId, {
-        content:
-          call.params.content ||
-          call.params.text ||
-          call.params.note ||
-          userMessage ||
-          "",
-        title: call.params.title,
-        topic: call.params.topic,
-        tags: call.params.tags,
-      });
     }
 
     case "updateFile": {
@@ -2410,8 +2369,7 @@ Available tools:
 - read: Read a file's full content. Params: {file: "filename", project?: "project name"}
 - search: Semantic search across documents. Params: {query: "search query", project?: "project name"}
 - summarize: Create a summary of a document. Params: {file: "filename", project?: "project name"}
-- write: Create a NEW file (MD/PDF/DOCX). Params: {format: "md"|"pdf"|"docx", title: "filename", content: "content", path?: "directory", project?: "project name"}
-- addNote: Create and save a quick note. Params: {content: "note content", title?: "title", project?: "project name"}
+- write: Create a file. AI generates title if not provided and decides directory for all formats. For MD: also formats content. Params: {format: "md"|"pdf"|"docx", content: "content", title?: "title", path?: "directory", project?: "project name"}
 - updateFile: Update an existing file. Params: {file: "filename", section: "section to find", operation: "replace"|"insert_before"|"insert_after", newContent: "new content"}
 - createProject: Create a new project. Params: {name: "project name", description?: "description"}
 - moveFile: Rename or move a file. Params: {file: "filename", newName?: "new-name.md" (for rename), directory?: "target/dir" (for move within project), fromProject?: "source", toProject?: "destination" (for cross-project move)}
@@ -2428,7 +2386,7 @@ User message references:
 IMPORTANT RULES:
 1. Order matters! If creating a project then adding files, createProject MUST come first
 2. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
-3. For content generation (write/addNote), the Executor will generate content based on accumulated context
+3. For content generation (write), the Executor will generate content based on accumulated context
 4. If the user's request is ambiguous or missing critical info, set needsClarification: true
 5. **CRITICAL - Selection Edit Behavior**: When the user includes @selection: with a file path and asks to:
    - "rephrase", "rewrite", "improve", "fix", "edit", "change", "modify", "update", etc.
@@ -2440,7 +2398,7 @@ IMPORTANT RULES:
 Context propagation examples:
 - webResearch → write: The write step needs webResearchResults from the webResearch step
 - createProject → write: The write step needs projectId from createProject
-- search → addNote: The addNote step needs searchResults from search
+- search → write: The write step needs searchResults from search
 
 Respond ONLY with a JSON object:
 {
@@ -2597,7 +2555,6 @@ export function getToolIcon(tool: ToolName): string {
     search: "🔍",
     summarize: "📋",
     write: "📝",
-    addNote: "📌",
     updateFile: "✏️",
     createProject: "📁",
     moveFile: "📦",
@@ -2634,7 +2591,6 @@ function extractContextFromResult(
       break;
 
     case "write":
-    case "addNote":
       context.lastCreatedFileId = result.metadata?.fileId;
       context.lastCreatedFileName = result.metadata?.fileName;
       context.lastCreatedProjectId = result.metadata?.projectId;
@@ -2691,7 +2647,7 @@ function enrichParamsWithContext(
     step.contextNeeded?.includes("webResearchResults") &&
     accumulatedContext.webResearchResults
   ) {
-    // For write/addNote, we'll generate content based on web research
+    // For write, we'll generate content based on web research
     enrichedParams._webContext = String(accumulatedContext.webResearchResults);
     // Mark that we should override placeholder content
     enrichedParams._shouldGenerateFromContext = "true";
@@ -2709,7 +2665,7 @@ function enrichParamsWithContext(
 }
 
 /**
- * Generate content for write/addNote tools when content needs to be created
+ * Generate content for write tool when content needs to be created
  * based on accumulated context
  */
 async function generateContentFromContext(
@@ -3033,7 +2989,7 @@ export async function executePlan(
       // Enrich params with context
       const enrichedParams = enrichParamsWithContext(step, accumulatedContext);
 
-      // For write/addNote, generate content if needed
+      // For write, generate content if needed
       // Generate content when:
       // 1. No content exists, OR
       // 2. Step explicitly needs context (contextNeeded was set, so _shouldGenerateFromContext is true)
@@ -3041,7 +2997,7 @@ export async function executePlan(
       const shouldGenerateContent = enrichedParams._shouldGenerateFromContext === "true";
       
       if (
-        (step.tool === "write" || step.tool === "addNote") &&
+        step.tool === "write" &&
         hasContextToUse &&
         (!enrichedParams.content || shouldGenerateContent)
       ) {
