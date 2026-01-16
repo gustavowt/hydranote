@@ -1608,12 +1608,13 @@ const DEFAULT_CONTEXT_CONFIG = {
 The embedding provider is **completely independent** from the LLM provider, allowing users to mix and match:
 - Use Claude for chat + OpenAI for embeddings
 - Use Ollama for chat + Gemini for embeddings
+- Use any cloud LLM + Hugging Face local embeddings (offline capable)
 - etc.
 
 Stored in localStorage under `hydranote_indexer_settings`:
 
 ```typescript
-type EmbeddingProvider = 'openai' | 'gemini' | 'ollama';
+type EmbeddingProvider = 'openai' | 'gemini' | 'ollama' | 'huggingface_local';
 
 interface IndexerSettings {
   provider: EmbeddingProvider;
@@ -1629,6 +1630,9 @@ interface IndexerSettings {
     baseUrl: string;
     model: string;  // e.g., 'nomic-embed-text', 'mxbai-embed-large'
   };
+  huggingfaceLocal: {
+    model: string;  // e.g., 'Xenova/all-MiniLM-L6-v2'
+  };
 }
 ```
 
@@ -1642,6 +1646,32 @@ interface IndexerSettings {
 | Ollama | nomic-embed-text | 768 | Base URL + Model |
 | Ollama | mxbai-embed-large | 1024 | Base URL + Model |
 | Ollama | all-minilm | 384 | Base URL + Model |
+| Hugging Face Local | Xenova/all-MiniLM-L6-v2 | 384 | None (Electron only) |
+| Hugging Face Local | Xenova/bge-small-en-v1.5 | 384 | None (Electron only) |
+| Hugging Face Local | Xenova/gte-small | 384 | None (Electron only) |
+| Hugging Face Local | Xenova/bge-base-en-v1.5 | 768 | None (Electron only) |
+| Hugging Face Local | Xenova/multilingual-e5-small | 384 | None (Electron only) |
+
+#### Hugging Face Local Embeddings (Electron Only)
+
+The Hugging Face Local provider runs embedding models entirely offline using `@huggingface/transformers` in the Electron main process. This enables:
+- **No API key required** - models run locally
+- **Offline capable** - once downloaded, works without internet
+- **Privacy focused** - embeddings never leave your machine
+- **No rate limits** - generate as many embeddings as needed
+
+Models are automatically downloaded on first use and cached in the user data directory (`embedding-models/`).
+
+**Architecture:**
+```
+Renderer Process (embeddingService.ts)
+        │
+        ▼ IPC: embeddings:generate
+Electron Main Process (embeddingRuntime.ts)
+        │
+        ▼ @huggingface/transformers
+ONNX Runtime (WebNN/WASM)
+```
 
 #### Embedding Service Functions
 
@@ -1658,6 +1688,10 @@ interface IndexerSettings {
 | `detectStaleEmbeddings(projectId?)` | Find files needing re-indexing |
 | `reindexStaleFiles(projectId?, onProgress?)` | Re-index stale files |
 | `reindexAllFiles(onProgress?)` | Full re-index of all files |
+| `isHuggingFaceLocalAvailable()` | Check if HF local is available (Electron) |
+| `getHuggingFaceLocalStatus()` | Get HF embedding runtime status |
+| `onHuggingFaceLocalStatusChange(cb)` | Subscribe to HF status changes |
+| `getHuggingFaceLocalCatalog()` | Get suggested HF local models |
 
 #### Stale Embedding Detection
 
@@ -1710,6 +1744,17 @@ Electron exposes file system operations via IPC handlers in `electron/src/index.
 | `fs:listDirectory` | List directory contents with metadata |
 | `fs:exists` | Check if path exists |
 | `fs:getStats` | Get file/directory statistics |
+
+#### Embedding IPC Handlers
+
+| Handler | Description |
+|---------|-------------|
+| `embeddings:getCatalog` | Get suggested embedding models |
+| `embeddings:getStatus` | Get embedding runtime status |
+| `embeddings:loadModel` | Load an embedding model |
+| `embeddings:unloadModel` | Unload current embedding model |
+| `embeddings:generate` | Generate embedding for single text |
+| `embeddings:generateBatch` | Generate embeddings for multiple texts |
 
 ---
 
@@ -1955,7 +2000,12 @@ src/
 │   ├── PDFViewer.vue                # PDF file viewer with pdf.js
 │   ├── RichTextEditor.vue           # WYSIWYG editor with Tiptap for DOCX
 │   ├── ProjectsTreeSidebar.vue      # Left panel: projects/files tree
-│   └── SearchAutocomplete.vue       # Header: global fuzzy search bar
+│   ├── SearchAutocomplete.vue       # Header: global fuzzy search bar
+│   └── settings/                    # Reusable settings components
+│       ├── index.ts                 # Component exports
+│       ├── AIProviderSelector.vue   # AI provider selection + configuration
+│       ├── IndexerProviderSelector.vue # Embedding provider selection
+│       └── StorageSettings.vue      # File system sync configuration
 ├── icons/
 │   ├── index.ts              # Icon component exports
 │   ├── OpenAiIcon.vue        # OpenAI provider logo
@@ -2025,6 +2075,128 @@ import { OpenAiIcon, ClaudeIcon, GeminiIcon } from '@/icons';
 ```
 
 All icons inherit attributes via `v-bind="$attrs"` and use `fill="currentColor"` to respect the parent's text color.
+
+---
+
+## Reusable Settings Components
+
+The `src/components/settings/` folder contains reusable Vue components that are shared between the **SetupWizardPage** and **SettingsPage**. This ensures consistent UI and behavior across both pages.
+
+### Components
+
+| Component | Description | Used In |
+|-----------|-------------|---------|
+| `AIProviderSelector` | AI provider selection cards + configuration panels for all 5 providers | SetupWizard (Step 3), Settings (AI Providers) |
+| `IndexerProviderSelector` | Embedding provider selection + configuration | SetupWizard (Step 3), Settings (Indexer) |
+| `StorageSettings` | File system sync configuration | SetupWizard (Step 2), Settings (Storage) |
+
+### AIProviderSelector
+
+Displays a grid of provider cards and the appropriate configuration panel based on the selected provider.
+
+**Supported Providers:**
+- OpenAI (GPT-4.1, GPT-4o series)
+- Claude (Anthropic Claude 4, 3.5)
+- Gemini (Google Gemini 2.5, 2.0)
+- Ollama (Local LLMs)
+- Local Model (Hugging Face GGUF models via node-llama-cpp)
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `modelValue` | `LLMSettings` | required | v-model for settings |
+| `compact` | `boolean` | `false` | Compact mode for wizard (simpler UI) |
+| `testingConnection` | `boolean` | `false` | Show loading state for test button |
+| `connectionStatus` | `object \| null` | `null` | Connection test result |
+| `localModelsAvailable` | `boolean` | `false` | Whether Electron local models are available |
+| `installedModels` | `LocalModel[]` | `[]` | List of installed local models |
+| `modelCatalog` | `HFModelRef[]` | `[]` | Available models for download |
+| `downloadProgress` | `object \| null` | `null` | Model download progress |
+| `runtimeStatus` | `RuntimeStatus \| null` | `null` | Local model runtime status |
+
+**Events:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `update:modelValue` | `LLMSettings` | Settings changed |
+| `test-connection` | - | Test connection requested |
+| `save` | - | Save button clicked (full mode) |
+| `select-local-model` | `LocalModel` | Local model selected |
+| `install-model` | `HFModelRef` | Model install requested |
+| `remove-model` | `string` | Model removal requested |
+
+**Usage:**
+
+```vue
+<AIProviderSelector
+  v-model="llmSettings"
+  :testing-connection="testingConnection"
+  :connection-status="connectionStatus"
+  :local-models-available="localModelsAvailable"
+  :installed-models="installedModels"
+  compact
+  @test-connection="handleTestConnection"
+/>
+```
+
+### IndexerProviderSelector
+
+Displays embedding provider selection for semantic search.
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `modelValue` | `IndexerSettings` | required | v-model for settings |
+| `compact` | `boolean` | `false` | Compact mode (simpler UI) |
+| `collapsible` | `boolean` | `false` | Show as collapsible section |
+| `showActions` | `boolean` | `true` | Show action buttons (full mode) |
+
+**Usage:**
+
+```vue
+<IndexerProviderSelector
+  v-model="indexerSettings"
+  compact
+  collapsible
+/>
+```
+
+### StorageSettings
+
+File system sync configuration component.
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `modelValue` | `FileSystemSettings` | required | v-model for settings |
+| `isFileSystemSupported` | `boolean` | `true` | Whether FS API is supported |
+| `compact` | `boolean` | `false` | Compact mode for wizard |
+| `selectingDirectory` | `boolean` | `false` | Directory selection in progress |
+| `syncing` | `boolean` | `false` | Sync in progress |
+
+**Events:**
+
+| Event | Description |
+|-------|-------------|
+| `update:modelValue` | Settings changed |
+| `select-directory` | Directory picker requested |
+| `sync-now` | Manual sync requested |
+| `disconnect` | Disconnect storage requested |
+
+**Usage:**
+
+```vue
+<StorageSettings
+  v-model="fsSettings"
+  :is-file-system-supported="isFileSystemSupported"
+  :selecting-directory="selectingDirectory"
+  compact
+  @select-directory="handleSelectDirectory"
+/>
+```
 
 ---
 
@@ -2393,9 +2565,11 @@ The catalog includes pre-configured suggestions organized by use case:
 | File | Description |
 |------|-------------|
 | `electron/src/modelManager.ts` | Download and registry management |
-| `electron/src/inferenceRuntime.ts` | node-llama-cpp adapter |
-| `electron/src/preload.ts` | Models API exposure |
-| `src/services/localModelService.ts` | Frontend IPC wrapper |
+| `electron/src/inferenceRuntime.ts` | node-llama-cpp adapter for LLM inference |
+| `electron/src/embeddingRuntime.ts` | Transformers.js adapter for local embeddings |
+| `electron/src/preload.ts` | Models and embeddings API exposure |
+| `src/services/localModelService.ts` | Frontend IPC wrapper for LLM models |
+| `src/services/embeddingService.ts` | Embedding generation (multi-provider) |
 | `src/icons/HuggingFaceIcon.vue` | Provider icon |
 
 ---
