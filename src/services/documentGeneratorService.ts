@@ -400,16 +400,19 @@ export async function storeGeneratedDocument(
   title: string,
   format: DocumentFormat,
   blob: Blob,
-  autoDownload = true
+  autoDownload = true,
+  directory?: string
 ): Promise<GeneratedDocument> {
   const fileId = crypto.randomUUID();
-  const fileName = `${sanitizeFileName(title)}.${format}`;
+  const baseFileName = `${sanitizeFileName(title)}.${format}`;
+  // Include directory in the file path if provided
+  const fileName = directory ? `${directory}/${baseFileName}` : baseFileName;
   const downloadUrl = `hydranote://download/${fileId}`;
 
-  // Store blob for later download
-  generatedDocuments.set(fileId, { blob, fileName });
+  // Store blob for later download (use base filename for actual download)
+  generatedDocuments.set(fileId, { blob, fileName: baseFileName });
 
-  // Store in database
+  // Store in database with full path
   const conn = getConnection();
   const now = new Date().toISOString();
 
@@ -418,9 +421,9 @@ export async function storeGeneratedDocument(
     VALUES ('${fileId}', '${projectId}', '${fileName}', '${format}', ${blob.size}, 'indexed', '${now}', '${now}')
   `);
 
-  // Auto-download the file
+  // Auto-download the file (use base filename without directory for download)
   if (autoDownload) {
-    saveAs(blob, fileName);
+    saveAs(blob, baseFileName);
   }
 
   return {
@@ -454,7 +457,8 @@ export async function generateDocument(
   projectId: string,
   title: string,
   content: string,
-  format: DocumentFormat
+  format: DocumentFormat,
+  directory?: string
 ): Promise<GeneratedDocument> {
   let blob: Blob;
 
@@ -472,7 +476,7 @@ export async function generateDocument(
       throw new Error(`Unsupported format: ${format}`);
   }
 
-  return storeGeneratedDocument(projectId, title, format, blob);
+  return storeGeneratedDocument(projectId, title, format, blob, true, directory);
 }
 
 /**
