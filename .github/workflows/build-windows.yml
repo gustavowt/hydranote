@@ -25,6 +25,8 @@ jobs:
       
       - name: Build web app
         run: npm run build
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
       
       - name: Sync to Electron
         run: npx cap sync @capacitor-community/electron

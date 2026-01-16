@@ -92,23 +92,20 @@ To execute a tool, you MUST include this EXACT format in your response:
 {"tool": "summarize", "params": {"file": "filename.pdf"}}
 \`\`\`
 
-**4. WRITE** - Create a new file (md, pdf, docx)
+**4. WRITE** - Create a file (MD with AI formatting, PDF/DOCX direct)
 \`\`\`tool_call
-{"tool": "write", "params": {"format": "md", "title": "filename", "content": "file content", "path": "optional/directory"}}
+{"tool": "write", "params": {"format": "md", "content": "note content", "title": "optional title", "path": "optional/directory"}}
 \`\`\`
+AI generates title if not provided and decides directory for all formats.
+For MD: Also formats content via LLM.
 
-**5. ADD NOTE** - Create a quick note
-\`\`\`tool_call
-{"tool": "addNote", "params": {"content": "note content", "title": "optional title"}}
-\`\`\`
-
-**6. UPDATE FILE** - Modify existing file section
+**5. UPDATE FILE** - Modify existing file section
 \`\`\`tool_call
 {"tool": "updateFile", "params": {"file": "filename.md", "section": "Section Name", "operation": "replace", "newContent": "new content"}}
 \`\`\`
 Operations: "replace", "insert_before", "insert_after"
 
-**7. WEB RESEARCH** - Search the internet
+**6. WEB RESEARCH** - Search the internet
 \`\`\`tool_call
 {"tool": "webResearch", "params": {"query": "search query"}}
 \`\`\`
@@ -120,8 +117,7 @@ Operations: "replace", "insert_before", "insert_after"
 | Read, view, open, show a file | READ |
 | Search, find, what does it say about | SEARCH |
 | Summarize, overview, TL;DR | SUMMARIZE |
-| Create, write, generate, save as file | WRITE |
-| Take a note, remember this, add note | ADD NOTE |
+| Create, write, generate, save as file, add note | WRITE |
 | Update, edit, modify, change a file | UPDATE FILE |
 | Search web, current news, external info | WEB RESEARCH |
 
@@ -217,42 +213,38 @@ To execute a tool, you MUST include this EXACT format in your response:
 {"tool": "summarize", "params": {"file": "filename.pdf", "project": "Project Name"}}
 \`\`\`
 
-**4. WRITE** - Create a new file (requires project in global mode)
+**4. WRITE** - Create a file (requires project in global mode)
 \`\`\`tool_call
-{"tool": "write", "params": {"format": "md", "title": "filename", "content": "content", "project": "Project Name"}}
+{"tool": "write", "params": {"format": "md", "content": "note content", "title": "optional", "project": "Project Name"}}
 \`\`\`
+AI generates title if not provided and decides directory for all formats. For MD: Also formats content.
 
-**5. ADD NOTE** - Create a quick note (requires project in global mode)
-\`\`\`tool_call
-{"tool": "addNote", "params": {"content": "note content", "project": "Project Name"}}
-\`\`\`
-
-**6. UPDATE FILE** - Modify existing file section
+**5. UPDATE FILE** - Modify existing file section
 \`\`\`tool_call
 {"tool": "updateFile", "params": {"file": "filename.md", "section": "Section", "operation": "replace", "newContent": "content", "project": "Project"}}
 \`\`\`
 
-**7. CREATE PROJECT** - Create a new project
+**6. CREATE PROJECT** - Create a new project
 \`\`\`tool_call
 {"tool": "createProject", "params": {"name": "Project Name", "description": "optional"}}
 \`\`\`
 
-**8. MOVE FILE** - Move file between projects
+**7. MOVE FILE** - Move file between projects
 \`\`\`tool_call
 {"tool": "moveFile", "params": {"file": "filename.md", "fromProject": "Source", "toProject": "Destination"}}
 \`\`\`
 
-**9. DELETE FILE** - Delete a file
+**8. DELETE FILE** - Delete a file
 \`\`\`tool_call
 {"tool": "deleteFile", "params": {"file": "filename.md", "project": "Project Name"}}
 \`\`\`
 
-**10. DELETE PROJECT** - Delete entire project (requires confirm: "yes")
+**9. DELETE PROJECT** - Delete entire project (requires confirm: "yes")
 \`\`\`tool_call
 {"tool": "deleteProject", "params": {"project": "Project Name", "confirm": "yes"}}
 \`\`\`
 
-**11. WEB RESEARCH** - Search the internet
+**10. WEB RESEARCH** - Search the internet
 \`\`\`tool_call
 {"tool": "webResearch", "params": {"query": "search query"}}
 \`\`\`
@@ -264,8 +256,7 @@ To execute a tool, you MUST include this EXACT format in your response:
 | Read, view, open a file | READ |
 | Search, find information | SEARCH |
 | Summarize a document | SUMMARIZE |
-| Create, write a new file | WRITE |
-| Take a note | ADD NOTE |
+| Create, write a new file, add note | WRITE |
 | Edit/update a file | UPDATE FILE |
 | Create a new project | CREATE PROJECT |
 | Move file between projects | MOVE FILE |
