@@ -52,6 +52,12 @@ export interface LoadModelOptions {
   contextLength?: number;
 }
 
+export interface HardwareInfo {
+  backend: 'cuda' | 'metal' | 'vulkan' | 'cpu' | 'unknown';
+  supportedBackends: string[];
+  deviceName?: string;
+}
+
 // ============================================
 // Inference Runtime Class
 // ============================================
@@ -472,6 +478,52 @@ export class InferenceRuntime {
     } catch (error) {
       console.error('[InferenceRuntime] Inference failed:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get hardware acceleration information
+   * Returns info about detected GPU backends (CUDA, Metal, Vulkan) or CPU-only mode
+   */
+  async getHardwareInfo(): Promise<HardwareInfo> {
+    try {
+      const nodeLlamaCpp = await dynamicImport('node-llama-cpp') as typeof import('node-llama-cpp');
+      const { getLlama, getLlamaGpuTypes } = nodeLlamaCpp;
+
+      // Get supported GPU types
+      let supportedBackends: string[] = [];
+      try {
+        supportedBackends = await getLlamaGpuTypes('supported') as string[];
+      } catch {
+        // getLlamaGpuTypes might not be available in all versions
+        supportedBackends = [];
+      }
+
+      // If we already have a llama instance loaded, use its GPU info
+      if (this.llama) {
+        const llamaInstance = this.llama as { gpu?: string | false };
+        const backend = llamaInstance.gpu || 'cpu';
+        return {
+          backend: backend === false ? 'cpu' : (backend as HardwareInfo['backend']),
+          supportedBackends,
+        };
+      }
+
+      // Otherwise, create a temporary instance to check hardware
+      const llama = await getLlama();
+      const llamaAny = llama as { gpu?: string | false };
+      const detectedBackend = llamaAny.gpu || 'cpu';
+
+      return {
+        backend: detectedBackend === false ? 'cpu' : (detectedBackend as HardwareInfo['backend']),
+        supportedBackends,
+      };
+    } catch (error) {
+      console.error('[InferenceRuntime] Error getting hardware info:', error);
+      return {
+        backend: 'unknown',
+        supportedBackends: [],
+      };
     }
   }
 

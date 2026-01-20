@@ -338,6 +338,7 @@ export {
   removeModel,
   onDownloadProgress,
   getRuntimeStatus,
+  getHardwareInfo,
   onRuntimeStatusChange,
   loadModel,
   unloadModel,

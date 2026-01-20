@@ -199,6 +199,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     // Get local model settings
     getSettings: () => ipcRenderer.invoke('models:getSettings'),
+    // Get hardware acceleration info (CUDA, Metal, Vulkan, CPU)
+    getHardwareInfo: () => ipcRenderer.invoke('models:getHardwareInfo'),
     // Save local model settings
     saveSettings: (settings: LocalModelSettings) => {
       const plainSettings = {

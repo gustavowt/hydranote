@@ -206,6 +206,13 @@ interface ElectronInferenceMessage {
   content: string;
 }
 
+// Hardware acceleration info
+interface ElectronHardwareInfo {
+  backend: 'cuda' | 'metal' | 'vulkan' | 'cpu' | 'unknown';
+  supportedBackends: string[];
+  deviceName?: string;
+}
+
 // ============================================
 // Local Embeddings Types (Hugging Face)
 // ============================================
@@ -302,6 +309,8 @@ interface ElectronAPI {
     getSettings: () => Promise<{ success: boolean; settings?: ElectronLocalModelSettings; error?: string }>;
     /** Save local model settings */
     saveSettings: (settings: ElectronLocalModelSettings) => Promise<{ success: boolean; error?: string }>;
+    /** Get hardware acceleration info (CUDA, Metal, Vulkan, CPU) */
+    getHardwareInfo: () => Promise<{ success: boolean; info?: ElectronHardwareInfo; error?: string }>;
     /** Listen for download progress events */
     onDownloadProgress: (callback: (event: unknown, progress: ElectronModelDownloadProgress) => void) => void;
     /** Listen for runtime status changes */

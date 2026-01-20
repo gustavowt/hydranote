@@ -767,6 +767,20 @@ ipcMain.handle('models:getSettings', async () => {
   }
 });
 
+// Get hardware acceleration info (CUDA, Metal, Vulkan, CPU)
+ipcMain.handle('models:getHardwareInfo', async () => {
+  try {
+    const info = await inferenceRuntime.getHardwareInfo();
+    return { success: true, info };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get hardware info',
+      info: { backend: 'unknown', supportedBackends: [] },
+    };
+  }
+});
+
 // Save local model settings
 ipcMain.handle('models:saveSettings', async (_event, settings: {
   modelsDirectory?: string;

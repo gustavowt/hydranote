@@ -13,6 +13,7 @@ import type {
   LocalModelSettings,
   ModelDownloadProgress,
   RuntimeStatus,
+  HardwareInfo,
   LLMMessage,
   LocalInferenceOptions,
 } from '../types';
@@ -229,6 +230,31 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   }
 
   return result.status;
+}
+
+/**
+ * Get hardware acceleration info (CUDA, Metal, Vulkan, CPU)
+ * Returns null if not running in Electron
+ */
+export async function getHardwareInfo(): Promise<HardwareInfo | null> {
+  if (!isLocalModelsAvailable()) {
+    return null;
+  }
+
+  try {
+    const result = await window.electronAPI!.models.getHardwareInfo();
+    if (!result.success || !result.info) {
+      return {
+        backend: 'unknown',
+        supportedBackends: [],
+      };
+    }
+
+    return result.info;
+  } catch (error) {
+    console.error('[LocalModelService] Failed to get hardware info:', error);
+    return null;
+  }
 }
 
 /**

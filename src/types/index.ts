@@ -1896,6 +1896,18 @@ export interface RuntimeStatus {
 }
 
 /**
+ * Hardware acceleration info for local models (CUDA, Metal, Vulkan, CPU)
+ */
+export interface HardwareInfo {
+  /** Detected backend being used */
+  backend: 'cuda' | 'metal' | 'vulkan' | 'cpu' | 'unknown';
+  /** List of supported backends on this system */
+  supportedBackends: string[];
+  /** Device name (e.g., GPU name) if available */
+  deviceName?: string;
+}
+
+/**
  * Model inference options
  */
 export interface LocalInferenceOptions {
