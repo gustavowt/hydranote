@@ -2101,11 +2101,22 @@ The `src/components/settings/` folder contains reusable Vue components that are 
 Displays a grid of provider cards and the appropriate configuration panel based on the selected provider.
 
 **Supported Providers:**
+
+Main Providers (always visible):
 - OpenAI (GPT-4.1, GPT-4o series)
 - Claude (Anthropic Claude 4, 3.5)
 - Gemini (Google Gemini 2.5, 2.0)
-- Ollama (Local LLMs)
-- Local Model (Hugging Face GGUF models via node-llama-cpp)
+
+Advanced Providers (under collapsible "Advanced" section):
+- Ollama (Local LLMs) - experimental
+- Local Model (Hugging Face GGUF models via node-llama-cpp) - experimental
+
+**Advanced Section Features:**
+- Collapsible toggle to show/hide experimental providers
+- Warning banner explaining experimental nature
+- "Experimental" badge on Hugging Face provider
+- GPU requirements banner for local models with hardware acceleration detection
+- Auto-expands when an advanced provider is already selected
 
 **Props:**
 
@@ -2120,6 +2131,7 @@ Displays a grid of provider cards and the appropriate configuration panel based 
 | `modelCatalog` | `HFModelRef[]` | `[]` | Available models for download |
 | `downloadProgress` | `object \| null` | `null` | Model download progress |
 | `runtimeStatus` | `RuntimeStatus \| null` | `null` | Local model runtime status |
+| `hardwareInfo` | `HardwareInfo \| null` | `null` | Hardware acceleration info (CUDA/Metal/Vulkan/CPU) |
 
 **Events:**
 
@@ -2141,6 +2153,7 @@ Displays a grid of provider cards and the appropriate configuration panel based 
   :connection-status="connectionStatus"
   :local-models-available="localModelsAvailable"
   :installed-models="installedModels"
+  :hardware-info="hardwareInfo"
   compact
   @test-connection="handleTestConnection"
 />
@@ -2149,6 +2162,16 @@ Displays a grid of provider cards and the appropriate configuration panel based 
 ### IndexerProviderSelector
 
 Displays embedding provider selection for semantic search.
+
+**Provider Organization:**
+
+Main Providers (always visible):
+- OpenAI (text-embedding-3-small/large)
+- Gemini (text-embedding-004)
+
+Advanced Providers (under collapsible "Advanced" section):
+- Ollama (nomic-embed-text, mxbai-embed-large) - experimental
+- Hugging Face Local (no API needed, Electron only) - experimental
 
 **Props:**
 
@@ -2461,6 +2484,7 @@ Frontend service for interacting with local models via IPC.
 | `removeModel(modelId)` | Remove installed model |
 | `onDownloadProgress(callback)` | Subscribe to download progress |
 | `getRuntimeStatus()` | Get runtime status |
+| `getHardwareInfo()` | Get hardware acceleration info (CUDA/Metal/Vulkan/CPU) |
 | `onRuntimeStatusChange(callback)` | Subscribe to status changes |
 | `loadModel(modelId, options)` | Load model for inference |
 | `unloadModel()` | Unload current model |
@@ -2511,6 +2535,13 @@ interface RuntimeStatus {
   gpuMemoryUsage?: number;
   ready: boolean;
   error?: string;
+}
+
+// Hardware acceleration info
+interface HardwareInfo {
+  backend: 'cuda' | 'metal' | 'vulkan' | 'cpu' | 'unknown';
+  supportedBackends: string[];
+  deviceName?: string;
 }
 
 // Local model settings
