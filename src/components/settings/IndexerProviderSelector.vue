@@ -12,10 +12,10 @@
         Choose a separate provider for document embeddings. By default, we'll use the same provider as your AI chat.
       </p>
 
-      <!-- Provider Cards -->
+      <!-- Main Provider Cards -->
       <div class="provider-cards" :class="{ compact }">
         <button
-          v-for="provider in indexerProviders"
+          v-for="provider in mainIndexerProviders"
           :key="provider.id"
           class="provider-card"
           :class="{ selected: modelValue.provider === provider.id }"
@@ -33,6 +33,48 @@
             <ion-icon :icon="checkmarkCircle" />
           </div>
         </button>
+      </div>
+
+      <!-- Advanced Options Section -->
+      <div class="advanced-section">
+        <button class="advanced-toggle" @click="showAdvancedIndexer = !showAdvancedIndexer" type="button">
+          <ion-icon :icon="settingsOutline" />
+          <span>Advanced</span>
+          <ion-icon :icon="showAdvancedIndexer ? chevronUpOutline : chevronDownOutline" class="chevron" />
+        </button>
+
+        <!-- Advanced Indexer Providers (collapsible content) -->
+        <div v-if="showAdvancedIndexer" class="advanced-content">
+          <div class="experimental-warning">
+            <ion-icon :icon="warningOutline" />
+            <span>These are experimental options and might not work as expected depending on the chosen model.</span>
+          </div>
+
+          <div class="provider-cards" :class="{ compact }">
+            <button
+              v-for="provider in advancedIndexerProviders"
+              :key="provider.id"
+              class="provider-card"
+              :class="{ selected: modelValue.provider === provider.id }"
+              @click="selectProvider(provider.id)"
+              type="button"
+            >
+              <div class="provider-icon">
+                <component :is="provider.iconComponent" />
+              </div>
+              <div class="provider-info">
+                <div class="provider-name-row">
+                  <h3>{{ provider.name }}</h3>
+                  <span v-if="provider.id === 'huggingface_local'" class="experimental-badge">Experimental</span>
+                </div>
+                <p v-if="!compact">{{ provider.description }}</p>
+              </div>
+              <div v-if="!compact" class="selected-indicator" v-show="modelValue.provider === provider.id">
+                <ion-icon :icon="checkmarkCircle" />
+              </div>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- OpenAI Indexer Config -->
@@ -53,7 +95,7 @@
             </div>
             <div class="field-actions">
               <button 
-                v-if="llmApiKeys?.openai && llmApiKeys.openai !== modelValue.openai.apiKey"
+                v-if="effectiveLlmApiKeys?.openai && effectiveLlmApiKeys.openai !== modelValue.openai.apiKey"
                 class="copy-key-btn"
                 @click="copyFromAIProvider('openai')"
                 type="button"
@@ -99,7 +141,7 @@
             </div>
             <div class="field-actions">
               <button 
-                v-if="llmApiKeys?.gemini && llmApiKeys.gemini !== modelValue.gemini.apiKey"
+                v-if="effectiveLlmApiKeys?.gemini && effectiveLlmApiKeys.gemini !== modelValue.gemini.apiKey"
                 class="copy-key-btn"
                 @click="copyFromAIProvider('gemini')"
                 type="button"
@@ -178,13 +220,13 @@
                 <div class="progress-fill" :style="{ width: hfModelProgress + '%' }"></div>
               </div>
             </div>
-            <div v-else-if="hfLocalStatus.status === 'ready'" class="hf-ready">
+            <div v-else-if="hfLocalStatusComputed?.status === 'ready'" class="hf-ready">
               <ion-icon :icon="checkmarkCircleOutline" />
-              <span>Model ready: {{ hfLocalStatus.loadedModel?.split('/').pop() }}</span>
+              <span>Model ready: {{ hfLocalStatusComputed?.loadedModel?.split('/').pop() }}</span>
             </div>
-            <div v-else-if="hfLocalStatus.status === 'error'" class="hf-error">
+            <div v-else-if="hfLocalStatusComputed?.status === 'error'" class="hf-error">
               <ion-icon :icon="closeCircleOutline" />
-              <span>{{ hfLocalStatus.error }}</span>
+              <span>{{ hfLocalStatusComputed?.error }}</span>
             </div>
             <div v-else class="hf-not-loaded">
               <ion-icon :icon="downloadOutline" />
@@ -196,12 +238,12 @@
 
       <!-- Test & Re-index Actions (full mode only) -->
       <div v-if="!compact && showActions" class="action-buttons">
-        <button class="btn btn-secondary" @click="$emit('test-indexer')" :disabled="testingIndexer" type="button">
-          <ion-spinner v-if="testingIndexer" name="crescent" />
+        <button class="btn btn-secondary" @click="$emit('test-connection')" :disabled="testingConnection" type="button">
+          <ion-spinner v-if="testingConnection" name="crescent" />
           <ion-icon v-else :icon="flashOutline" />
-          <span>Test Indexer</span>
+          <span>Test Connection</span>
         </button>
-        <button class="btn btn-secondary" @click="$emit('reindex')" :disabled="reindexing" type="button">
+        <button class="btn btn-secondary" @click="$emit('reindex-all')" :disabled="reindexing" type="button">
           <ion-spinner v-if="reindexing" name="crescent" />
           <ion-icon v-else :icon="refreshOutline" />
           <span>Re-index All Files</span>
@@ -213,9 +255,15 @@
       </div>
 
       <!-- Connection Status -->
-      <div v-if="indexerStatus" :class="['connection-status', indexerStatus.success ? 'success' : 'error']">
-        <ion-icon :icon="indexerStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
-        <span>{{ indexerStatus.message }}</span>
+      <div v-if="connectionStatus" :class="['connection-status', connectionStatus.success ? 'success' : 'error']">
+        <ion-icon :icon="connectionStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+        <span>{{ connectionStatus.message }}</span>
+      </div>
+
+      <!-- Re-index Status -->
+      <div v-if="reindexStatus" :class="['connection-status', reindexStatus.success ? 'success' : 'error']">
+        <ion-icon :icon="reindexStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
+        <span>{{ reindexStatus.message }}</span>
       </div>
 
       <!-- Re-index Progress -->
@@ -229,14 +277,14 @@
             :style="{ width: ((reindexProgress.current / reindexProgress.total) * 100) + '%' }"
           />
         </div>
-        <p v-if="reindexProgress.currentFile" class="current-file">{{ reindexProgress.currentFile }}</p>
+        <p v-if="reindexProgress.fileName" class="current-file">{{ reindexProgress.fileName }}</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { IonIcon, IonSpinner } from '@ionic/vue';
 import {
   checkmarkCircle,
@@ -252,8 +300,10 @@ import {
   saveOutline,
   downloadOutline,
   copyOutline,
+  settingsOutline,
+  warningOutline,
 } from 'ionicons/icons';
-import type { IndexerSettings, EmbeddingProvider, HFEmbeddingRuntimeStatus } from '@/types';
+import type { IndexerSettings, EmbeddingProvider, HFEmbeddingRuntimeStatus, LLMSettings } from '@/types';
 import { SUGGESTED_HF_LOCAL_EMBEDDING_MODELS } from '@/types';
 import { OpenAiIcon, GeminiIcon, OllamaIcon, HuggingFaceIcon } from '@/icons';
 import { 
@@ -268,11 +318,22 @@ interface Props {
   compact?: boolean;
   collapsible?: boolean;
   showActions?: boolean;
-  testingIndexer?: boolean;
+  // Connection testing
+  testingConnection?: boolean;
+  connectionStatus?: { success: boolean; message: string } | null;
+  // Ollama
+  loadingModels?: boolean;
+  ollamaModels?: string[];
+  // Re-indexing
   reindexing?: boolean;
-  indexerStatus?: { success: boolean; message: string } | null;
-  reindexProgress?: { current: number; total: number; currentFile?: string } | null;
-  // LLM API keys for "Copy from AI Provider" feature
+  reindexProgress?: { current: number; total: number; fileName?: string } | null;
+  reindexStatus?: { success: boolean; message: string } | null;
+  // HF Local (can be passed from parent or managed internally)
+  hfLocalAvailable?: boolean;
+  hfLocalStatus?: HFEmbeddingRuntimeStatus | null;
+  // AI Provider settings for "Copy from AI Provider" feature
+  aiProviderSettings?: LLMSettings;
+  // Legacy support: LLM API keys for "Copy from AI Provider" feature
   llmApiKeys?: { openai?: string; gemini?: string };
 }
 
@@ -280,36 +341,73 @@ const props = withDefaults(defineProps<Props>(), {
   compact: false,
   collapsible: false,
   showActions: true,
-  testingIndexer: false,
+  testingConnection: false,
+  connectionStatus: null,
+  loadingModels: false,
+  ollamaModels: () => [],
   reindexing: false,
-  indexerStatus: null,
   reindexProgress: null,
+  reindexStatus: null,
+  hfLocalAvailable: undefined, // undefined means manage internally
+  hfLocalStatus: undefined, // undefined means manage internally
+  aiProviderSettings: undefined,
   llmApiKeys: () => ({}),
 });
 
 // Emits
 const emit = defineEmits<{
   'update:modelValue': [value: IndexerSettings];
-  'test-indexer': [];
-  'reindex': [];
+  'test-connection': [];
   'save': [];
+  'fetch-ollama-models': [];
+  'download-model': [modelId: string];
+  'reindex-all': [];
 }>();
 
 // Local state
 const showApiKey = ref(false);
 const expanded = ref(false);
-const hfLocalAvailable = ref(isHuggingFaceLocalAvailable());
-const hfLocalStatus = ref<HFEmbeddingRuntimeStatus | null>(null);
+const showAdvancedIndexer = ref(false);
 
-// Subscribe to HF local status changes
+// Internal state for when props are not provided
+const internalHfLocalAvailable = ref(false);
+const internalHfLocalStatus = ref<HFEmbeddingRuntimeStatus | null>(null);
 let unsubscribeStatus: (() => void) | null = null;
 
+// Computed: use props or internal state
+const hfLocalAvailableComputed = computed(() => {
+  return props.hfLocalAvailable !== undefined ? props.hfLocalAvailable : internalHfLocalAvailable.value;
+});
+
+const hfLocalStatusComputed = computed(() => {
+  return props.hfLocalStatus !== undefined ? props.hfLocalStatus : internalHfLocalStatus.value;
+});
+
+// Advanced provider IDs
+const advancedIndexerProviderIds = ['ollama', 'huggingface_local'];
+
+// Initialize internal state only if props not provided
 onMounted(async () => {
-  if (hfLocalAvailable.value) {
-    hfLocalStatus.value = await getHuggingFaceLocalStatus();
-    unsubscribeStatus = onHuggingFaceLocalStatusChange((status) => {
-      hfLocalStatus.value = status;
-    });
+  // Only manage internal state if props not provided
+  if (props.hfLocalAvailable === undefined) {
+    internalHfLocalAvailable.value = isHuggingFaceLocalAvailable();
+    if (internalHfLocalAvailable.value) {
+      internalHfLocalStatus.value = await getHuggingFaceLocalStatus();
+      unsubscribeStatus = onHuggingFaceLocalStatusChange((status) => {
+        internalHfLocalStatus.value = status;
+      });
+    }
+  }
+  // Auto-expand advanced section if an advanced provider is selected
+  if (advancedIndexerProviderIds.includes(props.modelValue.provider)) {
+    showAdvancedIndexer.value = true;
+  }
+});
+
+// Watch for provider changes to auto-expand
+watch(() => props.modelValue.provider, (newProvider) => {
+  if (advancedIndexerProviderIds.includes(newProvider)) {
+    showAdvancedIndexer.value = true;
   }
 });
 
@@ -321,29 +419,47 @@ onUnmounted(() => {
 
 // Computed: is HF model loading?
 const isHFModelLoading = computed(() => {
-  return hfLocalStatus.value?.status === 'loading';
+  return hfLocalStatusComputed.value?.status === 'loading';
 });
 
 // Computed: HF model loading progress
 const hfModelProgress = computed(() => {
-  return hfLocalStatus.value?.progress ?? 0;
+  return hfLocalStatusComputed.value?.progress ?? 0;
 });
 
-// Provider configurations
-const indexerProviders = computed(() => {
-  const providers: { id: EmbeddingProvider; name: string; description: string; iconComponent: typeof OpenAiIcon; disabled?: boolean }[] = [
-    {
-      id: 'openai',
-      name: 'OpenAI',
-      description: 'text-embedding-3-small/large',
-      iconComponent: OpenAiIcon,
-    },
-    {
-      id: 'gemini',
-      name: 'Gemini',
-      description: 'text-embedding-004',
-      iconComponent: GeminiIcon,
-    },
+// Computed: API keys from AI provider settings or legacy llmApiKeys
+const effectiveLlmApiKeys = computed(() => {
+  if (props.aiProviderSettings) {
+    return {
+      openai: props.aiProviderSettings.openai?.apiKey,
+      gemini: props.aiProviderSettings.google?.apiKey,
+    };
+  }
+  return props.llmApiKeys;
+});
+
+// Provider type
+type ProviderConfig = { id: EmbeddingProvider; name: string; description: string; iconComponent: typeof OpenAiIcon };
+
+// Main provider configurations (cloud-based, well-tested)
+const mainIndexerProviders: ProviderConfig[] = [
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    description: 'text-embedding-3-small/large',
+    iconComponent: OpenAiIcon,
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    description: 'text-embedding-004',
+    iconComponent: GeminiIcon,
+  },
+];
+
+// Advanced provider configurations (local, experimental)
+const advancedIndexerProviders = computed(() => {
+  const providers: ProviderConfig[] = [
     {
       id: 'ollama',
       name: 'Ollama',
@@ -353,7 +469,7 @@ const indexerProviders = computed(() => {
   ];
 
   // Only add HuggingFace local if running in Electron
-  if (hfLocalAvailable.value) {
+  if (hfLocalAvailableComputed.value) {
     providers.push({
       id: 'huggingface_local',
       name: 'Hugging Face',
@@ -387,7 +503,7 @@ function updateField(provider: 'openai' | 'gemini' | 'ollama' | 'huggingfaceLoca
 
 // Copy API key from LLM settings
 function copyFromAIProvider(provider: 'openai' | 'gemini') {
-  const key = props.llmApiKeys?.[provider];
+  const key = effectiveLlmApiKeys.value?.[provider];
   if (key) {
     updateField(provider, 'apiKey', key);
   }
@@ -906,6 +1022,113 @@ function copyFromAIProvider(provider: 'openai' | 'gemini') {
 
 .progress-bar.small {
   height: 6px;
+}
+
+/* Advanced Toggle */
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 16px;
+}
+
+.collapsible .advanced-toggle {
+  background: var(--hn-bg-deep);
+}
+
+.advanced-toggle:hover {
+  background: var(--hn-bg-elevated);
+  border-color: var(--hn-border-strong);
+  color: var(--hn-text-primary);
+}
+
+.advanced-toggle ion-icon {
+  font-size: 1.1rem;
+}
+
+.advanced-toggle .chevron {
+  margin-left: auto;
+  color: var(--hn-text-muted);
+}
+
+/* Advanced Section */
+.advanced-section {
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border);
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.advanced-section .advanced-toggle {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+}
+
+.advanced-section .advanced-toggle:hover {
+  background: var(--hn-bg-hover);
+}
+
+.advanced-content {
+  padding: 0 16px 16px 16px;
+  animation: fadeSlideIn 0.2s ease;
+}
+
+.advanced-content .provider-cards {
+  margin-bottom: 0;
+}
+
+/* Experimental Warning */
+.experimental-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--hn-warning-muted);
+  border: 1px solid rgba(210, 153, 34, 0.3);
+  border-radius: 8px;
+  color: var(--hn-warning);
+  font-size: 0.85rem;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.experimental-warning ion-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Provider Name Row (for badges) */
+.provider-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Experimental Badge */
+.experimental-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--hn-warning-muted);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  border-radius: 4px;
+  color: var(--hn-warning);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 /* Responsive */

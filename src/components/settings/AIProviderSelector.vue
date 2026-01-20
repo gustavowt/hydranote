@@ -1,9 +1,9 @@
 <template>
   <div class="ai-provider-selector">
-    <!-- Provider Cards -->
+    <!-- Main Provider Cards -->
     <div class="provider-cards" :class="{ compact }">
       <button
-        v-for="provider in providerConfigs"
+        v-for="provider in mainProviders"
         :key="provider.id"
         class="provider-card"
         :class="{ selected: modelValue.provider === provider.id }"
@@ -20,6 +20,47 @@
           <ion-icon :icon="checkmarkCircle" />
         </div>
       </button>
+    </div>
+
+    <!-- Advanced Options Section -->
+    <div class="advanced-section">
+      <button class="advanced-toggle" @click="showAdvanced = !showAdvanced" type="button">
+        <ion-icon :icon="settingsOutline" />
+        <span>Advanced</span>
+        <ion-icon :icon="showAdvanced ? chevronUpOutline : chevronDownOutline" class="chevron" />
+      </button>
+
+      <!-- Advanced Providers (collapsible content) -->
+      <div v-if="showAdvanced" class="advanced-content">
+        <div class="experimental-warning">
+          <ion-icon :icon="warningOutline" />
+          <span>These are experimental options and might not work as expected depending on the chosen model.</span>
+        </div>
+
+        <div class="provider-cards" :class="{ compact }">
+          <button
+            v-for="provider in advancedProviders"
+            :key="provider.id"
+            class="provider-card"
+            :class="{ selected: modelValue.provider === provider.id }"
+            @click="selectProvider(provider.id)"
+          >
+            <div class="provider-icon">
+              <component :is="provider.iconComponent" />
+            </div>
+            <div class="provider-info">
+              <div class="provider-name-row">
+                <h3>{{ provider.name }}</h3>
+                <span v-if="provider.id === 'huggingface_local'" class="experimental-badge">Experimental</span>
+              </div>
+              <p>{{ provider.description }}</p>
+            </div>
+            <div class="selected-indicator" v-if="modelValue.provider === provider.id">
+              <ion-icon :icon="checkmarkCircle" />
+            </div>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- OpenAI Configuration -->
@@ -245,6 +286,22 @@
     <!-- Local Model Configuration -->
     <div v-if="modelValue.provider === 'huggingface_local'" class="config-panel">
       <h3 v-if="!compact" class="config-title">Local Model Configuration</h3>
+      
+      <!-- GPU Requirements Banner -->
+      <div class="gpu-info-banner">
+        <ion-icon :icon="hardwareChipOutline" />
+        <div>
+          <p><strong>GPU Recommended:</strong> This experimental option works best with a dedicated graphics card (NVIDIA CUDA or Apple Metal).</p>
+          <div v-if="hardwareInfo" class="hardware-badge" :class="hardwareInfo.backend !== 'cpu' && hardwareInfo.backend !== 'unknown' ? 'has-gpu' : 'cpu-only'">
+            <ion-icon :icon="hardwareInfo.backend !== 'cpu' && hardwareInfo.backend !== 'unknown' ? checkmarkCircleOutline : alertCircleOutline" />
+            <span>{{ formatHardwareInfo(hardwareInfo) }}</span>
+          </div>
+          <div v-else-if="localModelsAvailable" class="hardware-badge loading">
+            <ion-spinner name="crescent" />
+            <span>Detecting hardware...</span>
+          </div>
+        </div>
+      </div>
       
       <div v-if="!localModelsAvailable" class="notice warning">
         <ion-icon :icon="alertCircleOutline" />
@@ -497,7 +554,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { IonIcon, IonSpinner } from '@ionic/vue';
 import {
   checkmarkCircle,
@@ -512,8 +569,13 @@ import {
   trashOutline,
   flashOutline,
   saveOutline,
+  settingsOutline,
+  chevronUpOutline,
+  chevronDownOutline,
+  warningOutline,
+  hardwareChipOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus } from '@/types';
+import type { LLMSettings, LLMProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HardwareInfo } from '@/types';
 import { OpenAiIcon, ClaudeIcon, GeminiIcon, OllamaIcon, HuggingFaceIcon } from '@/icons';
 import { formatFileSize } from '@/services';
 
@@ -537,6 +599,8 @@ interface Props {
   installingModel?: string | null;
   loadingModel?: boolean;
   localModelToken?: string;
+  // Hardware acceleration info
+  hardwareInfo?: HardwareInfo | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -554,6 +618,7 @@ const props = withDefaults(defineProps<Props>(), {
   installingModel: null,
   loadingModel: false,
   localModelToken: '',
+  hardwareInfo: null,
 });
 
 // Emits
@@ -572,9 +637,30 @@ const emit = defineEmits<{
 // Local state
 const showApiKey = ref(false);
 const showHfToken = ref(false);
+const showAdvanced = ref(false);
 
-// Provider configurations
-const providerConfigs: { id: LLMProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
+// Advanced provider IDs
+const advancedProviderIds = ['ollama', 'huggingface_local'];
+
+// Auto-expand advanced section if an advanced provider is selected
+onMounted(() => {
+  if (advancedProviderIds.includes(props.modelValue.provider)) {
+    showAdvanced.value = true;
+  }
+});
+
+// Also watch for provider changes to auto-expand
+watch(() => props.modelValue.provider, (newProvider) => {
+  if (advancedProviderIds.includes(newProvider)) {
+    showAdvanced.value = true;
+  }
+});
+
+// Provider type
+type ProviderConfig = { id: LLMProvider; name: string; description: string; iconComponent: typeof OpenAiIcon };
+
+// Main provider configurations (cloud-based, well-tested)
+const mainProviders: ProviderConfig[] = [
   {
     id: 'openai',
     name: 'OpenAI',
@@ -593,6 +679,10 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
     description: 'Gemini 2.5 Pro, Flash',
     iconComponent: GeminiIcon,
   },
+];
+
+// Advanced provider configurations (local, experimental)
+const advancedProviders: ProviderConfig[] = [
   {
     id: 'ollama',
     name: 'Ollama',
@@ -672,6 +762,28 @@ function formatEta(seconds: number): string {
 function getProgressPercent(progress: ModelDownloadProgress): number {
   if (!progress.totalSize) return 0;
   return Math.min(100, (progress.totalDownloaded / progress.totalSize) * 100);
+}
+
+// Format hardware info for display
+function formatHardwareInfo(info: HardwareInfo): string {
+  const backendNames: Record<string, string> = {
+    cuda: 'CUDA (NVIDIA GPU)',
+    metal: 'Metal (Apple Silicon)',
+    vulkan: 'Vulkan (GPU)',
+    cpu: 'CPU only',
+    unknown: 'Unknown',
+  };
+
+  const backendName = backendNames[info.backend] || info.backend;
+  
+  if (info.backend === 'cpu' || info.backend === 'unknown') {
+    const supported = info.supportedBackends.length > 0 
+      ? ` (Available: ${info.supportedBackends.join(', ')})`
+      : '';
+    return `${backendName}${supported}`;
+  }
+
+  return `${backendName} detected`;
 }
 </script>
 
@@ -1372,6 +1484,196 @@ function getProgressPercent(progress: ModelDownloadProgress): number {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Advanced Toggle */
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 20px;
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 10px;
+  color: var(--hn-text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 16px;
+}
+
+.advanced-toggle:hover {
+  background: var(--hn-bg-elevated);
+  border-color: var(--hn-border-strong);
+  color: var(--hn-text-primary);
+}
+
+.advanced-toggle ion-icon {
+  font-size: 1.2rem;
+}
+
+.advanced-toggle .chevron {
+  margin-left: auto;
+  color: var(--hn-text-muted);
+}
+
+/* Advanced Section */
+.advanced-section {
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border);
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.advanced-section .advanced-toggle {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+}
+
+.advanced-section .advanced-toggle:hover {
+  background: var(--hn-bg-hover);
+}
+
+.advanced-content {
+  padding: 0 16px 16px 16px;
+  animation: fadeSlideIn 0.2s ease;
+}
+
+.advanced-content .provider-cards {
+  margin-bottom: 0;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Experimental Warning */
+.experimental-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--hn-warning-muted);
+  border: 1px solid rgba(210, 153, 34, 0.3);
+  border-radius: 10px;
+  color: var(--hn-warning);
+  font-size: 0.9rem;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.experimental-warning ion-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Provider Name Row (for badges) */
+.provider-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Experimental Badge */
+.experimental-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--hn-warning-muted);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  border-radius: 4px;
+  color: var(--hn-warning);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* GPU Info Banner */
+.gpu-info-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px;
+  background: var(--hn-info-muted);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+
+.gpu-info-banner > ion-icon {
+  font-size: 1.5rem;
+  color: var(--hn-info);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.gpu-info-banner p {
+  margin: 0 0 10px 0;
+  font-size: 0.9rem;
+  color: var(--hn-text-secondary);
+  line-height: 1.5;
+}
+
+.gpu-info-banner p strong {
+  color: var(--hn-text-primary);
+}
+
+/* Hardware Badge */
+.hardware-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--hn-text-secondary);
+}
+
+.hardware-badge.has-gpu {
+  background: var(--hn-green-muted);
+  border-color: rgba(63, 185, 80, 0.3);
+  color: var(--hn-green-light);
+}
+
+.hardware-badge.has-gpu ion-icon {
+  color: var(--hn-green);
+}
+
+.hardware-badge.cpu-only {
+  background: var(--hn-warning-muted);
+  border-color: rgba(210, 153, 34, 0.3);
+  color: var(--hn-warning);
+}
+
+.hardware-badge.cpu-only ion-icon {
+  color: var(--hn-warning);
+}
+
+.hardware-badge.loading {
+  color: var(--hn-text-muted);
+}
+
+.hardware-badge.loading ion-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.hardware-badge ion-icon {
+  font-size: 1rem;
 }
 
 /* Responsive */
