@@ -141,6 +141,30 @@
             </div>
 
             <div class="field-group">
+              <label>Project Rotation Instructions</label>
+              <textarea
+                v-model="llmSettings.noteSettings.projectRotationInstructions"
+                placeholder="e.g., 'Always use the Work project for meeting notes', 'Create a new project for each client'"
+                rows="3"
+              ></textarea>
+              <span class="field-hint">
+                Instructions for how the AI decides which project to assign notes to.
+              </span>
+            </div>
+
+            <div class="field-group">
+              <label>Directory Rotation Instructions</label>
+              <textarea
+                v-model="llmSettings.noteSettings.directoryRotationInstructions"
+                placeholder="e.g., 'Put all meeting notes in meetings/', 'Never create new directories'"
+                rows="3"
+              ></textarea>
+              <span class="field-hint">
+                Instructions for how the AI decides which directory to save notes in.
+              </span>
+            </div>
+
+            <div class="field-group">
               <label>Default Notes Directory</label>
               <input
                 v-model="llmSettings.noteSettings.defaultDirectory"

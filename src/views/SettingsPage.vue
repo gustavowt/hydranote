@@ -840,6 +840,30 @@
                 </div>
 
                 <div class="field-group">
+                  <label>Project Rotation Instructions</label>
+                  <textarea
+                    v-model="settings.noteSettings.projectRotationInstructions"
+                    placeholder="Custom instructions for project selection (e.g., 'Always use the Work project for meeting notes', 'Create a new project for each client')"
+                    rows="4"
+                  ></textarea>
+                  <span class="field-hint">
+                    These instructions guide how the AI decides which project to assign notes to.
+                  </span>
+                </div>
+
+                <div class="field-group">
+                  <label>Directory Rotation Instructions</label>
+                  <textarea
+                    v-model="settings.noteSettings.directoryRotationInstructions"
+                    placeholder="Custom instructions for directory organization (e.g., 'Put all meeting notes in meetings/', 'Never create new directories')"
+                    rows="4"
+                  ></textarea>
+                  <span class="field-hint">
+                    These instructions guide how the AI decides which directory to save notes in.
+                  </span>
+                </div>
+
+                <div class="field-group">
                   <label>Default Notes Directory</label>
                   <input
                     v-model="settings.noteSettings.defaultDirectory"
