@@ -437,6 +437,8 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   },
   noteSettings: {
     formatInstructions: '',
+    projectRotationInstructions: '',
+    directoryRotationInstructions: '',
     defaultDirectory: 'notes',
     autoGenerateTitle: true,
   },
@@ -628,6 +630,10 @@ export interface GeneratedDocument {
 export interface NoteSettings {
   /** User instructions for note formatting (injected into FormatNote prompt) */
   formatInstructions: string;
+  /** User instructions for project routing decisions (injected into decideTargetProject prompt) */
+  projectRotationInstructions: string;
+  /** User instructions for directory routing decisions (injected into decideNoteDirectory prompt) */
+  directoryRotationInstructions: string;
   /** Default note directory within projects */
   defaultDirectory: string;
   /** Whether to auto-generate note titles */
@@ -639,6 +645,8 @@ export interface NoteSettings {
  */
 export const DEFAULT_NOTE_SETTINGS: NoteSettings = {
   formatInstructions: '',
+  projectRotationInstructions: '',
+  directoryRotationInstructions: '',
   defaultDirectory: 'notes',
   autoGenerateTitle: true,
 };

@@ -105,6 +105,22 @@ export function getNoteFormatInstructions(): string {
 }
 
 /**
+ * Get project rotation instructions for use in project routing prompts
+ */
+export function getProjectRotationInstructions(): string {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.projectRotationInstructions || '';
+}
+
+/**
+ * Get directory rotation instructions for use in directory routing prompts
+ */
+export function getDirectoryRotationInstructions(): string {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.directoryRotationInstructions || '';
+}
+
+/**
  * Get default note directory
  */
 export function getDefaultNoteDirectory(): string {

@@ -37,6 +37,8 @@ export type NoteExecutionCallback = (steps: NoteExecutionStep[]) => void;
 import { chatCompletion } from "./llmService";
 import {
   getNoteFormatInstructions,
+  getProjectRotationInstructions,
+  getDirectoryRotationInstructions,
   getDefaultNoteDirectory,
 } from "./llmService";
 import {
@@ -108,13 +110,13 @@ IMPORTANT: Respond with ONLY the title text. No quotes, no explanations, just th
  * Prompt template for deciding which directory to save the note in
  * Phase 12: Balanced guidelines for good organization
  */
-function buildDecideDirectoryPrompt(existingDirectories: string[]): string {
+function buildDecideDirectoryPrompt(existingDirectories: string[], userInstructions: string): string {
   const dirList =
     existingDirectories.length > 0
       ? existingDirectories.map((d) => `  - ${d}`).join("\n")
       : "  (No existing directories)";
 
-  return `You are a file organization assistant. Given a note's title and context, decide the best directory to save it in.
+  const basePrompt = `You are a file organization assistant. Given a note's title and context, decide the best directory to save it in.
 
 Existing directories in the project:
 ${dirList}
@@ -150,6 +152,12 @@ Given directories: [notes, meetings]
 Given directories: [notes]
 - "Meeting with client X" → {"targetDirectory": "meetings", "shouldCreateDirectory": true, "reasoning": "Meeting notes should have their own directory"}
 - "Quick reminder" → {"targetDirectory": "notes", "shouldCreateDirectory": false, "reasoning": "General note fits in notes"}`;
+
+  const customInstructions = userInstructions
+    ? `\n\nUser's custom directory organization instructions (THESE SHOULD TAKE PRIORITY OVER DEFAULT GUIDELINES):\n${userInstructions}`
+    : "";
+
+  return `${basePrompt}${customInstructions}`;
 }
 
 // ============================================
@@ -331,7 +339,8 @@ export async function decideNoteDirectoryWithDirs(
   existingDirectories: string[],
   metadata?: NoteContextMetadata,
 ): Promise<DirectoryDecision> {
-  const systemPrompt = buildDecideDirectoryPrompt(existingDirectories);
+  const directoryInstructions = getDirectoryRotationInstructions();
+  const systemPrompt = buildDecideDirectoryPrompt(existingDirectories, directoryInstructions);
 
   let context = `Note title: "${noteTitle}"`;
   if (metadata?.topic) context += `\nTopic: ${metadata.topic}`;
@@ -619,7 +628,7 @@ export async function addNoteWithTitle(
  * Prompt template for deciding which project a note belongs to
  * Phase 12: Balanced guidelines for project organization
  */
-function buildDecideTargetProjectPrompt(projects: ProjectSummary[]): string {
+function buildDecideTargetProjectPrompt(projects: ProjectSummary[], userInstructions: string): string {
   const projectList =
     projects.length > 0
       ? projects
@@ -630,7 +639,7 @@ function buildDecideTargetProjectPrompt(projects: ProjectSummary[]): string {
           .join("\n")
       : "  (No existing projects)";
 
-  return `You are a project classification assistant. Given a note's content, decide which project it belongs to.
+  const basePrompt = `You are a project classification assistant. Given a note's content, decide which project it belongs to.
 
 Existing projects:
 ${projectList}
@@ -679,6 +688,12 @@ Given projects: [Software Development]
 
 Given projects: []
 - Any note → create_project with appropriate name and requiresConfirmation: true`;
+
+  const customInstructions = userInstructions
+    ? `\n\nUser's custom project organization instructions (THESE SHOULD TAKE PRIORITY OVER DEFAULT GUIDELINES):\n${userInstructions}`
+    : "";
+
+  return `${basePrompt}${customInstructions}`;
 }
 
 /**
@@ -723,7 +738,8 @@ export async function decideTargetProject(
     };
   }
 
-  const systemPrompt = buildDecideTargetProjectPrompt(projectSummaries);
+  const projectInstructions = getProjectRotationInstructions();
+  const systemPrompt = buildDecideTargetProjectPrompt(projectSummaries, projectInstructions);
 
   let userContent = `Note content:\n${noteContent.slice(0, 2000)}`;
   if (tags && tags.length > 0) {

@@ -1561,7 +1561,13 @@ interface LLMSettings {
   ollama: { baseUrl, model };
   anthropic: { apiKey, model };
   google: { apiKey, model };
-  noteSettings: { formatInstructions, defaultDirectory, autoGenerateTitle };
+  noteSettings: { 
+    formatInstructions,           // User instructions for note formatting
+    projectRotationInstructions,  // User instructions for project routing
+    directoryRotationInstructions,// User instructions for directory routing
+    defaultDirectory, 
+    autoGenerateTitle 
+  };
 }
 ```
 
