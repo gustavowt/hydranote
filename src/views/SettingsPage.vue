@@ -547,12 +547,22 @@
                       <ion-icon :icon="showIndexerOpenAIKey ? eyeOffOutline : eyeOutline" />
                     </button>
                   </div>
-                  <span class="field-hint">
-                    Can be the same or different from your AI Provider API key.
-                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
-                      Get an API key
-                    </a>
-                  </span>
+                  <div class="field-actions">
+                    <button 
+                      v-if="settings.openai.apiKey && settings.openai.apiKey !== indexerSettings.openai.apiKey"
+                      class="copy-key-btn"
+                      @click="indexerSettings.openai.apiKey = settings.openai.apiKey"
+                    >
+                      <ion-icon :icon="copyOutline" />
+                      <span>Copy from AI Provider</span>
+                    </button>
+                    <span class="field-hint">
+                      Can be the same or different from your AI Provider API key.
+                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
+                        Get an API key
+                      </a>
+                    </span>
+                  </div>
                 </div>
 
                 <div class="field-group">
@@ -581,12 +591,22 @@
                       <ion-icon :icon="showIndexerGeminiKey ? eyeOffOutline : eyeOutline" />
                     </button>
                   </div>
-                  <span class="field-hint">
-                    Can be the same or different from your AI Provider API key.
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
-                      Get an API key
-                    </a>
-                  </span>
+                  <div class="field-actions">
+                    <button 
+                      v-if="settings.google.apiKey && settings.google.apiKey !== indexerSettings.gemini.apiKey"
+                      class="copy-key-btn"
+                      @click="indexerSettings.gemini.apiKey = settings.google.apiKey"
+                    >
+                      <ion-icon :icon="copyOutline" />
+                      <span>Copy from AI Provider</span>
+                    </button>
+                    <span class="field-hint">
+                      Can be the same or different from your AI Provider API key.
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+                        Get an API key
+                      </a>
+                    </span>
+                  </div>
                 </div>
 
                 <div class="field-group">
@@ -2712,6 +2732,38 @@ ion-content {
 
 .field-hint a:hover {
   text-decoration: underline;
+}
+
+/* Field actions container */
+.field-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Copy from AI Provider button */
+.copy-key-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--hn-purple-muted);
+  border: 1px solid var(--hn-purple);
+  border-radius: 6px;
+  color: var(--hn-purple-light);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copy-key-btn:hover {
+  background: var(--hn-purple);
+  color: #fff;
+}
+
+.copy-key-btn ion-icon {
+  font-size: 0.9rem;
 }
 
 /* Input with toggle visibility */

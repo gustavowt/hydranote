@@ -51,10 +51,21 @@
                 <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
               </button>
             </div>
-            <span v-if="!compact" class="field-hint">
-              Same key can be used as your AI provider. Get it at
-              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
-            </span>
+            <div class="field-actions">
+              <button 
+                v-if="llmApiKeys?.openai && llmApiKeys.openai !== modelValue.openai.apiKey"
+                class="copy-key-btn"
+                @click="copyFromAIProvider('openai')"
+                type="button"
+              >
+                <ion-icon :icon="copyOutline" />
+                <span>Copy from AI Provider</span>
+              </button>
+              <span v-if="!compact" class="field-hint">
+                Same key can be used as your AI provider. Get it at
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
+              </span>
+            </div>
           </div>
 
           <div v-if="!compact" class="field-group">
@@ -86,10 +97,21 @@
                 <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
               </button>
             </div>
-            <span v-if="!compact" class="field-hint">
-              Same key can be used as your AI provider. Get it at
-              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>
-            </span>
+            <div class="field-actions">
+              <button 
+                v-if="llmApiKeys?.gemini && llmApiKeys.gemini !== modelValue.gemini.apiKey"
+                class="copy-key-btn"
+                @click="copyFromAIProvider('gemini')"
+                type="button"
+              >
+                <ion-icon :icon="copyOutline" />
+                <span>Copy from AI Provider</span>
+              </button>
+              <span v-if="!compact" class="field-hint">
+                Same key can be used as your AI provider. Get it at
+                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>
+              </span>
+            </div>
           </div>
 
           <div v-if="!compact" class="field-group">
@@ -229,6 +251,7 @@ import {
   refreshOutline,
   saveOutline,
   downloadOutline,
+  copyOutline,
 } from 'ionicons/icons';
 import type { IndexerSettings, EmbeddingProvider, HFEmbeddingRuntimeStatus } from '@/types';
 import { SUGGESTED_HF_LOCAL_EMBEDDING_MODELS } from '@/types';
@@ -249,6 +272,8 @@ interface Props {
   reindexing?: boolean;
   indexerStatus?: { success: boolean; message: string } | null;
   reindexProgress?: { current: number; total: number; currentFile?: string } | null;
+  // LLM API keys for "Copy from AI Provider" feature
+  llmApiKeys?: { openai?: string; gemini?: string };
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -259,6 +284,7 @@ const props = withDefaults(defineProps<Props>(), {
   reindexing: false,
   indexerStatus: null,
   reindexProgress: null,
+  llmApiKeys: () => ({}),
 });
 
 // Emits
@@ -357,6 +383,14 @@ function updateField(provider: 'openai' | 'gemini' | 'ollama' | 'huggingfaceLoca
     updated.huggingfaceLocal = { ...updated.huggingfaceLocal, [field]: value };
   }
   emit('update:modelValue', updated);
+}
+
+// Copy API key from LLM settings
+function copyFromAIProvider(provider: 'openai' | 'gemini') {
+  const key = props.llmApiKeys?.[provider];
+  if (key) {
+    updateField(provider, 'apiKey', key);
+  }
 }
 </script>
 
@@ -625,6 +659,38 @@ function updateField(provider: 'openai' | 'gemini' | 'ollama' | 'huggingfaceLoca
 
 .field-hint a:hover {
   text-decoration: underline;
+}
+
+/* Field actions container */
+.field-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Copy from AI Provider button */
+.copy-key-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--hn-purple-muted);
+  border: 1px solid var(--hn-purple);
+  border-radius: 6px;
+  color: var(--hn-purple-light);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copy-key-btn:hover {
+  background: var(--hn-purple);
+  color: #fff;
+}
+
+.copy-key-btn ion-icon {
+  font-size: 0.9rem;
 }
 
 /* Input wrapper with visibility toggle */

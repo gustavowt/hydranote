@@ -113,6 +113,7 @@
             v-model="indexerSettings"
             compact
             collapsible
+            :llm-api-keys="{ openai: llmSettings.openai.apiKey, gemini: llmSettings.google.apiKey }"
           />
         </div>
 
