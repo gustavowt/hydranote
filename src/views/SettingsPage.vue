@@ -103,402 +103,31 @@
             <h2 class="section-title">AI Providers</h2>
             <p class="section-description">Choose your preferred AI provider and configure its settings.</p>
 
-            <!-- Provider Cards -->
-            <div class="provider-cards">
-              <button
-                v-for="provider in providerConfigs"
-                :key="provider.id"
-                class="provider-card"
-                :class="{ selected: settings.provider === provider.id }"
-                @click="settings.provider = provider.id"
-              >
-                <div class="provider-icon">
-                  <component :is="provider.iconComponent" />
-                </div>
-                <div class="provider-info">
-                  <h3>{{ provider.name }}</h3>
-                  <p>{{ provider.description }}</p>
-                </div>
-                <div class="selected-indicator" v-if="settings.provider === provider.id">
-                  <ion-icon :icon="checkmarkCircle" />
-                </div>
-              </button>
-            </div>
-
-            <!-- OpenAI Configuration -->
-            <div v-if="settings.provider === 'openai'" class="config-panel">
-              <h3 class="config-title">OpenAI Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>API Key</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="settings.openai.apiKey"
-                      :type="showApiKey ? 'text' : 'password'"
-                      placeholder="sk-..."
-                    />
-                    <button class="toggle-visibility" @click="showApiKey = !showApiKey">
-                      <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <span class="field-hint">
-                    Create an API key at 
-                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
-                      platform.openai.com/api-keys
-                    </a>
-                  </span>
-                </div>
-
-                <div class="field-group">
-                  <label>Model</label>
-                  <select v-model="settings.openai.model">
-                    <optgroup label="Latest (2025)">
-                      <option value="gpt-4.1">GPT-4.1</option>
-                      <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-                      <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
-                      <option value="o3">o3 (Reasoning)</option>
-                      <option value="o3-mini">o3 Mini (Reasoning)</option>
-                    </optgroup>
-                    <optgroup label="GPT-4o Series">
-                      <option value="gpt-4o">GPT-4o</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                    </optgroup>
-                    <optgroup label="Previous">
-                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                    </optgroup>
-                  </select>
-                </div>
-
-                <div class="field-group">
-                  <label>Custom Base URL <span class="optional">(Optional)</span></label>
-                  <input
-                    v-model="settings.openai.baseUrl"
-                    type="text"
-                    placeholder="https://api.openai.com/v1"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <!-- Ollama Configuration -->
-            <div v-if="settings.provider === 'ollama'" class="config-panel">
-              <h3 class="config-title">Ollama Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>Ollama URL</label>
-                  <input
-                    v-model="settings.ollama.baseUrl"
-                    type="text"
-                    placeholder="http://localhost:11434"
-                  />
-                </div>
-
-                <div class="field-group">
-                  <label>Model</label>
-                  <div class="model-input-row">
-                    <input
-                      v-model="settings.ollama.model"
-                      type="text"
-                      placeholder="llama3.2"
-                    />
-                    <button 
-                      class="fetch-models-btn" 
-                      @click="fetchOllamaModels" 
-                      :disabled="loadingModels"
-                    >
-                      <ion-spinner v-if="loadingModels" name="crescent" />
-                      <span v-else>Fetch Models</span>
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Available Models -->
-                <div v-if="ollamaModels.length > 0" class="field-group">
-                  <label>Available Models</label>
-                  <div class="models-list">
-                    <button 
-                      v-for="model in ollamaModels" 
-                      :key="model"
-                      class="model-item"
-                      :class="{ selected: settings.ollama.model === model }"
-                      @click="selectOllamaModel(model)"
-                    >
-                      <ion-icon :icon="cubeOutline" />
-                      <span>{{ model }}</span>
-                      <ion-icon 
-                        v-if="settings.ollama.model === model" 
-                        :icon="checkmarkOutline" 
-                        class="check-icon"
-                      />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Anthropic (Claude) Configuration -->
-            <div v-if="settings.provider === 'anthropic'" class="config-panel">
-              <h3 class="config-title">Claude Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>API Key</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="settings.anthropic.apiKey"
-                      :type="showAnthropicApiKey ? 'text' : 'password'"
-                      placeholder="sk-ant-..."
-                    />
-                    <button class="toggle-visibility" @click="showAnthropicApiKey = !showAnthropicApiKey">
-                      <ion-icon :icon="showAnthropicApiKey ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <span class="field-hint">
-                    Create an API key at 
-                    <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">
-                      console.anthropic.com
-                    </a>
-                  </span>
-                </div>
-
-                <div class="field-group">
-                  <label>Model</label>
-                  <select v-model="settings.anthropic.model">
-                    <optgroup label="Claude 4 (2025)">
-                      <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (Most Powerful)</option>
-                      <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
-                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
-                    </optgroup>
-                    <optgroup label="Claude 3.5 (2024)">
-                      <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
-                      <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (Fast)</option>
-                    </optgroup>
-                    <optgroup label="Claude 3">
-                      <option value="claude-3-opus-20240229">Claude 3 Opus</option>
-                      <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
-                      <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
-                    </optgroup>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <!-- Google (Gemini) Configuration -->
-            <div v-if="settings.provider === 'google'" class="config-panel">
-              <h3 class="config-title">Gemini Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>API Key</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="settings.google.apiKey"
-                      :type="showGoogleApiKey ? 'text' : 'password'"
-                      placeholder="AIza..."
-                    />
-                    <button class="toggle-visibility" @click="showGoogleApiKey = !showGoogleApiKey">
-                      <ion-icon :icon="showGoogleApiKey ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <span class="field-hint">
-                    Create an API key at 
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
-                      Google AI Studio
-                    </a>
-                  </span>
-                </div>
-
-                <div class="field-group">
-                  <label>Model</label>
-                  <select v-model="settings.google.model">
-                    <optgroup label="Gemini 2.5 (2025)">
-                      <option value="gemini-2.5-pro">Gemini 2.5 Pro (Most Powerful)</option>
-                      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                      <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Fastest)</option>
-                    </optgroup>
-                    <optgroup label="Gemini 2.0">
-                      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                      <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
-                    </optgroup>
-                    <optgroup label="Gemini 1.5">
-                      <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                      <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                      <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B</option>
-                    </optgroup>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <!-- Local Model Configuration -->
-            <div v-if="settings.provider === 'huggingface_local'" class="config-panel">
-              <h3 class="config-title">Local Model Configuration</h3>
-              
-              <div v-if="!localModelsAvailable" class="notice warning">
-                <ion-icon :icon="alertCircleOutline" />
-                <span>Local models are only available in the desktop (Electron) app.</span>
-              </div>
-
-              <div v-else>
-                <p class="section-description" style="margin-bottom: 16px; font-size: 0.9rem;">
-                  Select and download a GGUF model to run locally. No API key required.
-                </p>
-
-                <!-- Runtime Status (compact) -->
-                <div v-if="runtimeStatus && (runtimeStatus.ready || loadingModel || runtimeStatus.error)" class="llm-runtime-status">
-                  <div v-if="loadingModel" class="status-item loading">
-                    <ion-spinner name="crescent" />
-                    <span>Loading model...</span>
-                  </div>
-                  <div v-else-if="runtimeStatus.ready" class="status-item ready">
-                    <ion-icon :icon="checkmarkCircleOutline" />
-                    <span>Ready: {{ runtimeStatus.loadedModelName }}</span>
-                  </div>
-                  <div v-else-if="runtimeStatus.error" class="status-item error">
-                    <ion-icon :icon="alertCircleOutline" />
-                    <span>{{ runtimeStatus.error }}</span>
-                  </div>
-                </div>
-
-                <!-- Loading State -->
-                <div v-if="loadingLocalModels" class="loading-state" style="margin-bottom: 16px;">
-                  <ion-spinner name="crescent" />
-                  <span>Loading models...</span>
-                </div>
-
-                <!-- Model Catalog (unified list) -->
-                <div v-else class="llm-models-catalog">
-                  <template v-for="model in modelCatalog" :key="model.id">
-                    <div 
-                      class="llm-model-item"
-                      :class="{ 
-                        selected: settings.huggingfaceLocal?.modelId === getInstalledModelId(model.id),
-                        downloading: installingModel === model.id,
-                        clickable: isModelInstalled(model.id) && installingModel !== model.id
-                      }"
-                      @click="isModelInstalled(model.id) && installingModel !== model.id ? selectLocalModelById(model.id) : null"
-                    >
-                      <div class="model-info">
-                        <div class="model-header">
-                          <span class="model-name">{{ model.name }}</span>
-                          <div 
-                            v-if="model.bestFor || model.resourceInfo" 
-                            class="info-icon-wrapper"
-                            @click.stop
-                          >
-                            <ion-icon :icon="informationCircleOutline" class="info-icon" />
-                            <div class="info-tooltip">
-                              <div v-if="model.bestFor" class="tooltip-section">
-                                <strong>Best for:</strong>
-                                <p>{{ model.bestFor }}</p>
-                              </div>
-                              <div v-if="model.resourceInfo" class="tooltip-section">
-                                <strong>System requirements:</strong>
-                                <p>{{ model.resourceInfo }}</p>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <span class="model-description">{{ model.description }}</span>
-                      </div>
-                      
-                      <div class="model-actions">
-                        <!-- Downloading -->
-                        <div v-if="installingModel === model.id" class="download-status">
-                          <ion-spinner name="crescent" />
-                          <span>{{ downloadProgress ? getProgressPercent(downloadProgress) : 0 }}%</span>
-                        </div>
-                        <!-- Installed & Selected -->
-                        <template v-else-if="isModelInstalled(model.id)">
-                          <span 
-                            v-if="settings.huggingfaceLocal?.modelId === getInstalledModelId(model.id)" 
-                            class="selected-badge"
-                          >
-                            <ion-icon :icon="checkmarkCircleOutline" />
-                            <span>Selected</span>
-                          </span>
-                          <!-- Installed but not selected - show checkmark -->
-                          <span v-else class="ready-indicator">
-                            <ion-icon :icon="checkmarkOutline" />
-                          </span>
-                          <button 
-                            class="btn btn-small btn-icon"
-                            @click.stop="handleRemoveModelByHfId(model.id)"
-                            title="Remove model"
-                          >
-                            <ion-icon :icon="trashOutline" />
-                          </button>
-                        </template>
-                        <!-- Not installed - download -->
-                        <button 
-                          v-else
-                          class="btn btn-small"
-                          @click.stop="handleInstallModel(model)"
-                          :disabled="installingModel !== null"
-                        >
-                          <ion-icon :icon="downloadOutline" />
-                          <span>Download</span>
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <!-- Download Progress (inline, below the downloading model) -->
-                    <div v-if="installingModel === model.id && downloadProgress" class="llm-download-progress-inline">
-                      <div class="progress-header">
-                        <span>{{ downloadProgress.currentFile }}</span>
-                        <span>{{ formatSpeed(downloadProgress.speed) }} · ETA: {{ formatEta(downloadProgress.eta || 0) }}</span>
-                      </div>
-                      <div class="progress-bar">
-                        <div class="progress-fill" :style="{ width: getProgressPercent(downloadProgress) + '%' }"></div>
-                      </div>
-                      <div class="progress-footer">
-                        <span>{{ formatFileSize(downloadProgress.totalDownloaded) }} / {{ formatFileSize(downloadProgress.totalSize) }}</span>
-                        <button class="cancel-btn" @click="handleCancelDownload">Cancel</button>
-                      </div>
-                    </div>
-                  </template>
-                </div>
-
-                <!-- HuggingFace Token (for gated models) -->
-                <div class="field-group">
-                  <label>Hugging Face Token (Optional)</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="localModelToken"
-                      :type="showHfToken ? 'text' : 'password'"
-                      placeholder="hf_..."
-                    />
-                    <button class="toggle-visibility" @click="showHfToken = !showHfToken">
-                      <ion-icon :icon="showHfToken ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <span class="field-hint">
-                    Required for gated/private models. Get your token at
-                    <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">
-                      huggingface.co/settings/tokens
-                    </a>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Connection Status -->
-            <div v-if="connectionStatus" :class="['connection-status', connectionStatus.success ? 'success' : 'error']">
-              <ion-icon :icon="connectionStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
-              <span>{{ connectionStatus.message }}</span>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="action-buttons">
-              <button class="btn btn-secondary" @click="handleTestConnection" :disabled="testing">
-                <ion-spinner v-if="testing" name="crescent" />
-                <ion-icon v-else :icon="flashOutline" />
-                <span>Test Connection</span>
-              </button>
-              <button class="btn btn-primary" @click="handleSave">
-                <ion-icon :icon="saveOutline" />
-                <span>Save Settings</span>
-              </button>
-            </div>
+            <AIProviderSelector
+              v-model="settings"
+              :testing-connection="testing"
+              :connection-status="connectionStatus"
+              :loading-models="loadingModels"
+              :ollama-models="ollamaModels"
+              :local-models-available="localModelsAvailable"
+              :installed-models="installedModels"
+              :model-catalog="modelCatalog"
+              :loading-local-models="loadingLocalModels"
+              :download-progress="downloadProgress"
+              :runtime-status="runtimeStatus"
+              :installing-model="installingModel"
+              :loading-model="loadingModel"
+              :local-model-token="localModelToken"
+              :hardware-info="hardwareInfo"
+              @update:local-model-token="localModelToken = $event"
+              @test-connection="handleTestConnection"
+              @save="handleSave"
+              @fetch-ollama-models="fetchOllamaModels"
+              @select-local-model="handleSelectLocalModel"
+              @install-model="handleInstallModel"
+              @remove-model="handleRemoveModel"
+              @cancel-download="handleCancelDownload"
+            />
           </section>
 
           <!-- Indexer Section -->
@@ -509,315 +138,24 @@
               This is separate from your AI provider—you can mix and match (e.g., use Claude for chat + OpenAI for embeddings).
             </p>
 
-            <!-- Indexer Provider Cards -->
-            <div class="provider-cards">
-              <button
-                v-for="provider in indexerProviders"
-                :key="provider.id"
-                class="provider-card"
-                :class="{ selected: indexerSettings.provider === provider.id }"
-                @click="indexerSettings.provider = provider.id"
-              >
-                <div class="provider-icon">
-                  <component :is="provider.iconComponent" />
-                </div>
-                <div class="provider-info">
-                  <h3>{{ provider.name }}</h3>
-                  <p>{{ provider.description }}</p>
-                </div>
-                <div class="selected-indicator" v-if="indexerSettings.provider === provider.id">
-                  <ion-icon :icon="checkmarkCircle" />
-                </div>
-              </button>
-            </div>
-
-            <!-- OpenAI Embedding Configuration -->
-            <div v-if="indexerSettings.provider === 'openai'" class="config-panel">
-              <h3 class="config-title">OpenAI Embedding Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>API Key</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="indexerSettings.openai.apiKey"
-                      :type="showIndexerOpenAIKey ? 'text' : 'password'"
-                      placeholder="sk-..."
-                    />
-                    <button class="toggle-visibility" @click="showIndexerOpenAIKey = !showIndexerOpenAIKey">
-                      <ion-icon :icon="showIndexerOpenAIKey ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <div class="field-actions">
-                    <button 
-                      v-if="settings.openai.apiKey && settings.openai.apiKey !== indexerSettings.openai.apiKey"
-                      class="copy-key-btn"
-                      @click="indexerSettings.openai.apiKey = settings.openai.apiKey"
-                    >
-                      <ion-icon :icon="copyOutline" />
-                      <span>Copy from AI Provider</span>
-                    </button>
-                    <span class="field-hint">
-                      Can be the same or different from your AI Provider API key.
-                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">
-                        Get an API key
-                      </a>
-                    </span>
-                  </div>
-                </div>
-
-                <div class="field-group">
-                  <label>Embedding Model</label>
-                  <select v-model="indexerSettings.openai.model">
-                    <option value="text-embedding-3-small">text-embedding-3-small (1536 dims, efficient)</option>
-                    <option value="text-embedding-3-large">text-embedding-3-large (3072 dims, highest quality)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <!-- Gemini Embedding Configuration -->
-            <div v-if="indexerSettings.provider === 'gemini'" class="config-panel">
-              <h3 class="config-title">Gemini Embedding Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>API Key</label>
-                  <div class="input-wrapper">
-                    <input
-                      v-model="indexerSettings.gemini.apiKey"
-                      :type="showIndexerGeminiKey ? 'text' : 'password'"
-                      placeholder="AIza..."
-                    />
-                    <button class="toggle-visibility" @click="showIndexerGeminiKey = !showIndexerGeminiKey">
-                      <ion-icon :icon="showIndexerGeminiKey ? eyeOffOutline : eyeOutline" />
-                    </button>
-                  </div>
-                  <div class="field-actions">
-                    <button 
-                      v-if="settings.google.apiKey && settings.google.apiKey !== indexerSettings.gemini.apiKey"
-                      class="copy-key-btn"
-                      @click="indexerSettings.gemini.apiKey = settings.google.apiKey"
-                    >
-                      <ion-icon :icon="copyOutline" />
-                      <span>Copy from AI Provider</span>
-                    </button>
-                    <span class="field-hint">
-                      Can be the same or different from your AI Provider API key.
-                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
-                        Get an API key
-                      </a>
-                    </span>
-                  </div>
-                </div>
-
-                <div class="field-group">
-                  <label>Embedding Model</label>
-                  <select v-model="indexerSettings.gemini.model">
-                    <option value="text-embedding-004">text-embedding-004 (768 dims, latest)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <!-- Ollama Embedding Configuration -->
-            <div v-if="indexerSettings.provider === 'ollama'" class="config-panel">
-              <h3 class="config-title">Ollama Embedding Configuration</h3>
-              <div class="config-fields">
-                <div class="field-group">
-                  <label>Ollama URL</label>
-                  <input
-                    v-model="indexerSettings.ollama.baseUrl"
-                    type="text"
-                    placeholder="http://localhost:11434"
-                  />
-                </div>
-
-                <div class="field-group">
-                  <label>Embedding Model</label>
-                  <div class="model-input-row">
-                    <input
-                      v-model="indexerSettings.ollama.model"
-                      type="text"
-                      placeholder="nomic-embed-text"
-                    />
-                    <button 
-                      class="fetch-models-btn" 
-                      @click="fetchOllamaEmbeddingModels" 
-                      :disabled="loadingEmbeddingModels"
-                    >
-                      <ion-spinner v-if="loadingEmbeddingModels" name="crescent" />
-                      <span v-else>Fetch Models</span>
-                    </button>
-                  </div>
-                  <span class="field-hint">
-                    Suggested models: nomic-embed-text, mxbai-embed-large, all-minilm
-                  </span>
-                </div>
-
-                <!-- Available Embedding Models -->
-                <div v-if="ollamaEmbeddingModels.length > 0" class="field-group">
-                  <label>Available Models</label>
-                  <div class="models-list">
-                    <button 
-                      v-for="model in ollamaEmbeddingModels" 
-                      :key="model"
-                      class="model-item"
-                      :class="{ selected: indexerSettings.ollama.model === model }"
-                      @click="selectOllamaEmbeddingModel(model)"
-                    >
-                      <ion-icon :icon="cubeOutline" />
-                      <span>{{ model }}</span>
-                      <ion-icon 
-                        v-if="indexerSettings.ollama.model === model" 
-                        :icon="checkmarkOutline" 
-                        class="check-icon"
-                      />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Hugging Face Local Embedding Configuration -->
-            <div v-if="indexerSettings.provider === 'huggingface_local'" class="config-panel">
-              <h3 class="config-title">Hugging Face Local Embedding Configuration</h3>
-              <p class="section-description" style="margin-bottom: 16px; font-size: 0.9rem;">
-                Select and download an embedding model. Models run locally with no API key required.
-              </p>
-
-              <!-- Embedding Model Catalog -->
-              <div class="embedding-models-catalog">
-                <template v-for="model in SUGGESTED_HF_LOCAL_EMBEDDING_MODELS" :key="model.id">
-                  <div 
-                    class="embedding-model-item"
-                    :class="{ 
-                      selected: indexerSettings.huggingfaceLocal.model === model.id,
-                      downloading: hfLocalStatus?.status === 'loading' && hfLocalStatus?.loadedModel === model.id,
-                      clickable: isEmbeddingModelReady(model.id) && hfLocalStatus?.status !== 'loading'
-                    }"
-                    @click="isEmbeddingModelReady(model.id) && hfLocalStatus?.status !== 'loading' ? selectEmbeddingModel(model.id) : null"
-                  >
-                    <div class="model-info">
-                      <div class="model-header">
-                        <span class="model-name">{{ model.name }}</span>
-                        <span class="model-dims">{{ model.dimensions }} dims</span>
-                      </div>
-                      <span class="model-description">{{ model.description }}</span>
-                    </div>
-                    
-                    <div class="model-actions">
-                      <!-- Download in progress -->
-                      <div v-if="hfLocalStatus?.status === 'loading' && hfLocalStatus?.loadedModel === model.id" class="download-status">
-                        <ion-spinner name="crescent" />
-                        <span>{{ hfLocalStatus.progress || 0 }}%</span>
-                      </div>
-                      <!-- Model ready (downloaded) & selected -->
-                      <span 
-                        v-else-if="isEmbeddingModelReady(model.id) && indexerSettings.huggingfaceLocal.model === model.id"
-                        class="selected-badge"
-                      >
-                        <ion-icon :icon="checkmarkCircleOutline" />
-                        <span>Selected</span>
-                      </span>
-                      <!-- Model ready but not selected - no button, just clickable row -->
-                      <span v-else-if="isEmbeddingModelReady(model.id)" class="ready-indicator">
-                        <ion-icon :icon="checkmarkOutline" />
-                      </span>
-                      <!-- Download button -->
-                      <button 
-                        v-else
-                        class="btn btn-small"
-                        @click.stop="handleDownloadEmbeddingModel(model.id)"
-                        :disabled="hfLocalStatus?.status === 'loading'"
-                      >
-                        <ion-icon :icon="downloadOutline" />
-                        <span>Download</span>
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <!-- Download Progress (inline, below the downloading model) -->
-                  <div v-if="hfLocalStatus?.status === 'loading' && hfLocalStatus?.loadedModel === model.id" class="embedding-download-progress-inline">
-                    <div class="progress-header">
-                      <span>Downloading {{ model.name }}...</span>
-                      <span>{{ hfLocalStatus.progress || 0 }}%</span>
-                    </div>
-                    <div class="progress-bar">
-                      <div class="progress-fill" :style="{ width: (hfLocalStatus.progress || 0) + '%' }"></div>
-                    </div>
-                  </div>
-                </template>
-              </div>
-
-              <!-- Error Status -->
-              <div v-if="hfLocalStatus?.status === 'error'" class="hf-error-status">
-                <div class="error-content">
-                  <ion-icon :icon="closeCircleOutline" />
-                  <span>{{ hfLocalStatus.error }}</span>
-                </div>
-                <button class="btn btn-small" @click="handleRetryEmbeddingDownload">
-                  <ion-icon :icon="refreshOutline" />
-                  <span>Retry</span>
-                </button>
-              </div>
-            </div>
-
-            <!-- Indexer Connection Status -->
-            <div v-if="indexerStatus" :class="['connection-status', indexerStatus.success ? 'success' : 'error']">
-              <ion-icon :icon="indexerStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
-              <span>{{ indexerStatus.message }}</span>
-            </div>
-
-            <!-- Re-indexing Section -->
-            <div class="config-panel">
-              <h3 class="config-title">Re-index Documents</h3>
-              <p class="section-description" style="margin-bottom: 16px; font-size: 0.9rem;">
-                Re-generate embeddings for all documents. Useful after changing embedding providers or if search results seem stale.
-              </p>
-              
-              <!-- Re-index Progress -->
-              <div v-if="reindexProgress" class="reindex-progress">
-                <div class="progress-info">
-                  <span>{{ reindexProgress.current }} / {{ reindexProgress.total }}</span>
-                  <span class="progress-file">{{ reindexProgress.fileName }}</span>
-                </div>
-                <div class="progress-bar">
-                  <div 
-                    class="progress-fill" 
-                    :style="{ width: `${(reindexProgress.current / reindexProgress.total) * 100}%` }"
-                  />
-                </div>
-              </div>
-
-              <!-- Re-index Status -->
-              <div v-if="reindexStatus" :class="['connection-status', reindexStatus.success ? 'success' : 'error']">
-                <ion-icon :icon="reindexStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
-                <span>{{ reindexStatus.message }}</span>
-              </div>
-
-              <button 
-                class="btn btn-secondary" 
-                @click="handleReindexAll" 
-                :disabled="reindexing"
-                style="margin-top: 12px;"
-              >
-                <ion-spinner v-if="reindexing" name="crescent" />
-                <ion-icon v-else :icon="refreshOutline" />
-                <span>Re-index All Files</span>
-              </button>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="action-buttons">
-              <button class="btn btn-secondary" @click="handleTestIndexer" :disabled="testingIndexer">
-                <ion-spinner v-if="testingIndexer" name="crescent" />
-                <ion-icon v-else :icon="flashOutline" />
-                <span>Test Connection</span>
-              </button>
-              <button class="btn btn-primary" @click="handleSaveIndexer">
-                <ion-icon :icon="saveOutline" />
-                <span>Save Settings</span>
-              </button>
-            </div>
+            <IndexerProviderSelector
+              v-model="indexerSettings"
+              :ai-provider-settings="settings"
+              :hf-local-available="hfLocalAvailable"
+              :hf-local-status="hfLocalStatus"
+              :testing-connection="testingIndexer"
+              :connection-status="indexerStatus"
+              :loading-models="loadingEmbeddingModels"
+              :ollama-models="ollamaEmbeddingModels"
+              :reindexing="reindexing"
+              :reindex-progress="reindexProgress"
+              :reindex-status="reindexStatus"
+              @test-connection="handleTestIndexer"
+              @save="handleSaveIndexer"
+              @fetch-ollama-models="fetchOllamaEmbeddingModels"
+              @download-model="handleDownloadEmbeddingModel"
+              @reindex-all="handleReindexAll"
+            />
           </section>
 
           <!-- AI Instructions Section -->
@@ -1341,7 +679,7 @@ import {
   downloadOutline,
   informationCircleOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS } from '@/types';
 import { 
   OpenAiIcon, 
@@ -1353,6 +691,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
+import { AIProviderSelector, IndexerProviderSelector } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -1394,6 +733,7 @@ import {
   cancelInstallation,
   onDownloadProgress,
   getRuntimeStatus,
+  getHardwareInfo,
   loadLocalModelSettings,
   saveLocalModelSettings,
   loadModel,
@@ -1568,6 +908,7 @@ const runtimeStatus = ref<RuntimeStatus | null>(null);
 const installingModel = ref<string | null>(null);
 const loadingModel = ref(false);
 const showHfToken = ref(false);
+const hardwareInfo = ref<HardwareInfo | null>(null);
 let progressUnsubscribe: (() => void) | null = null;
 
 // Local model token (stored separately from settings for security)
@@ -1597,6 +938,9 @@ onMounted(async () => {
   localModelsAvailable.value = isLocalModelsAvailable();
   if (localModelsAvailable.value) {
     await loadLocalModelsData();
+    
+    // Load hardware acceleration info
+    hardwareInfo.value = await getHardwareInfo();
     
     // Subscribe to download progress
     progressUnsubscribe = onDownloadProgress((progress) => {
@@ -2350,6 +1694,11 @@ function selectLocalModelById(huggingFaceId: string) {
   if (model) {
     selectLocalModel(model);
   }
+}
+
+// Handler for select-local-model event from AIProviderSelector
+function handleSelectLocalModel(model: LocalModel) {
+  selectLocalModel(model);
 }
 
 async function handleRemoveModelByHfId(huggingFaceId: string) {
