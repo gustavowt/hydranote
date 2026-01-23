@@ -108,9 +108,8 @@ export {
   checkCompletion,
   runPlannerFlow,
   getToolIcon,
-  // Auto-execute helpers
+  // Auto-execute helper (uses LLM complexity assessment)
   shouldAutoExecutePlan,
-  AUTO_EXECUTE_TOOLS,
 } from './toolService';
 
 // Export types from toolService

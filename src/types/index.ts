@@ -1537,6 +1537,10 @@ export interface ExecutionPlan {
   originalQuery: string;
   /** Timestamp when plan was created */
   createdAt: Date;
+  /** Plan complexity level - determines auto-execute behavior */
+  complexity: 'low' | 'high';
+  /** Reasoning for the complexity assessment */
+  complexityReason?: string;
 }
 
 /**
