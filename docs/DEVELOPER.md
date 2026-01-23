@@ -335,6 +335,10 @@ Supports running GGUF models from Hugging Face locally via node-llama-cpp.
 
 **Shell:**
 `shell:openPath` - Open file in system default app
+`shell:openExternal` - Open URL in system default browser
+
+**External Links:**
+All clickable links (`<a href>`) and `window.open()` calls to external URLs (http/https) automatically open in the system's native browser instead of within the Electron app.
 
 ---
 
