@@ -758,9 +758,20 @@ async function sendMessage(text?: string) {
       projectFileNames = files.map(f => f.name);
     }
 
-    // Build conversation context
-    const conversationContext = messages.value.slice(-6, -1)
-      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 200)}${m.content.length > 200 ? '...' : ''}`)
+    // Build conversation context with user messages only for better context retention
+    // Filter last 12 user messages (excluding current), with 500 chars each
+    const userMessages = messages.value
+      .slice(0, -1) // Exclude current message
+      .filter(m => m.role === 'user')
+      .slice(-12); // Last 12 user messages
+    
+    const conversationContext = userMessages
+      .map(m => {
+        const truncatedContent = m.content.length > 500 
+          ? m.content.substring(0, 500) + '...' 
+          : m.content;
+        return `User: ${truncatedContent}`;
+      })
       .join('\n');
 
     // Phase 1: Create execution plan
