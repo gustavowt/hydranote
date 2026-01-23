@@ -265,6 +265,7 @@ interface ElectronAPI {
   // Shell Operations (open files/URLs in system applications)
   shell: {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+    openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   };
   // Web Fetch Operations (bypasses CORS by running in main process)
   web: {

@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell Operations (open files/URLs in system applications)
   shell: {
     openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   },
   // Web Fetch Operations (bypasses CORS by running in main process)
   web: {

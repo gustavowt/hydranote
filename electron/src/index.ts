@@ -282,6 +282,24 @@ ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
   }
 });
 
+// Open URL in system default browser
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  try {
+    // Validate URL - only allow http and https protocols
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return { success: false, error: `Invalid protocol: ${parsedUrl.protocol}. Only http: and https: are allowed.` };
+    }
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to open URL' 
+    };
+  }
+});
+
 // ============================================
 // Web Fetch IPC Handlers
 // ============================================
