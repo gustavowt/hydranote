@@ -6,7 +6,7 @@ import {
 } from '@capacitor-community/electron';
 import chokidar from 'chokidar';
 import type { MenuItemConstructorOptions } from 'electron';
-import { app, BrowserWindow, Menu, MenuItem, nativeImage, Tray, session } from 'electron';
+import { app, BrowserWindow, Menu, MenuItem, nativeImage, Tray, session, shell } from 'electron';
 import electronIsDev from 'electron-is-dev';
 import electronServe from 'electron-serve';
 import windowStateKeeper from 'electron-window-state';
@@ -181,17 +181,28 @@ export class ElectronCapacitorApp {
       this.loadMainWindow(this);
     }
 
-    // Security
+    // Security - Open external URLs in native browser
     this.MainWindow.webContents.setWindowOpenHandler((details) => {
-      if (!details.url.includes(this.customScheme)) {
-        return { action: 'deny' };
-      } else {
+      const url = details.url;
+      // Allow internal app URLs
+      if (url.includes(this.customScheme)) {
         return { action: 'allow' };
       }
+      // Open external URLs (http/https) in native browser
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        shell.openExternal(url);
+      }
+      return { action: 'deny' };
     });
-    this.MainWindow.webContents.on('will-navigate', (event, _newURL) => {
-      if (!this.MainWindow.webContents.getURL().includes(this.customScheme)) {
+    this.MainWindow.webContents.on('will-navigate', (event, newURL) => {
+      // Allow navigation within the app
+      if (newURL.includes(this.customScheme)) {
+        return;
+      }
+      // Prevent in-app navigation to external URLs and open in native browser
+      if (newURL.startsWith('http://') || newURL.startsWith('https://')) {
         event.preventDefault();
+        shell.openExternal(newURL);
       }
     });
 
