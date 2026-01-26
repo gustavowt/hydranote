@@ -291,6 +291,25 @@ export interface ChatSession {
 }
 
 /**
+ * Working context for global chat sessions
+ * Tracks recently created projects/files within the current conversation
+ * so subsequent messages can reference them without explicit specification
+ */
+export interface WorkingContext {
+  /** Currently active project from recent creation */
+  projectId?: string;
+  /** Name of the active project */
+  projectName?: string;
+  /** Recently created files in this session */
+  recentFiles: Array<{
+    fileId: string;
+    fileName: string;
+    projectId: string;
+    projectName: string;
+  }>;
+}
+
+/**
  * Available tools for the LLM
  */
 export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
@@ -508,6 +527,8 @@ export interface ToolResult {
   tool: ToolName;
   data?: string;
   error?: string;
+  /** Whether this tool made persisting changes (files/projects created, updated, deleted) */
+  persistedChanges?: boolean;
   metadata?: {
     fileName?: string;
     fileId?: string;
@@ -1515,6 +1536,8 @@ export interface PlanStep {
   detail?: string;
   /** Error message if step failed */
   error?: string;
+  /** Whether this step made persisting changes (set after execution) */
+  persistedChanges?: boolean;
 }
 
 /**
