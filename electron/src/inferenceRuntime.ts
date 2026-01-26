@@ -9,9 +9,13 @@
 import { BrowserWindow } from 'electron';
 import { getModelManager } from './modelManager';
 
-// Dynamic import helper to bypass CommonJS transformation
-// node-llama-cpp v3 is ESM-only, so we need true dynamic import
-const dynamicImport = new Function('modulePath', 'return import(modulePath)') as (modulePath: string) => Promise<unknown>;
+// Dynamic import helper for ESM modules from CommonJS context
+// node-llama-cpp v3 is ESM-only, requires special handling
+async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
+  const dynamicImport = new Function('modulePath', 'return import(modulePath)') as 
+    (modulePath: string) => Promise<typeof import('node-llama-cpp')>;
+  return dynamicImport('node-llama-cpp');
+}
 
 // ============================================
 // Types
@@ -142,35 +146,30 @@ export class InferenceRuntime {
 
     try {
       // Dynamically import node-llama-cpp
-      // This allows the app to run even if the dependency isn't installed
-      // Using dynamicImport helper to bypass CommonJS transformation
-      const nodeLlamaCpp = await dynamicImport('node-llama-cpp') as typeof import('node-llama-cpp');
+      const nodeLlamaCpp = await importNodeLlamaCpp();
       const { getLlama, LlamaChatSession } = nodeLlamaCpp;
 
       // Store the LlamaChatSession class for later use
       this.LlamaChatSessionClass = LlamaChatSession;
 
-      // Initialize llama
-      this.llama = await getLlama({gpu: true});
+      // Initialize llama with GPU - use Metal on macOS Apple Silicon, auto elsewhere
+      const gpuOption = process.platform === 'darwin' && process.arch === 'arm64' ? 'metal' : 'auto';
+      this.llama = await getLlama({ gpu: gpuOption as any });
+      
+      const gpuBackend = (this.llama as any).gpu;
+      console.log(`[InferenceRuntime] Initialized with GPU backend: ${gpuBackend || 'cpu'}`);
 
       // Load the model
-      // gpuLayers: -1 or undefined = let node-llama-cpp auto-detect optimal GPU layers based on VRAM
-      // gpuLayers: 0 = CPU only
+      // gpuLayers: -1, 0, or undefined = let node-llama-cpp auto-detect optimal GPU layers
       // gpuLayers: N (positive) = specific number of layers on GPU
       const gpuLayers = options.gpuLayers;
-      const isAutoGpu = gpuLayers === undefined || gpuLayers === -1;
+      const isAutoGpu = gpuLayers === undefined || gpuLayers === -1 || gpuLayers === 0;
       const contextLength = options.contextLength ?? model.contextLength ?? 4096;
 
-      console.log(`[InferenceRuntime] Loading model: ${model.primaryModelPath}`);
-      console.log(`[InferenceRuntime] GPU layers: ${isAutoGpu ? 'auto (node-llama-cpp will detect optimal based on VRAM)' : gpuLayers}, Context: ${contextLength}`);
-      console.log(`[InferenceRuntime] Detected GPU type: ${(this.llama as any).gpu || 'none/cpu'}`);
-
-      // Only pass gpuLayers if explicitly set to a non-auto value
-      // When undefined or -1, node-llama-cpp auto-detects optimal layers based on available VRAM
       const loadOptions: { modelPath: string; gpuLayers?: number } = {
         modelPath: model.primaryModelPath,
       };
-      if (!isAutoGpu) {
+      if (!isAutoGpu && gpuLayers && gpuLayers > 0) {
         loadOptions.gpuLayers = gpuLayers;
       }
 
@@ -180,9 +179,6 @@ export class InferenceRuntime {
       this.context = await (this.model as any).createContext({
         contextSize: contextLength,
       });
-
-      // Note: We don't create a session here anymore.
-      // Sessions are created on-demand in infer() with the proper system prompt.
 
       this.loadedModelId = modelId;
       modelManager.updateLastUsed(modelId);
@@ -194,7 +190,7 @@ export class InferenceRuntime {
         loadedModelName: model.name,
       });
 
-      console.log(`[InferenceRuntime] Model loaded successfully: ${model.name}`);
+      console.log(`[InferenceRuntime] Model loaded: ${model.name}`);
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load model';
@@ -239,8 +235,6 @@ export class InferenceRuntime {
         loadedModelName: undefined,
       });
 
-      console.log('[InferenceRuntime] Model unloaded');
-
     } catch (error) {
       console.error('[InferenceRuntime] Error unloading model:', error);
     }
@@ -253,20 +247,11 @@ export class InferenceRuntime {
     messages: InferenceMessage[],
     options: InferenceOptions = {}
   ): Promise<InferenceResult> {
-    console.log('\n[InferenceRuntime] ========== INFER CALLED ==========');
-    console.log('[InferenceRuntime] Received messages:', messages.length);
-    messages.forEach((m, i) => {
-      console.log(`[InferenceRuntime]   [${i}] ${m.role}: "${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}" (${m.content.length} chars)`);
-    });
-    console.log('[InferenceRuntime] Options:', JSON.stringify(options));
-    
     if (!this.isReady()) {
-      console.error('[InferenceRuntime] ERROR: Runtime not ready');
       throw new Error('Runtime is not ready. Load a model first.');
     }
 
     if (!this.LlamaChatSessionClass) {
-      console.error('[InferenceRuntime] ERROR: LlamaChatSessionClass not available');
       throw new Error('LlamaChatSession class not available');
     }
 
@@ -276,7 +261,6 @@ export class InferenceRuntime {
       // Extract system prompt from messages
       const systemMessage = messages.find(m => m.role === 'system');
       const systemPrompt = systemMessage?.content || '';
-      console.log(`[InferenceRuntime] System prompt found: ${systemMessage ? 'YES' : 'NO'} (${systemPrompt.length} chars)`);
       
       // Get non-system messages for conversation history
       const conversationMessages = messages.filter(m => m.role !== 'system');
@@ -293,37 +277,28 @@ export class InferenceRuntime {
       const contextLength = modelInfo?.contextLength ?? 4096;
       
       // Dispose old context and create a fresh one for this inference
-      // This ensures no leftover state from previous inferences
       if (this.context) {
-        console.log('[InferenceRuntime] Disposing old context...');
         try {
           await (this.context as any).dispose();
-        } catch (disposeErr) {
-          console.warn('[InferenceRuntime] Error disposing old context:', disposeErr);
+        } catch {
+          // Ignore dispose errors
         }
       }
       
-      console.log('[InferenceRuntime] Creating fresh context...');
       this.context = await (this.model as any).createContext({
         contextSize: contextLength,
       });
       
       // Get a fresh sequence from the new context
       const contextSequence = (this.context as any).getSequence();
-      console.log('[InferenceRuntime] Got fresh context sequence');
       
       // Create a fresh chat session
-      // We'll set the system prompt via setChatHistory for better compatibility
       const LlamaChatSession = this.LlamaChatSessionClass as any;
       const session = new LlamaChatSession({
         contextSequence,
       });
 
       // Build complete chat history including system prompt
-      // The chat history format expected by node-llama-cpp v3:
-      // - system: { type: 'system', text: string }
-      // - user: { type: 'user', text: string }
-      // - model: { type: 'model', response: string[] }  // Note: 'response' not 'text'!
       const chatHistory: Array<
         | { type: 'system'; text: string }
         | { type: 'user'; text: string }
@@ -348,7 +323,6 @@ export class InferenceRuntime {
               text: msg.content,
             });
           } else {
-            // Model responses use 'response' array, not 'text'
             chatHistory.push({
               type: 'model',
               response: [msg.content],
@@ -360,25 +334,14 @@ export class InferenceRuntime {
       // Track if we successfully set the history
       let historySet = false;
       
-      console.log('[InferenceRuntime] Chat history to set:', JSON.stringify(chatHistory.map(h => ({
-        type: h.type,
-        length: h.type === 'model' ? (h as any).response?.[0]?.length : (h as any).text?.length,
-      })), null, 2));
-      
       // Set the chat history if we have any
       if (chatHistory.length > 0) {
         try {
-          console.log('[InferenceRuntime] Calling setChatHistory...');
           await session.setChatHistory(chatHistory);
           historySet = true;
-          console.log(`[InferenceRuntime] setChatHistory SUCCESS with ${chatHistory.length} items`);
-        } catch (historyError) {
-          // If setChatHistory fails, log the error
-          console.error('[InferenceRuntime] setChatHistory FAILED:', historyError);
+        } catch {
           historySet = false;
         }
-      } else {
-        console.log('[InferenceRuntime] No chat history to set');
       }
 
       // Configure generation options
@@ -392,28 +355,14 @@ export class InferenceRuntime {
       let userPrompt = lastMessage.content;
       
       // If history wasn't set and we have a system prompt, use a fallback approach
-      // by constructing a manual prompt that includes context
       if (!historySet && systemPrompt) {
-        console.log('[InferenceRuntime] Using fallback: constructing manual prompt with system context');
-        
-        // For the fallback, we'll create a simplified prompt that includes key context
-        // We truncate the system prompt to avoid overwhelming the model
-        const maxSystemLength = 2000; // Reasonable limit for context
+        const maxSystemLength = 2000;
         const truncatedSystem = systemPrompt.length > maxSystemLength 
           ? systemPrompt.substring(0, maxSystemLength) + '\n\n[System instructions truncated for brevity]'
           : systemPrompt;
         
-        // Build a simple context-aware prompt
-        // Most models understand this format even without proper chat templates
         userPrompt = `### System Instructions:\n${truncatedSystem}\n\n### User Message:\n${lastMessage.content}\n\n### Assistant Response:`;
       }
-
-      console.log('[InferenceRuntime] -------- PROMPT DETAILS --------');
-      console.log(`[InferenceRuntime] historySet: ${historySet}`);
-      console.log(`[InferenceRuntime] userPrompt length: ${userPrompt.length}`);
-      console.log(`[InferenceRuntime] userPrompt preview: "${userPrompt.substring(0, 200)}${userPrompt.length > 200 ? '...' : ''}"`);
-      console.log(`[InferenceRuntime] maxTokens: ${maxTokens}, temperature: ${temperature}`);
-      console.log('[InferenceRuntime] Calling session.prompt()...');
 
       if (options.stream) {
         // Streaming response
@@ -448,13 +397,10 @@ export class InferenceRuntime {
 
       } else {
         // Non-streaming response
-        console.log('[InferenceRuntime] Awaiting non-streaming response...');
         content = await session.prompt(userPrompt, {
           maxTokens,
           temperature,
         });
-        console.log(`[InferenceRuntime] Got response: ${content.length} chars`);
-        console.log(`[InferenceRuntime] Response preview: "${content.substring(0, 300)}${content.length > 300 ? '...' : ''}"`);
       }
 
       // Clean up the session after use
@@ -471,7 +417,7 @@ export class InferenceRuntime {
       return {
         content,
         tokensGenerated,
-        tokensPrompt: 0, // Would need to count input tokens
+        tokensPrompt: 0,
         timeMs,
       };
 
@@ -483,39 +429,40 @@ export class InferenceRuntime {
 
   /**
    * Get hardware acceleration information
-   * Returns info about detected GPU backends (CUDA, Metal, Vulkan) or CPU-only mode
    */
   async getHardwareInfo(): Promise<HardwareInfo> {
     try {
-      const nodeLlamaCpp = await dynamicImport('node-llama-cpp') as typeof import('node-llama-cpp');
-      const { getLlama, getLlamaGpuTypes } = nodeLlamaCpp;
+      const nodeLlamaCpp = await importNodeLlamaCpp();
+      const { getLlama } = nodeLlamaCpp;
 
-      // Get supported GPU types
+      // Get supported GPU types (if available in this version)
       let supportedBackends: string[] = [];
       try {
-        supportedBackends = await getLlamaGpuTypes('supported') as string[];
+        if ('getLlamaGpuTypes' in nodeLlamaCpp) {
+          const getLlamaGpuTypes = (nodeLlamaCpp as any).getLlamaGpuTypes;
+          supportedBackends = await getLlamaGpuTypes('supported') as string[];
+        }
       } catch {
-        // getLlamaGpuTypes might not be available in all versions
         supportedBackends = [];
       }
 
       // If we already have a llama instance loaded, use its GPU info
       if (this.llama) {
-        const llamaInstance = this.llama as { gpu?: string | false };
-        const backend = llamaInstance.gpu || 'cpu';
+        const backend = (this.llama as any).gpu;
+        const resolvedBackend = (typeof backend === 'string' && backend) ? backend : 'cpu';
         return {
-          backend: backend === false ? 'cpu' : (backend as HardwareInfo['backend']),
+          backend: resolvedBackend as HardwareInfo['backend'],
           supportedBackends,
         };
       }
 
       // Otherwise, create a temporary instance to check hardware
-      const llama = await getLlama();
-      const llamaAny = llama as { gpu?: string | false };
-      const detectedBackend = llamaAny.gpu || 'cpu';
+      const llama = await getLlama({ gpu: 'auto' });
+      const detectedBackend = (llama as any).gpu;
+      const resolvedBackend = (typeof detectedBackend === 'string' && detectedBackend) ? detectedBackend : 'cpu';
 
       return {
-        backend: detectedBackend === false ? 'cpu' : (detectedBackend as HardwareInfo['backend']),
+        backend: resolvedBackend as HardwareInfo['backend'],
         supportedBackends,
       };
     } catch (error) {
@@ -529,22 +476,16 @@ export class InferenceRuntime {
 
   /**
    * Stop ongoing inference (if streaming)
-   * Note: With on-demand sessions, stopping is handled by the session's internal state.
-   * A more robust implementation would track the active session and call stop on it.
    */
   async stopInference(): Promise<void> {
     // Sessions are now created per-inference and disposed after.
-    // To properly implement stop, we would need to track the active session.
     // For now, this is a no-op - the inference will complete naturally.
-    console.log('[InferenceRuntime] Stop inference requested (currently no-op)');
   }
 
   /**
    * Get memory usage statistics
    */
   getMemoryUsage(): { used: number; total: number } | null {
-    // node-llama-cpp doesn't expose memory stats directly
-    // We could use process.memoryUsage() as a rough estimate
     const usage = process.memoryUsage();
     return {
       used: usage.heapUsed,
@@ -586,7 +527,7 @@ export function getInferenceRuntime(): InferenceRuntime {
  */
 export async function isRuntimeAvailable(): Promise<boolean> {
   try {
-    await dynamicImport('node-llama-cpp');
+    await importNodeLlamaCpp();
     return true;
   } catch {
     return false;
