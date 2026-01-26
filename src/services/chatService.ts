@@ -9,6 +9,7 @@ import type {
   ContextWindowConfig,
   ManagedContext,
   SearchResult,
+  WorkingContext,
 } from '../types';
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
 import { getProject, get_project_files, getProjectStats, searchProject, getAllProjects, searchAllProjects } from './projectService';
@@ -141,8 +142,9 @@ Operations: "replace", "insert_before", "insert_after"
 /**
  * Build the system prompt for a GLOBAL chat session (no specific project)
  * Provides access to all projects and cross-project operations
+ * @param workingContext - Optional working context from recent creations in this session
  */
-export async function buildGlobalSystemPrompt(): Promise<string> {
+export async function buildGlobalSystemPrompt(workingContext?: WorkingContext): Promise<string> {
   const projects = await getAllProjects();
   
   // Build project list with their files
@@ -164,11 +166,25 @@ ${project.description ? `  Description: ${project.description}` : ''}
 ${fileList || '  No files yet.'}`);
   }
 
+  // Build working context section if active project exists
+  const workingContextSection = workingContext?.projectId
+    ? `
+## Current Working Context
+**Active Project:** ${workingContext.projectName} (id: ${workingContext.projectId})
+${workingContext.recentFiles.length > 0 
+  ? `**Recently Created Files:**
+${workingContext.recentFiles.map(f => `  - ${f.fileName}`).join('\n')}`
+  : ''}
+
+When the user refers to "the project", "add a file", or similar without specifying a project, use the active project above.
+`
+    : '';
+
   return `You are HydraNote, an AI assistant specialized in document analysis and interaction.
 
 ## Global Mode
 You are in **Global Mode** - you have access to ALL projects and can perform cross-project operations.
-
+${workingContextSection}
 ## All Projects Overview
 **Total Projects:** ${projects.length}
 **Total Files:** ${totalFiles}

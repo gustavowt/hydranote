@@ -24,6 +24,7 @@ import type {
   UpdateFileResult,
   LLMStreamCallback,
   WebResearchToolParams,
+  WorkingContext,
 } from "../types";
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from "../types";
 import {
@@ -752,6 +753,7 @@ export async function executeWriteTool(
       return {
         success: true,
         tool: "write",
+        persistedChanges: true,
         data: `File "${file.name}" has been created.\n\n**Title:** ${finalTitle}\n**Format:** Markdown\n**Size:** ${formatFileSize(file.size)}\n**Location:** ${targetDirectory || "project root"}`,
         metadata: {
           fileName: file.name,
@@ -793,6 +795,7 @@ export async function executeWriteTool(
     return {
       success: true,
       tool: "write",
+      persistedChanges: true,
       data: `Document "${result.fileName}" has been created.\n\n**Title:** ${finalTitle}\n**Format:** ${format.toUpperCase()}\n**Size:** ${formatFileSize(result.size)}\n**Location:** ${targetDirectory || "project root"}`,
       metadata: {
         fileName: result.fileName,
@@ -877,6 +880,7 @@ export async function executeCreateProjectTool(params: {
     return {
       success: true,
       tool: "createProject",
+      persistedChanges: true,
       data: `Project "${project.name}" has been created successfully.${syncError ? `\n\n⚠️ Note: Folder sync failed: ${syncError}` : ""}${params.description ? `\n\n**Description:** ${params.description}` : ""}`,
       metadata: {
         projectId: project.id,
@@ -996,6 +1000,7 @@ export async function executeMoveFileTool(params: {
       return {
         success: true,
         tool: "moveFile",
+        persistedChanges: true,
         data: `File "${file}" has been renamed to "${renamedFile.name}" in project "${sourceProject.name}".`,
         metadata: {
           fileId: renamedFile.id,
@@ -1010,6 +1015,7 @@ export async function executeMoveFileTool(params: {
       return {
         success: true,
         tool: "moveFile",
+        persistedChanges: true,
         data: `File "${file}" has been moved to "${directory}/" in project "${sourceProject.name}".`,
         metadata: {
           fileId: movedFile.id,
@@ -1041,6 +1047,7 @@ export async function executeMoveFileTool(params: {
     return {
       success: true,
       tool: "moveFile",
+      persistedChanges: true,
       data: `File "${file}" has been moved from "${sourceProject.name}" to "${destProject.name}".${directory ? `\n\n**New location:** ${directory}/${movedFile.name.split("/").pop()}` : ""}`,
       metadata: {
         fileId: movedFile.id,
@@ -1130,6 +1137,7 @@ export async function executeDeleteFileTool(
     return {
       success: true,
       tool: "deleteFile",
+      persistedChanges: true,
       data: `File "${fileToDelete.name}" has been deleted from project "${targetProjectName}".`,
       metadata: {
         fileId: fileToDelete.id,
@@ -1193,6 +1201,7 @@ export async function executeDeleteProjectTool(params: {
     return {
       success: true,
       tool: "deleteProject",
+      persistedChanges: true,
       data: `Project "${resolvedProject.name}" and all its files have been permanently deleted.`,
       metadata: {
         fileId: resolvedProject.id,
@@ -2540,6 +2549,7 @@ export async function createExecutionPlan(
   projectFiles: string[],
   conversationContext?: string,
   replanContext?: string,
+  workingContext?: WorkingContext,
 ): Promise<ExecutionPlan> {
   const runtimeContext = buildRuntimeContext();
 
@@ -2560,69 +2570,120 @@ export async function createExecutionPlan(
     ? `\n\nCurrent project ID: ${projectId}`
     : "\n\nGlobal mode: No specific project selected. User may want to create a project first.";
 
-  const response = await chatCompletion({
-    messages: [
-      {
-        role: "system",
-        content: PLANNER_PROMPT + runtimeContext + filesContext + projectInfo + contextInfo + replanInfo,
-      },
-      { role: "user", content: userMessage },
-    ],
-    temperature: 0,
-    maxTokens: 2000,
-  });
+  // Working context from recent creations in this session (global mode only)
+  const workingContextInfo = !projectId && workingContext?.projectId
+    ? `\n\nWorking context (from earlier in conversation):
+- Active project: "${workingContext.projectName}" (id: ${workingContext.projectId})
+- Use this project for operations unless user specifies otherwise
+${workingContext.recentFiles.length > 0 
+  ? `- Recently created files: ${workingContext.recentFiles.map(f => f.fileName).join(', ')}`
+  : ''}`
+    : "";
 
-  try {
-    let jsonStr = response.content.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
+  const systemContent = PLANNER_PROMPT + runtimeContext + filesContext + projectInfo + workingContextInfo + contextInfo + replanInfo;
+  
+  // Build conversation messages - will be extended if retries are needed
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: systemContent },
+    { role: "user", content: userMessage },
+  ];
+
+  const MAX_RETRY_ATTEMPTS = 2;
+  let lastResponse = "";
+  let lastError = "";
+
+  for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+    const response = await chatCompletion({
+      messages,
+      temperature: 0,
+      maxTokens: 2000,
+    });
+
+    lastResponse = response.content.trim();
+
+    try {
+      let jsonStr = lastResponse;
+      const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      }
+
+      const parsed = JSON.parse(jsonStr);
+
+      // Debug: log what the LLM returned for complexity
+      console.log('[Planner] LLM returned complexity:', parsed.complexity, '| reason:', parsed.complexityReason);
+      if (attempt > 0) {
+        console.log(`[Planner] Successfully parsed JSON on retry attempt ${attempt}`);
+      }
+
+      const plan: ExecutionPlan = {
+        id: crypto.randomUUID(),
+        summary: parsed.summary || "",
+        steps: (parsed.steps || []).map((step: Partial<PlanStep>, index: number) => ({
+          id: step.id || `step-${index + 1}`,
+          tool: step.tool as ToolName,
+          params: step.params || {},
+          description: step.description || `Execute ${step.tool}`,
+          dependsOn: step.dependsOn || [],
+          contextNeeded: step.contextNeeded || [],
+          providesContext: step.providesContext || [],
+          status: "pending" as const,
+        })),
+        needsClarification: parsed.needsClarification || false,
+        clarificationQuestion: parsed.clarificationQuestion,
+        estimatedDuration: parsed.estimatedDuration,
+        originalQuery: userMessage,
+        createdAt: new Date(),
+        complexity: parsed.complexity || 'high', // Default to high if not specified for safety
+        complexityReason: parsed.complexityReason,
+      };
+
+      console.log('[Planner] Final plan complexity:', plan.complexity, '| steps:', plan.steps.length);
+
+      return plan;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      console.warn(`[Planner] JSON parse failed (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS + 1}):`, lastError);
+
+      // If we haven't exhausted retries, ask the LLM to fix its response
+      if (attempt < MAX_RETRY_ATTEMPTS) {
+        // Add the malformed response and correction request to the conversation
+        messages.push({ role: "assistant", content: lastResponse });
+        messages.push({
+          role: "user",
+          content: `Your response could not be parsed as valid JSON. Error: "${lastError}"
+
+Please respond ONLY with a valid JSON object in the exact format specified. Do not include any text before or after the JSON. Make sure all strings are properly quoted, all brackets are balanced, and there are no trailing commas.
+
+Remember the required format:
+{
+  "summary": "...",
+  "needsClarification": false,
+  "clarificationQuestion": null,
+  "estimatedDuration": "...",
+  "complexity": "low" | "high",
+  "complexityReason": "...",
+  "steps": [...]
+}`,
+        });
+        console.log(`[Planner] Requesting JSON correction (attempt ${attempt + 2})`);
+      }
     }
-
-    const parsed = JSON.parse(jsonStr);
-
-    // Debug: log what the LLM returned for complexity
-    console.log('[Planner] LLM returned complexity:', parsed.complexity, '| reason:', parsed.complexityReason);
-
-    const plan: ExecutionPlan = {
-      id: crypto.randomUUID(),
-      summary: parsed.summary || "",
-      steps: (parsed.steps || []).map((step: Partial<PlanStep>, index: number) => ({
-        id: step.id || `step-${index + 1}`,
-        tool: step.tool as ToolName,
-        params: step.params || {},
-        description: step.description || `Execute ${step.tool}`,
-        dependsOn: step.dependsOn || [],
-        contextNeeded: step.contextNeeded || [],
-        providesContext: step.providesContext || [],
-        status: "pending" as const,
-      })),
-      needsClarification: parsed.needsClarification || false,
-      clarificationQuestion: parsed.clarificationQuestion,
-      estimatedDuration: parsed.estimatedDuration,
-      originalQuery: userMessage,
-      createdAt: new Date(),
-      complexity: parsed.complexity || 'high', // Default to high if not specified for safety
-      complexityReason: parsed.complexityReason,
-    };
-
-    console.log('[Planner] Final plan complexity:', plan.complexity, '| steps:', plan.steps.length);
-
-    return plan;
-  } catch {
-    // Return a plan with clarification needed
-    return {
-      id: crypto.randomUUID(),
-      summary: "",
-      steps: [],
-      needsClarification: true,
-      clarificationQuestion: "I had trouble understanding that request. This may be due to the local model not supporting structured output well. Please try rephrasing, or consider using a model better suited for tool use (e.g., Mistral Instruct, Llama 3 Instruct, or Functionary).",
-      originalQuery: userMessage,
-      createdAt: new Date(),
-      complexity: 'high' as const,
-      complexityReason: "Parse error - defaulting to high complexity",
-    };
   }
+
+  // All retries exhausted - return a plan with clarification needed
+  console.error('[Planner] All JSON parse attempts failed. Last response:', lastResponse);
+  return {
+    id: crypto.randomUUID(),
+    summary: "",
+    steps: [],
+    needsClarification: true,
+    clarificationQuestion: "I had trouble understanding that request. This may be due to the local model not supporting structured output well. Please try rephrasing, or consider using a model better suited for tool use (e.g., Mistral Instruct, Llama 3 Instruct, or Functionary).",
+    originalQuery: userMessage,
+    createdAt: new Date(),
+    complexity: 'high' as const,
+    complexityReason: "Parse error - defaulting to high complexity",
+  };
 }
 
 // ============================================
@@ -3137,6 +3198,8 @@ export async function executePlan(
 
       if (result.success) {
         step.status = "completed";
+        // Propagate persistedChanges flag to step for UI to check
+        step.persistedChanges = result.persistedChanges;
         
         // Extract context for subsequent steps
         const extractedContext = extractContextFromResult(step.tool, result, enrichedParams);
@@ -3464,22 +3527,22 @@ async function generateInterpretation(
     return "The operation completed, but no output was produced.";
   }
 
-  const systemPrompt = `You are a helpful assistant. Based on the tool execution results below, provide a natural, conversational response to the user's original question.
+  const systemPrompt = `You are a helpful assistant. Provide a brief, direct response based on the tool execution results.
 
-Guidelines:
-- Be concise but complete
-- Highlight the key information found
-- If there are multiple results, synthesize them
+CRITICAL RULES:
+- Be VERY concise - 1-3 sentences max for simple operations
+- DO NOT repeat file contents, diffs, or raw tool output
+- DO NOT ask for confirmation if tools already completed successfully
+- Just confirm what was done and any key results
 - Respond in the same language as the user's query
-- Don't repeat the raw tool output verbatim, summarize and present it naturally
-- If the results contain code or technical details, you can include them formatted appropriately`;
+- For file operations: just say what files were affected, don't show content`;
 
-  const userPrompt = `User's question: ${originalQuery}
+  const userPrompt = `User's request: ${originalQuery}
 
-Tool execution results:
+Tool results summary:
 ${toolOutputs.join("\n\n---\n\n")}
 
-Please provide a helpful response based on these results.`;
+Provide a brief confirmation of what was accomplished.`;
 
   if (onStreamChunk) {
     // Streaming response
@@ -3489,8 +3552,8 @@ Please provide a helpful response based on these results.`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature: 0.5,
-        maxTokens: 2000,
+        temperature: 0.3,
+        maxTokens: 500,
       },
       onStreamChunk,
     );
@@ -3502,8 +3565,8 @@ Please provide a helpful response based on these results.`;
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.5,
-      maxTokens: 2000,
+      temperature: 0.3,
+      maxTokens: 500,
     });
     return response.content;
   }
