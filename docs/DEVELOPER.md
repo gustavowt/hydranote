@@ -102,10 +102,38 @@ Handles tool execution with Planner → Executor → Checker architecture.
 
 **Auto-Execute Tools** (no confirmation needed): `read`, `search`, `summarize`
 
+**File Update Confirmation Behavior:**
+- Single `updateFile` in plan: Shows confirmation dialog with diff preview
+- Multiple `updateFile` in plan: Auto-applies all updates (user already approved the plan), shows summary message
+
+**Sidebar Refresh Behavior:**
+- Sidebar refreshes immediately after each persisting tool completes (not just at the end of plan execution)
+- Tools declare persistence via `persistedChanges: true` in their `ToolResult` - no hardcoded list in UI
+- When adding a new tool that persists data, set `persistedChanges: true` in the success return
+
+**Response Conciseness:**
+- Final responses show only the LLM interpretation, not raw tool outputs (tool results visible in collapsible log)
+- LLM interpretation is capped at 500 tokens with low temperature for concise output
+- For multiple file updates, the verbose preview text is replaced with a simple summary
+
+**Working Context (Global Mode):**
+- In global mode, the chat tracks recently created projects and files as "working context"
+- When a project is created, subsequent messages automatically use that project without explicit specification
+- Working context is session-scoped (resets on new chat or session switch)
+- Injected into both system prompt and planner prompt so LLM maintains awareness
+- Type: `WorkingContext { projectId?, projectName?, recentFiles[] }`
+
+**Structured Output Retry Logic:**
+- When the LLM returns malformed JSON, the planner automatically retries up to 2 additional times
+- Each retry sends the malformed response back to the LLM with the parse error, asking for correction
+- The conversation context is preserved so the LLM can fix its response
+- Only shows the "trouble understanding" error message after all retries are exhausted
+- Helps with local models that don't always produce well-formed JSON on the first attempt
+
 **Key Functions:**
 | Function | Description |
 |----------|-------------|
-| `createExecutionPlan()` | Create plan from user message |
+| `createExecutionPlan()` | Create plan from user message (with JSON retry logic) |
 | `executePlan()` | Execute plan with context passing |
 | `runPlannerFlow()` | Full orchestration with tool logs and LLM interpretation |
 
@@ -117,6 +145,7 @@ Manages chat sessions with persistent history in DuckDB.
 | Function | Description |
 |----------|-------------|
 | `buildSystemPrompt(projectId)` | Build system prompt with project context |
+| `buildGlobalSystemPrompt(workingContext?)` | Build global system prompt with optional working context |
 | `createChatSession(projectId, title?)` | Create new session (max 20 per project) |
 | `getSessionHistory(projectId?)` | Get all sessions for project/global |
 | `switchToSession(sessionId)` | Load and switch to session |
