@@ -151,7 +151,7 @@ export class InferenceRuntime {
       this.LlamaChatSessionClass = LlamaChatSession;
 
       // Initialize llama
-      this.llama = await getLlama();
+      this.llama = await getLlama({gpu: true});
 
       // Load the model
       // gpuLayers: -1 or undefined = let node-llama-cpp auto-detect optimal GPU layers based on VRAM
