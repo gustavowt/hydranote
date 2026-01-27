@@ -341,8 +341,19 @@ Supports running GGUF models from Hugging Face locally via node-llama-cpp.
 
 **Features:**
 - Downloads models to user data directory
-- GPU acceleration (Metal/CUDA/Vulkan)
+- GPU acceleration with automatic backend detection
 - Offline inference
+
+**GPU Acceleration:**
+| Platform | Backend | Hardware |
+|----------|---------|----------|
+| macOS | Metal | Apple Silicon (M1/M2/M3/M4) and Intel Macs |
+| Windows | CUDA | NVIDIA GPUs (requires CUDA drivers) |
+| Windows | Vulkan | AMD, Intel, and NVIDIA GPUs (fallback) |
+| Linux | CUDA | NVIDIA GPUs (requires CUDA drivers) |
+| Linux | Vulkan | AMD, Intel, and NVIDIA GPUs (fallback) |
+
+The runtime automatically detects and uses the best available GPU backend. If no GPU is available, it falls back to CPU inference.
 
 **Recommended Models for Tool Use:**
 - Functionary Small v3.2 (~6GB) - specialized for function calling

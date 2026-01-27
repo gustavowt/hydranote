@@ -17,6 +17,25 @@ async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
   return dynamicImport('node-llama-cpp');
 }
 
+/**
+ * Get a human-readable description of the GPU backend
+ */
+function getGpuBackendDescription(backend: unknown): string {
+  if (!backend) {
+    return 'CPU (no GPU acceleration)';
+  }
+  switch (backend) {
+    case 'metal':
+      return 'Metal (Apple GPU)';
+    case 'cuda':
+      return 'CUDA (NVIDIA GPU)';
+    case 'vulkan':
+      return 'Vulkan (cross-platform GPU)';
+    default:
+      return String(backend);
+  }
+}
+
 // ============================================
 // Types
 // ============================================
@@ -152,12 +171,12 @@ export class InferenceRuntime {
       // Store the LlamaChatSession class for later use
       this.LlamaChatSessionClass = LlamaChatSession;
 
-      // Initialize llama with GPU - use Metal on macOS Apple Silicon, auto elsewhere
-      const gpuOption = process.platform === 'darwin' && process.arch === 'arm64' ? 'metal' : 'auto';
-      this.llama = await getLlama({ gpu: gpuOption as any });
+      // Initialize llama with GPU acceleration
+      // GPU auto-detection: node-llama-cpp will select Metal, CUDA, or Vulkan based on availability
+      this.llama = await getLlama({ gpu: 'auto' });
       
       const gpuBackend = (this.llama as any).gpu;
-      console.log(`[InferenceRuntime] Initialized with GPU backend: ${gpuBackend || 'cpu'}`);
+      console.log(`[InferenceRuntime] GPU backend: ${getGpuBackendDescription(gpuBackend)}`);
 
       // Load the model
       // gpuLayers: -1, 0, or undefined = let node-llama-cpp auto-detect optimal GPU layers
@@ -429,6 +448,7 @@ export class InferenceRuntime {
 
   /**
    * Get hardware acceleration information
+   * Detects available GPU backends: Metal (macOS), CUDA (NVIDIA), Vulkan (cross-platform)
    */
   async getHardwareInfo(): Promise<HardwareInfo> {
     try {
@@ -443,7 +463,8 @@ export class InferenceRuntime {
           supportedBackends = await getLlamaGpuTypes('supported') as string[];
         }
       } catch {
-        supportedBackends = [];
+        // Fallback: list all possible backends, actual availability determined by node-llama-cpp
+        supportedBackends = ['metal', 'cuda', 'vulkan'];
       }
 
       // If we already have a llama instance loaded, use its GPU info
