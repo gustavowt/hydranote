@@ -435,7 +435,7 @@ import {
   listOutline,
   playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, WorkingContext, ToolResult } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -514,6 +514,10 @@ const sessionReady = ref(false); // Whether a session is loaded
 const chatContentRef = ref<HTMLElement | null>(null);
 const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
 const inputContainerRef = ref<HTMLElement | null>(null);
+
+// Working context for global mode - tracks recently created projects/files
+// Resets when starting a new chat session
+const workingContext = ref<WorkingContext>({ recentFiles: [] });
 
 // Computed properties for mode detection
 const isGlobalMode = computed(() => selectedScope.value === ALL_PROJECTS_SCOPE);
@@ -647,6 +651,9 @@ async function handleNewChat() {
   activePreview.value = null;
   expandedToolIds.value = new Set();
   
+  // Reset working context for global mode
+  workingContext.value = { recentFiles: [] };
+  
   const session = await startNewSession(selectedProjectId.value);
   sessionId.value = session.id;
   messages.value = [];
@@ -661,6 +668,8 @@ async function handleSwitchSession(targetSessionId: string) {
     sessionId.value = session.id;
     messages.value = [...session.messages];
     currentSessionTitle.value = session.title || 'New Chat';
+    // Reset working context when switching sessions (each session is a separate conversation)
+    workingContext.value = { recentFiles: [] };
   }
 }
 
@@ -780,6 +789,8 @@ async function sendMessage(text?: string) {
       selectedProjectId.value,
       projectFileNames,
       conversationContext,
+      undefined, // replanContext
+      isGlobalMode.value ? workingContext.value : undefined,
     );
 
     // Handle clarification request
@@ -799,7 +810,7 @@ async function sendMessage(text?: string) {
     if (plan.steps.length === 0) {
       console.log('[ChatSidebar] Empty plan - direct conversation mode');
       const systemPrompt = isGlobalMode.value
-        ? await buildGlobalSystemPrompt()
+        ? await buildGlobalSystemPrompt(workingContext.value)
         : await buildSystemPrompt(selectedProjectId.value!);
       
       console.log('[ChatSidebar] System prompt length:', systemPrompt.length);
@@ -894,6 +905,10 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
           if (step.status === 'running') {
             currentToolStreamingContent.value = '';
           }
+          // Refresh sidebar immediately when a persisting tool completes
+          if (step.status === 'completed' && step.persistedChanges) {
+            emit('projects-changed');
+          }
           scrollToBottom();
         },
         onToolLog: (log: ToolLogEntry) => {
@@ -933,26 +948,13 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
     // Collapse the tool log after completion
     isToolLogExpanded.value = false;
 
-    // Store formatted outputs for display
+    // Store formatted outputs for display (shown in tool log UI)
     formattedToolOutputs.value = result.formattedToolOutputs;
 
-    // Build the final message: tool outputs + interpretation
-    let finalMessage = '';
-    
-    // Add tool outputs (collapsed by default in message)
-    if (result.formattedToolOutputs.length > 0) {
-      finalMessage = result.formattedToolOutputs.join('\n\n') + '\n\n---\n\n';
-    }
-    
-    // Add LLM interpretation
-    if (result.response) {
-      finalMessage += result.response;
-    }
-
-    // Store as pending answer (NOT added to messages yet - keeps order correct)
-    // Will be committed to messages when next query is sent
-    if (finalMessage.trim()) {
-      pendingFinalAnswer.value = finalMessage;
+    // Store just the LLM interpretation as pending answer
+    // Tool outputs are already visible in the collapsible tool log UI
+    if (result.response?.trim()) {
+      pendingFinalAnswer.value = result.response;
       // Capture tool executions for persistence with the message
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
@@ -963,8 +965,12 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
     // Check for changes
     handleExecutionChanges(result.toolResults);
 
-    // Check for updateFile previews
-    handleUpdateFilePreview(result.toolResults);
+    // Update working context (for global mode)
+    updateWorkingContextFromResults(result.toolResults);
+
+    // Check for updateFile previews (auto-applies if multiple files)
+    // This may replace pendingFinalAnswer with a concise summary
+    await handleUpdateFilePreview(result.toolResults);
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute';
@@ -1177,6 +1183,10 @@ async function handleExecutePlan() {
           if (step.status === 'running') {
             currentToolStreamingContent.value = '';
           }
+          // Refresh sidebar immediately when a persisting tool completes
+          if (step.status === 'completed' && step.persistedChanges) {
+            emit('projects-changed');
+          }
           scrollToBottom();
         },
         onToolLog: (log: ToolLogEntry) => {
@@ -1217,26 +1227,13 @@ async function handleExecutePlan() {
     // Collapse the tool log after completion
     isToolLogExpanded.value = false;
 
-    // Store formatted outputs for display
+    // Store formatted outputs for display (shown in tool log UI)
     formattedToolOutputs.value = result.formattedToolOutputs;
 
-    // Build the final message: tool outputs + interpretation
-    let finalMessage = '';
-    
-    // Add tool outputs (collapsed by default in message)
-    if (result.formattedToolOutputs.length > 0) {
-      finalMessage = result.formattedToolOutputs.join('\n\n') + '\n\n---\n\n';
-    }
-    
-    // Add LLM interpretation
-    if (result.response) {
-      finalMessage += result.response;
-    }
-
-    // Store as pending answer (NOT added to messages yet - keeps order correct)
-    // Will be committed to messages when next query is sent
-    if (finalMessage.trim()) {
-      pendingFinalAnswer.value = finalMessage;
+    // Store just the LLM interpretation as pending answer
+    // Tool outputs are already visible in the collapsible tool log UI
+    if (result.response?.trim()) {
+      pendingFinalAnswer.value = result.response;
       // Capture tool executions for persistence with the message
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
@@ -1247,8 +1244,12 @@ async function handleExecutePlan() {
     // Check for changes
     handleExecutionChanges(result.toolResults);
 
-    // Check for updateFile previews
-    handleUpdateFilePreview(result.toolResults);
+    // Update working context (for global mode)
+    updateWorkingContextFromResults(result.toolResults);
+
+    // Check for updateFile previews (auto-applies if multiple files)
+    // This may replace pendingFinalAnswer with a concise summary
+    await handleUpdateFilePreview(result.toolResults);
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute plan';
@@ -1287,11 +1288,11 @@ function handleExecutionFileCreations(toolResults: Array<{ tool: string; success
 
 /**
  * Helper: Handle project/file change events from tool results
+ * Emits projects-changed if any tool made persisting changes
  */
-function handleExecutionChanges(toolResults: Array<{ tool: string; success: boolean }>) {
-  const changeTools = ['createProject', 'deleteProject', 'moveFile', 'deleteFile', 'write', 'addNote'];
+function handleExecutionChanges(toolResults: Array<{ tool: string; success: boolean; persistedChanges?: boolean }>) {
   const hasChanges = toolResults.some(
-    (r) => changeTools.includes(r.tool) && r.success
+    (r) => r.success && r.persistedChanges
   );
   if (hasChanges) {
     emit('projects-changed');
@@ -1299,15 +1300,127 @@ function handleExecutionChanges(toolResults: Array<{ tool: string; success: bool
 }
 
 /**
- * Helper: Handle updateFile preview from tool results
+ * Helper: Update working context from tool results
+ * Extracts project/file references from createProject and write tool results
+ * Only active in global mode
  */
-function handleUpdateFilePreview(toolResults: Array<{ tool: string; success: boolean; preview?: UpdateFilePreview }>) {
-  const updateFileResult = toolResults.find(
+function updateWorkingContextFromResults(toolResults: ToolResult[]) {
+  // Only track working context in global mode
+  if (!isGlobalMode.value) return;
+  
+  for (const result of toolResults) {
+    if (!result.success) continue;
+    
+    // Track newly created project
+    if (result.tool === 'createProject' && result.metadata?.projectId) {
+      workingContext.value.projectId = result.metadata.projectId as string;
+      workingContext.value.projectName = result.metadata.projectName as string;
+    }
+    
+    // Track newly created files
+    if (result.tool === 'write' && result.metadata?.fileId) {
+      const projectId = (result.metadata.projectId as string) || workingContext.value.projectId;
+      const projectName = (result.metadata.projectName as string) || workingContext.value.projectName;
+      
+      if (projectId && projectName) {
+        workingContext.value.recentFiles.push({
+          fileId: result.metadata.fileId as string,
+          fileName: result.metadata.fileName as string,
+          projectId,
+          projectName,
+        });
+        // Limit to last 10 files to avoid bloat
+        if (workingContext.value.recentFiles.length > 10) {
+          workingContext.value.recentFiles.shift();
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Helper: Handle updateFile preview from tool results
+ * - Single file: show confirmation dialog
+ * - Multiple files: auto-apply all (user already confirmed the plan)
+ */
+async function handleUpdateFilePreview(toolResults: Array<{ tool: string; success: boolean; preview?: UpdateFilePreview }>) {
+  // Get ALL updateFile results with previews
+  const updateFileResults = toolResults.filter(
     (r) => r.tool === 'updateFile' && r.success && r.preview
   );
-  if (updateFileResult?.preview) {
-    activePreview.value = updateFileResult.preview;
+
+  if (updateFileResults.length === 0) {
+    return; // No updates to process
   }
+
+  if (updateFileResults.length === 1) {
+    // Single file: show confirmation dialog (existing behavior)
+    activePreview.value = updateFileResults[0].preview!;
+  } else {
+    // Multiple files: auto-apply all (user already confirmed the plan)
+    await applyAllFileUpdates(updateFileResults.map(r => r.preview!));
+  }
+}
+
+/**
+ * Auto-apply multiple file updates without confirmation
+ * Used when the plan contains multiple updateFile steps (user already approved the plan)
+ * Replaces the verbose pendingFinalAnswer with a concise summary
+ */
+async function applyAllFileUpdates(previews: UpdateFilePreview[]) {
+  const results: { fileName: string; fileId: string; success: boolean; error?: string }[] = [];
+
+  for (const preview of previews) {
+    try {
+      const result = await applyFileUpdate(preview.previewId);
+      results.push({
+        fileName: result.fileName,
+        fileId: preview.fileId,
+        success: result.success,
+        error: result.error,
+      });
+
+      // Emit file-updated event for each successful update
+      if (result.success) {
+        emit('file-updated', preview.fileId, preview.fileName);
+      }
+    } catch (error) {
+      results.push({
+        fileName: preview.fileName,
+        fileId: preview.fileId,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  // Build concise summary message
+  const successful = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+
+  let summaryMessage = '';
+  if (successful.length > 0) {
+    summaryMessage += `**Updated ${successful.length} file(s):**\n`;
+    summaryMessage += successful.map(r => `- ${r.fileName}`).join('\n');
+  }
+  if (failed.length > 0) {
+    if (summaryMessage) summaryMessage += '\n\n';
+    summaryMessage += `**Failed to update ${failed.length} file(s):**\n`;
+    summaryMessage += failed.map(r => `- ${r.fileName}: ${r.error}`).join('\n');
+  }
+
+  // Replace the verbose pendingFinalAnswer with our concise summary
+  // This avoids showing the preview/confirmation text that's now outdated
+  if (summaryMessage) {
+    pendingFinalAnswer.value = summaryMessage;
+  }
+
+  // Emit projects-changed to refresh file tree if any updates succeeded
+  if (successful.length > 0) {
+    emit('projects-changed');
+  }
+
+  await scrollToBottom();
 }
 
 function getDiffLineClass(type: DiffLine['type']): string {
