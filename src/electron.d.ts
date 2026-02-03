@@ -288,6 +288,14 @@ interface ElectronAPI {
     getCatalog: () => Promise<{ success: boolean; models?: ElectronHFModelRef[]; error?: string }>;
     /** Fetch model info from Hugging Face */
     fetchModelInfo: (repoId: string) => Promise<{ success: boolean; model?: ElectronHFModelRef; error?: string }>;
+    /** Validate a custom model URL/repo ID - checks if model exists and has GGUF files */
+    validateCustomUrl: (input: string) => Promise<{
+      success: boolean;
+      valid: boolean;
+      repoId?: string;
+      model?: ElectronHFModelRef;
+      error?: string;
+    }>;
     /** Get installed models from local registry */
     getInstalled: () => Promise<{ success: boolean; models?: ElectronLocalModel[]; error?: string }>;
     /** Get a specific installed model */

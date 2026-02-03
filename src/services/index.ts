@@ -330,6 +330,7 @@ export {
   isLocalModelsAvailable,
   getModelCatalog,
   fetchModelInfo,
+  validateCustomModel,
   getInstalledModels,
   getInstalledModel,
   installModel,
@@ -350,3 +351,5 @@ export {
   formatEta,
   getProgressPercent,
 } from './localModelService';
+
+export type { CustomModelValidationResult } from './localModelService';

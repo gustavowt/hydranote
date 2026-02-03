@@ -127,50 +127,50 @@ const CATALOG_MODELS: HFModelRef[] = [
     resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
   {
-    id: 'NousResearch/Hermes-2-Pro-Llama-3-8B-GGUF',
-    name: 'Hermes 2 Pro (Llama 3 8B)',
-    description: 'Excellent for tool use and complex instructions',
-    size: 0,
-    files: [],
-    architecture: 'llama',
-    contextLength: 8192,
-    bestFor: 'Great all-rounder. Excellent at following complex instructions, using tools, and having natural conversations.',
-    resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
-  },
-  {
     id: 'NousResearch/Hermes-3-Llama-3.1-8B-GGUF',
     name: 'Hermes 3 (Llama 3.1 8B)',
-    description: 'Latest Hermes with improved reasoning',
+    description: 'Excellent for tool use with improved reasoning',
     size: 0,
     files: [],
     architecture: 'llama',
     contextLength: 131072,
-    bestFor: 'Newest version with better reasoning. Great for complex tasks and long documents. Supports very long context.',
+    bestFor: 'Excellent at following complex instructions, using tools, and reasoning. Supports very long context.',
     resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
+  },
+  {
+    id: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF',
+    name: 'Qwen 2.5 Coder 7B',
+    description: 'Optimized for code and structured output',
+    size: 0,
+    files: [],
+    architecture: 'qwen2',
+    contextLength: 131072,
+    bestFor: 'Excellent for code-related tasks and structured JSON output. Great for tool use and agents.',
+    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
   
   // ========== GENERAL PURPOSE ==========
   {
-    id: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF',
+    id: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+    name: 'Llama 3.2 3B Instruct',
+    description: 'Fast, lightweight model for quick responses',
+    size: 0,
+    files: [],
+    architecture: 'llama',
+    contextLength: 131072,
+    bestFor: 'Lightweight and fast. Great for quick tasks on limited hardware. Good starting point.',
+    resourceInfo: 'Light: Needs ~3GB RAM. Runs well on most computers.',
+  },
+  {
+    id: 'bartowski/Meta-Llama-3.1-8B-Instruct-GGUF',
     name: 'Llama 3.1 8B Instruct',
-    description: 'Meta\'s latest Llama model with strong instruction following',
+    description: 'Meta\'s reliable model with strong instruction following',
     size: 0,
     files: [],
     architecture: 'llama',
     contextLength: 131072,
     bestFor: 'Reliable general-purpose assistant. Good at conversations, writing, and answering questions.',
     resourceInfo: 'Medium-Heavy: Needs ~8GB RAM. Best with 16GB+ system memory.',
-  },
-  {
-    id: 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF',
-    name: 'Mistral 7B Instruct v0.2',
-    description: 'Fast and efficient instruction-following model',
-    size: 0,
-    files: [],
-    architecture: 'mistral',
-    contextLength: 32768,
-    bestFor: 'Fast and capable. Good balance of speed and quality for everyday tasks.',
-    resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
   {
     id: 'Qwen/Qwen2.5-7B-Instruct-GGUF',
@@ -183,7 +183,17 @@ const CATALOG_MODELS: HFModelRef[] = [
     bestFor: 'Excellent at following detailed instructions. Strong at coding and structured tasks.',
     resourceInfo: 'Medium: Needs ~6GB RAM. Runs well on most modern computers.',
   },
-  
+  {
+    id: 'bartowski/Mistral-Nemo-Instruct-2407-GGUF',
+    name: 'Mistral Nemo 12B',
+    description: 'Mistral & NVIDIA collaboration with strong multilingual support',
+    size: 0,
+    files: [],
+    architecture: 'mistral',
+    contextLength: 131072,
+    bestFor: 'Great multilingual support. Strong reasoning and 128k context window.',
+    resourceInfo: 'Medium-Heavy: Needs ~10GB RAM. Best with 16GB+ system memory.',
+  },
 ];
 
 // ============================================
@@ -351,6 +361,123 @@ export class ModelManager {
       architecture: repoData.config?.model_type,
       contextLength: repoData.config?.max_position_embeddings,
     };
+  }
+
+  /**
+   * Parse a Hugging Face URL or repo ID to extract the repo ID
+   * Supports formats:
+   * - "owner/repo" (direct repo ID)
+   * - "https://huggingface.co/owner/repo"
+   * - "https://huggingface.co/owner/repo/tree/main"
+   * - "https://huggingface.co/owner/repo/blob/main/file.gguf"
+   */
+  parseHuggingFaceUrl(input: string): string | null {
+    // Trim whitespace
+    const trimmed = input.trim();
+    
+    // Check if it's already a repo ID (owner/repo format)
+    if (/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+$/.test(trimmed)) {
+      return trimmed;
+    }
+    
+    // Try to parse as URL
+    try {
+      const url = new URL(trimmed);
+      
+      // Must be huggingface.co
+      if (!url.hostname.endsWith('huggingface.co')) {
+        return null;
+      }
+      
+      // Extract path parts (e.g., /owner/repo/tree/main -> ['', 'owner', 'repo', 'tree', 'main'])
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      
+      // Need at least owner and repo
+      if (pathParts.length < 2) {
+        return null;
+      }
+      
+      // Return owner/repo
+      return `${pathParts[0]}/${pathParts[1]}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Validate a custom model URL/repo ID
+   * Checks if the model exists and has GGUF files
+   */
+  async validateCustomModel(input: string): Promise<{
+    valid: boolean;
+    repoId?: string;
+    model?: HFModelRef;
+    error?: string;
+  }> {
+    // Parse the input to get repo ID
+    const repoId = this.parseHuggingFaceUrl(input);
+    
+    if (!repoId) {
+      return {
+        valid: false,
+        error: 'Invalid format. Use "owner/repo" or a Hugging Face URL (e.g., https://huggingface.co/owner/repo)',
+      };
+    }
+    
+    try {
+      // Fetch model info
+      const model = await this.fetchModelInfo(repoId);
+      
+      // Check if it has GGUF files
+      if (model.files.length === 0) {
+        return {
+          valid: false,
+          repoId,
+          error: `No GGUF files found in ${repoId}. This model may not be compatible with local inference.`,
+        };
+      }
+      
+      // Check if gated and no token
+      if (model.gated && !this.settings.huggingFaceToken) {
+        return {
+          valid: false,
+          repoId,
+          model,
+          error: 'This is a gated model. Please add your Hugging Face token first.',
+        };
+      }
+      
+      return {
+        valid: true,
+        repoId,
+        model,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Provide helpful error messages
+      if (message.includes('404') || message.includes('Not Found')) {
+        return {
+          valid: false,
+          repoId,
+          error: `Model "${repoId}" not found on Hugging Face. Check the URL or repo ID.`,
+        };
+      }
+      
+      if (message.includes('401') || message.includes('Unauthorized')) {
+        return {
+          valid: false,
+          repoId,
+          error: 'This model requires authentication. Please add your Hugging Face token.',
+        };
+      }
+      
+      return {
+        valid: false,
+        repoId,
+        error: `Failed to validate model: ${message}`,
+      };
+    }
   }
 
   // ============================================

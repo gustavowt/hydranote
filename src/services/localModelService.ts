@@ -66,6 +66,45 @@ export async function fetchModelInfo(repoId: string): Promise<HFModelRef> {
   return result.model;
 }
 
+/**
+ * Validation result for custom model URL/repo
+ */
+export interface CustomModelValidationResult {
+  valid: boolean;
+  repoId?: string;
+  model?: HFModelRef;
+  error?: string;
+}
+
+/**
+ * Validate a custom model URL or repo ID
+ * Checks if the model exists on Hugging Face and has compatible GGUF files
+ */
+export async function validateCustomModel(input: string): Promise<CustomModelValidationResult> {
+  if (!isLocalModelsAvailable()) {
+    return {
+      valid: false,
+      error: 'Local models are only available in the Electron app',
+    };
+  }
+
+  const result = await window.electronAPI!.models.validateCustomUrl(input);
+  
+  if (!result.success) {
+    return {
+      valid: false,
+      error: result.error || 'Failed to validate model',
+    };
+  }
+
+  return {
+    valid: result.valid,
+    repoId: result.repoId,
+    model: result.model,
+    error: result.error,
+  };
+}
+
 // ============================================
 // Installed Models
 // ============================================

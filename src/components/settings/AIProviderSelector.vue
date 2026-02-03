@@ -491,6 +491,59 @@
           </div>
         </div>
 
+        <!-- Custom Model URL -->
+        <div class="field-group">
+          <label>Custom Model</label>
+          <p class="field-hint">Enter a Hugging Face repo URL or ID to download a custom GGUF model.</p>
+          <div class="custom-model-input-row">
+            <input
+              v-model="customModelUrl"
+              type="text"
+              placeholder="e.g., bartowski/Phi-4-GGUF or https://huggingface.co/..."
+              @keyup.enter="validateCustomUrl"
+            />
+            <button 
+              class="btn btn-small"
+              @click="validateCustomUrl"
+              :disabled="!customModelUrl.trim() || validatingCustomModel"
+              type="button"
+            >
+              <ion-spinner v-if="validatingCustomModel" name="crescent" />
+              <span v-else>Validate</span>
+            </button>
+          </div>
+          
+          <!-- Validation Result -->
+          <div v-if="customModelValidation" class="custom-model-validation" :class="{ valid: customModelValidation.valid, invalid: !customModelValidation.valid }">
+            <div v-if="customModelValidation.valid && customModelValidation.model" class="validation-success">
+              <div class="validation-header">
+                <ion-icon :icon="checkmarkCircleOutline" />
+                <span class="model-found-name">{{ customModelValidation.model.name }}</span>
+              </div>
+              <p class="model-found-desc">{{ customModelValidation.model.description || 'No description available' }}</p>
+              <div class="model-found-files">
+                <span>{{ customModelValidation.model.files?.length || 0 }} GGUF file(s) available</span>
+                <span v-if="customModelValidation.model.gated" class="gated-badge">
+                  <ion-icon :icon="lockClosedOutline" /> Gated
+                </span>
+              </div>
+              <button 
+                class="btn btn-small btn-primary"
+                @click="downloadCustomModel"
+                :disabled="installingModel !== null || isModelInstalled(customModelValidation.model.id)"
+                type="button"
+              >
+                <span v-if="isModelInstalled(customModelValidation.model.id)">Already Installed</span>
+                <span v-else>Download Model</span>
+              </button>
+            </div>
+            <div v-else class="validation-error">
+              <ion-icon :icon="alertCircleOutline" />
+              <span>{{ customModelValidation.error }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- HuggingFace Token -->
         <div class="field-group">
           <label>Hugging Face Token (Optional)</label>
@@ -574,10 +627,12 @@ import {
   chevronDownOutline,
   warningOutline,
   hardwareChipOutline,
+  lockClosedOutline,
 } from 'ionicons/icons';
 import type { LLMSettings, LLMProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HardwareInfo } from '@/types';
+import type { CustomModelValidationResult } from '@/services';
 import { OpenAiIcon, ClaudeIcon, GeminiIcon, OllamaIcon, HuggingFaceIcon } from '@/icons';
-import { formatFileSize } from '@/services';
+import { formatFileSize, validateCustomModel } from '@/services';
 
 // Props
 interface Props {
@@ -638,6 +693,11 @@ const emit = defineEmits<{
 const showApiKey = ref(false);
 const showHfToken = ref(false);
 const showAdvanced = ref(false);
+
+// Custom model validation state
+const customModelUrl = ref('');
+const validatingCustomModel = ref(false);
+const customModelValidation = ref<CustomModelValidationResult | null>(null);
 
 // Advanced provider IDs
 const advancedProviderIds = ['ollama', 'huggingface_local'];
@@ -744,6 +804,35 @@ function selectLocalModel(model: LocalModel) {
 
 function isModelInstalled(huggingFaceId: string): boolean {
   return props.installedModels.some(m => m.huggingFaceId === huggingFaceId && m.state === 'installed');
+}
+
+// Custom model validation
+async function validateCustomUrl() {
+  const url = customModelUrl.value.trim();
+  if (!url) return;
+  
+  validatingCustomModel.value = true;
+  customModelValidation.value = null;
+  
+  try {
+    customModelValidation.value = await validateCustomModel(url);
+  } catch (error) {
+    customModelValidation.value = {
+      valid: false,
+      error: error instanceof Error ? error.message : 'Validation failed',
+    };
+  } finally {
+    validatingCustomModel.value = false;
+  }
+}
+
+function downloadCustomModel() {
+  if (customModelValidation.value?.valid && customModelValidation.value.model) {
+    emit('install-model', customModelValidation.value.model);
+    // Clear the validation after starting download
+    customModelUrl.value = '';
+    customModelValidation.value = null;
+  }
 }
 
 // Format helpers
@@ -1387,6 +1476,93 @@ function formatHardwareInfo(info: HardwareInfo): string {
   color: var(--hn-text-secondary);
   font-size: 0.8rem;
   margin: 4px 0 0 0;
+}
+
+/* Custom Model Input */
+.custom-model-input-row {
+  display: flex;
+  gap: 12px;
+}
+
+.custom-model-input-row input {
+  flex: 1;
+}
+
+.custom-model-validation {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+}
+
+.custom-model-validation.valid {
+  background: var(--hn-green-muted);
+  border: 1px solid rgba(63, 185, 80, 0.3);
+}
+
+.custom-model-validation.invalid {
+  background: var(--hn-danger-muted);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+.validation-success {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.validation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hn-green);
+}
+
+.validation-header ion-icon {
+  font-size: 1.2rem;
+}
+
+.model-found-name {
+  font-weight: 600;
+  color: var(--hn-text-primary);
+}
+
+.model-found-desc {
+  font-size: 0.85rem;
+  color: var(--hn-text-secondary);
+  margin: 0;
+}
+
+.model-found-files {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+}
+
+.gated-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--hn-warning-muted);
+  border-radius: 4px;
+  color: var(--hn-warning);
+  font-size: 0.75rem;
+}
+
+.validation-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--hn-danger);
+  font-size: 0.9rem;
+}
+
+.validation-error ion-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 /* Connection Status */

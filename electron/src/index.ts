@@ -618,6 +618,20 @@ ipcMain.handle('models:fetchModelInfo', async (_event, repoId: string) => {
   }
 });
 
+// Validate a custom model URL/repo ID
+ipcMain.handle('models:validateCustomUrl', async (_event, input: string) => {
+  try {
+    const result = await modelManager.validateCustomModel(input);
+    return { success: true, ...result };
+  } catch (error) {
+    return {
+      success: false,
+      valid: false,
+      error: error instanceof Error ? error.message : 'Failed to validate model',
+    };
+  }
+});
+
 // Get installed models
 ipcMain.handle('models:getInstalled', async () => {
   try {

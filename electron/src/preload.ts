@@ -162,6 +162,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCatalog: () => ipcRenderer.invoke('models:getCatalog'),
     // Fetch model info from Hugging Face
     fetchModelInfo: (repoId: string) => ipcRenderer.invoke('models:fetchModelInfo', repoId),
+    // Validate a custom model URL/repo ID
+    validateCustomUrl: (input: string) => ipcRenderer.invoke('models:validateCustomUrl', input),
     // Get installed models from local registry
     getInstalled: () => ipcRenderer.invoke('models:getInstalled'),
     // Get a specific installed model
