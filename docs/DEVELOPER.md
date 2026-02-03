@@ -357,8 +357,15 @@ The runtime automatically detects and uses the best available GPU backend. If no
 
 **Recommended Models for Tool Use:**
 - Functionary Small v3.2 (~6GB) - specialized for function calling
-- Hermes 2 Pro (Llama 3 8B) (~8GB) - excellent for tool use
-- Hermes 3 (Llama 3.1 8B) (~8GB) - improved reasoning
+- Hermes 3 (Llama 3.1 8B) (~8GB) - excellent for tool use with improved reasoning
+- Qwen 2.5 Coder 7B (~6GB) - optimized for structured output and code agents
+
+**Custom Model Support:**
+Users can download any GGUF model from Hugging Face by entering:
+- A repository ID (e.g., `bartowski/Phi-4-GGUF`)
+- A full Hugging Face URL (e.g., `https://huggingface.co/bartowski/Phi-4-GGUF`)
+
+The system validates that the repository contains compatible GGUF files before allowing download.
 
 ---
 
