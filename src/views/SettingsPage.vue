@@ -610,6 +610,10 @@
                       <code>create_note</code>
                       <span>Create a new note</span>
                     </div>
+                    <div class="tool-item">
+                      <code>update_file</code>
+                      <span>Update file with line-based editing (replace, insert_after, insert_before)</span>
+                    </div>
                   </div>
                 </div>
 

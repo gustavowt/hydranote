@@ -156,6 +156,49 @@ const HYDRANOTE_TOOLS: Tool[] = [
       required: ['projectId', 'content'],
     },
   },
+  {
+    name: 'update_file',
+    description: 'Update an existing file with line-based editing operations. Supports replacing a range of lines, or inserting content before/after a specific line.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: {
+          type: 'string',
+          description: 'Project UUID',
+        },
+        fileId: {
+          type: 'string',
+          description: 'File UUID (use this or fileName)',
+        },
+        fileName: {
+          type: 'string',
+          description: 'File name or path (use this or fileId)',
+        },
+        action: {
+          type: 'string',
+          enum: ['replace', 'insert_after', 'insert_before'],
+          description: 'The editing action: "replace" replaces lines from startLine to endLine, "insert_after" inserts after the specified line, "insert_before" inserts before the specified line',
+        },
+        startLine: {
+          type: 'number',
+          description: 'Start line number (1-based, inclusive) - required for "replace" action',
+        },
+        endLine: {
+          type: 'number',
+          description: 'End line number (1-based, inclusive) - required for "replace" action',
+        },
+        line: {
+          type: 'number',
+          description: 'Target line number (1-based) - required for "insert_after" and "insert_before" actions',
+        },
+        content: {
+          type: 'string',
+          description: 'The content to insert or replace with',
+        },
+      },
+      required: ['projectId', 'action', 'content'],
+    },
+  },
 ];
 
 // ============================================

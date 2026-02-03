@@ -12,6 +12,7 @@ import {
   searchProject,
   searchAllProjects,
   getProjectFileTree,
+  updateFile,
 } from './projectService';
 import { addNote } from './noteService';
 
@@ -308,6 +309,165 @@ async function handleCreateNote(args: Record<string, unknown>): Promise<MCPToolR
   }
 }
 
+/**
+ * Update an existing file with line-based editing
+ */
+async function handleUpdateFile(args: Record<string, unknown>): Promise<MCPToolResult> {
+  const projectId = args.projectId as string;
+  const fileId = args.fileId as string | undefined;
+  const fileName = args.fileName as string | undefined;
+  const action = args.action as string;
+  const content = args.content as string;
+  const startLine = args.startLine as number | undefined;
+  const endLine = args.endLine as number | undefined;
+  const line = args.line as number | undefined;
+
+  // Validate required parameters
+  if (!projectId) {
+    return { success: false, error: 'Project ID is required' };
+  }
+
+  if (!fileId && !fileName) {
+    return { success: false, error: 'Either fileId or fileName is required' };
+  }
+
+  if (!action) {
+    return { success: false, error: 'Action is required (replace, insert_after, insert_before)' };
+  }
+
+  if (!['replace', 'insert_after', 'insert_before'].includes(action)) {
+    return { success: false, error: `Invalid action: ${action}. Must be one of: replace, insert_after, insert_before` };
+  }
+
+  if (content === undefined || content === null) {
+    return { success: false, error: 'Content is required' };
+  }
+
+  // Validate action-specific parameters
+  if (action === 'replace') {
+    if (startLine === undefined || endLine === undefined) {
+      return { success: false, error: 'startLine and endLine are required for replace action' };
+    }
+    if (startLine < 1 || endLine < 1) {
+      return { success: false, error: 'Line numbers must be 1 or greater' };
+    }
+    if (startLine > endLine) {
+      return { success: false, error: 'startLine must be less than or equal to endLine' };
+    }
+  } else {
+    // insert_after or insert_before
+    if (line === undefined) {
+      return { success: false, error: `line is required for ${action} action` };
+    }
+    if (line < 1) {
+      return { success: false, error: 'Line number must be 1 or greater' };
+    }
+  }
+
+  try {
+    // Resolve the file
+    let file;
+    if (fileId) {
+      file = await getFile(fileId);
+    } else if (fileName) {
+      const files = await get_project_files(projectId);
+      file = files.find(f =>
+        f.name.toLowerCase() === fileName.toLowerCase() ||
+        f.name.toLowerCase().includes(fileName.toLowerCase())
+      );
+    }
+
+    if (!file) {
+      return { success: false, error: 'File not found' };
+    }
+
+    // Check if file is editable (markdown/text)
+    if (file.type !== 'md' && file.type !== 'txt') {
+      return { success: false, error: `Cannot edit file of type: ${file.type}. Only markdown and text files are supported.` };
+    }
+
+    // Get current content and split into lines
+    const currentContent = file.content || '';
+    const lines = currentContent.split('\n');
+    const totalLines = lines.length;
+
+    let newLines: string[];
+    let description: string;
+
+    if (action === 'replace') {
+      // Validate line range
+      if (startLine! > totalLines) {
+        return { success: false, error: `startLine (${startLine}) exceeds total lines (${totalLines})` };
+      }
+      
+      // Clamp endLine to totalLines
+      const effectiveEndLine = Math.min(endLine!, totalLines);
+      
+      // Replace lines (convert to 0-based index)
+      const contentLines = content.split('\n');
+      newLines = [
+        ...lines.slice(0, startLine! - 1),
+        ...contentLines,
+        ...lines.slice(effectiveEndLine),
+      ];
+      description = `Replaced lines ${startLine}-${effectiveEndLine}`;
+    } else if (action === 'insert_after') {
+      // Validate line number
+      if (line! > totalLines) {
+        return { success: false, error: `line (${line}) exceeds total lines (${totalLines})` };
+      }
+      
+      // Insert after the specified line (convert to 0-based index)
+      const contentLines = content.split('\n');
+      newLines = [
+        ...lines.slice(0, line!),
+        ...contentLines,
+        ...lines.slice(line!),
+      ];
+      description = `Inserted ${contentLines.length} line(s) after line ${line}`;
+    } else {
+      // insert_before
+      // Validate line number
+      if (line! > totalLines + 1) {
+        return { success: false, error: `line (${line}) exceeds total lines + 1 (${totalLines + 1})` };
+      }
+      
+      // Insert before the specified line (convert to 0-based index)
+      const contentLines = content.split('\n');
+      newLines = [
+        ...lines.slice(0, line! - 1),
+        ...contentLines,
+        ...lines.slice(line! - 1),
+      ];
+      description = `Inserted ${contentLines.length} line(s) before line ${line}`;
+    }
+
+    // Join lines and update the file
+    const newContent = newLines.join('\n');
+    const updatedFile = await updateFile(file.id, newContent);
+
+    if (!updatedFile) {
+      return { success: false, error: 'Failed to update file' };
+    }
+
+    return {
+      success: true,
+      data: {
+        fileId: file.id,
+        fileName: file.name,
+        action,
+        description,
+        totalLinesAfter: newLines.length,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to update file',
+    };
+  }
+}
+
 // ============================================
 // Tool Dispatcher
 // ============================================
@@ -329,6 +489,8 @@ async function executeMCPTool(toolName: string, args: Record<string, unknown>): 
       return handleSearch(args);
     case 'create_note':
       return handleCreateNote(args);
+    case 'update_file':
+      return handleUpdateFile(args);
     default:
       return { success: false, error: `Unknown tool: ${toolName}` };
   }
@@ -500,6 +662,7 @@ export function generateMCPConfig(settings: MCPSettings): string {
           'read_file',
           'search',
           'create_note',
+          'update_file',
         ],
       },
     },
