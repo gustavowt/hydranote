@@ -87,7 +87,7 @@ Handles tool execution with Planner → Executor → Checker architecture.
 | `search` | Semantic search |
 | `summarize` | Summarize documents |
 | `write` | Create files (AI pipeline for MD, direct for PDF/DOCX) |
-| `updateFile` | Update sections in existing files |
+| `updateFile` | Update existing files using chain-of-thought analysis and unified diff |
 | `webResearch` | Search the web for information |
 | `createProject` | Create a new project (global mode) |
 | `moveFile` | Rename, move within project, or move between projects |
@@ -95,10 +95,25 @@ Handles tool execution with Planner → Executor → Checker architecture.
 | `deleteProject` | Delete a project (global mode) |
 
 **Orchestration Flow:**
-1. **Planner**: Analyze request, create ordered tool execution plan
+1. **Planner**: Analyze request, create ordered tool execution plan (passes file + instruction to updateFile)
 2. **Auto-Execute Check**: Single-step read-only tools execute immediately; multi-step shows Plan UI
 3. **Executor**: Execute plan with context passing between steps
 4. **Checker**: Verify completion, replan if needed, generate interpretation
+
+**updateFile Tool Architecture:**
+The updateFile tool uses a chain-of-thought approach for precise file modifications:
+1. **Planner** passes only: `file` (filename) + `instruction` (natural language) + optional `selectionContext`
+2. **Tool** receives file content with line numbers and uses a structured CoT prompt to:
+   - Analyze file structure and type
+   - Identify exactly which lines need to change
+   - Generate a unified diff for the changes
+3. **Diff Application**: The unified diff is parsed and applied to produce the new content
+4. **Preview**: Shows reasoning + diff preview for user confirmation
+
+This architecture ensures:
+- The Planner focuses on workflow orchestration, not content analysis
+- The Tool has full context to make precise, minimal changes
+- Changes are atomic and reviewable via unified diff format
 
 **Auto-Execute Tools** (no confirmation needed): `read`, `search`, `summarize`
 
@@ -119,6 +134,16 @@ Handles tool execution with Planner → Executor → Checker architecture.
 **Working Context (Global Mode):**
 - In global mode, the chat tracks recently created projects and files as "working context"
 - When a project is created, subsequent messages automatically use that project without explicit specification
+
+**Planner Context:**
+The planner receives rich context to understand user intent:
+- **Project context**: Current project ID and available files
+- **Working context**: Recently created projects/files (global mode)
+- **Current file context**: The file currently open in the editor
+  - When user says "this file", "here", "this document" → planner uses the open file
+  - Includes: file name, path, type, and project
+- **Conversation context**: Recent messages for continuity
+- **Runtime context**: Date, time, platform, locale
 - Working context is session-scoped (resets on new chat or session switch)
 - Injected into both system prompt and planner prompt so LLM maintains awareness
 - Type: `WorkingContext { projectId?, projectName?, recentFiles[] }`

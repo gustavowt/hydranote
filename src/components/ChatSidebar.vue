@@ -259,11 +259,8 @@
             </div>
             
             <div class="preview-info">
-              <span class="info-item">
-                <strong>Operation:</strong> {{ activePreview.operation }}
-              </span>
-              <span v-if="activePreview.confidence" class="info-item">
-                <strong>Confidence:</strong> {{ Math.round(activePreview.confidence * 100) }}%
+              <span v-if="activePreview.reasoning" class="info-item reasoning">
+                <strong>Analysis:</strong> {{ activePreview.reasoning }}
               </span>
             </div>
 
@@ -435,7 +432,7 @@ import {
   listOutline,
   playOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, WorkingContext, ToolResult } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, WorkingContext, ToolResult, ProjectFile } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -470,6 +467,8 @@ const ALL_PROJECTS_SCOPE = '__all__';
 interface Props {
   projects: Project[];
   initialProjectId?: string;
+  /** Currently open file in the editor (for context in planner) */
+  currentFile?: ProjectFile | null;
 }
 
 const props = defineProps<Props>();
@@ -783,6 +782,15 @@ async function sendMessage(text?: string) {
       })
       .join('\n');
 
+    // Build current file context if a file is open in the editor
+    const currentFileContext = props.currentFile ? {
+      fileName: props.currentFile.name,
+      filePath: props.currentFile.name, // name includes the full path in HydraNote
+      fileType: props.currentFile.type,
+      projectId: props.currentFile.projectId,
+      projectName: props.projects.find((p: Project) => p.id === props.currentFile?.projectId)?.name,
+    } : undefined;
+
     // Phase 1: Create execution plan
     const plan = await createExecutionPlan(
       messageText,
@@ -791,6 +799,7 @@ async function sendMessage(text?: string) {
       conversationContext,
       undefined, // replanContext
       isGlobalMode.value ? workingContext.value : undefined,
+      currentFileContext,
     );
 
     // Handle clarification request

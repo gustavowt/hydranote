@@ -91,6 +91,7 @@
         ref="chatSidebarRef"
         :projects="projects"
         :initial-project-id="selectedProjectId"
+        :current-file="currentFile"
         @project-change="handleChatProjectChange"
         @file-updated="handleFileUpdated"
         @file-created="handleFileCreatedFromChat"
