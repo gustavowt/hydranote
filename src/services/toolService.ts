@@ -19,12 +19,12 @@ import type {
   NoteContextMetadata,
   UpdateFileToolParams,
   UpdateFilePreview,
-  UpdateOperation,
   DiffLine,
   UpdateFileResult,
   LLMStreamCallback,
   WebResearchToolParams,
   WorkingContext,
+  SelectionContext,
 } from "../types";
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from "../types";
 import {
@@ -56,10 +56,6 @@ import {
   generateUniqueFileName,
 } from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
-import {
-  parseLineNumberSpec,
-  getOffsetFromLineNumbers,
-} from "./documentProcessor";
 
 // ============================================
 // Execution Log Types
@@ -1305,24 +1301,195 @@ export async function executeWebResearchTool(
 const pendingPreviews = new Map<string, UpdateFilePreview>();
 
 /**
- * Full file rewrite prompt for LLM
- * Used for files under 50KB - simpler than section identification
+ * Chain-of-Thought prompt for updateFile tool
+ * Analyzes file structure, identifies changes, and generates unified diff
  */
-const FULL_REWRITE_PROMPT = `You are a document editor. Given a document and an edit instruction, return the complete modified document.
+const UPDATEFILE_COT_PROMPT = `You are a precise document editor. Your task is to analyze a file and generate a unified diff based on an edit instruction.
 
-RULES:
-1. Apply the requested edit precisely
-2. Preserve all content that should not be changed
-3. Maintain the document's formatting style (markdown headers, lists, etc.)
-4. Return ONLY the modified document content - no explanations, no markdown code blocks
-5. If the edit instruction is unclear, make a reasonable interpretation
+Follow these steps IN ORDER:
 
-The output should be the complete file content after applying the edit.`;
+## STEP 1 - FILE ANALYSIS
+Analyze the document and identify:
+- Document type (markdown, code, notes, config, etc.)
+- Main structure (sections, headings, functions, etc.)
+- Total line count
+
+## STEP 2 - CHANGE IDENTIFICATION
+Based on the edit instruction, determine:
+- What specific content needs to change?
+- Which exact lines are affected? (be precise with line numbers)
+- What content must NOT change? (everything else)
+- Is this an insertion, replacement, or deletion?
+
+## STEP 3 - GENERATE UNIFIED DIFF
+Output a unified diff that applies ONLY the necessary changes.
+
+CRITICAL RULES:
+1. ONLY modify what the instruction asks for - preserve everything else EXACTLY
+2. Include 3 lines of context before and after changes for accurate patch application
+3. Line numbers in the hunk header (@@ -X,Y +X,Z @@) must be accurate
+4. Use proper unified diff format with --- and +++ headers
+5. Lines starting with space are context (unchanged)
+6. Lines starting with - are removed
+7. Lines starting with + are added
+
+RESPOND WITH THIS EXACT JSON FORMAT:
+{
+  "reasoning": "Brief explanation of what you analyzed and what changes you identified",
+  "affectedLines": "Line numbers that will change (e.g., '15-20' or '42')",
+  "diff": "--- a/filename\\n+++ b/filename\\n@@ -X,Y +A,B @@\\n context\\n-removed\\n+added\\n context"
+}
+
+IMPORTANT:
+- The diff field must be a valid unified diff string (with \\n for newlines in JSON)
+- Do NOT include markdown code blocks around the JSON
+- Do NOT modify lines that weren't mentioned in the instruction
+- If the instruction is ambiguous, make a minimal, conservative change`;
 
 /**
- * File size threshold for full rewrite vs section-based editing (50KB)
+ * Result from parsing and applying a unified diff
  */
-const FULL_REWRITE_THRESHOLD = 50 * 1024;
+interface DiffApplicationResult {
+  success: boolean;
+  newContent: string;
+  error?: string;
+  hunksApplied: number;
+}
+
+/**
+ * Parsed unified diff hunk
+ */
+interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: Array<{
+    type: 'context' | 'removed' | 'added';
+    content: string;
+  }>;
+}
+
+/**
+ * Parse a unified diff string into hunks
+ */
+function parseUnifiedDiff(diffString: string): DiffHunk[] {
+  const hunks: DiffHunk[] = [];
+  const lines = diffString.split('\n');
+  
+  let currentHunk: DiffHunk | null = null;
+  
+  for (const line of lines) {
+    // Skip file headers
+    if (line.startsWith('---') || line.startsWith('+++')) {
+      continue;
+    }
+    
+    // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunkMatch) {
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+      currentHunk = {
+        oldStart: parseInt(hunkMatch[1], 10),
+        oldCount: hunkMatch[2] ? parseInt(hunkMatch[2], 10) : 1,
+        newStart: parseInt(hunkMatch[3], 10),
+        newCount: hunkMatch[4] ? parseInt(hunkMatch[4], 10) : 1,
+        lines: [],
+      };
+      continue;
+    }
+    
+    // Parse diff lines
+    if (currentHunk) {
+      if (line.startsWith('-')) {
+        currentHunk.lines.push({ type: 'removed', content: line.slice(1) });
+      } else if (line.startsWith('+')) {
+        currentHunk.lines.push({ type: 'added', content: line.slice(1) });
+      } else if (line.startsWith(' ') || line === '') {
+        // Context line (space prefix) or empty line
+        currentHunk.lines.push({ type: 'context', content: line.startsWith(' ') ? line.slice(1) : line });
+      }
+    }
+  }
+  
+  // Don't forget the last hunk
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+  
+  return hunks;
+}
+
+/**
+ * Apply a unified diff to original content
+ * Returns the new content after applying all hunks
+ */
+function applyUnifiedDiff(originalContent: string, diffString: string): DiffApplicationResult {
+  try {
+    const hunks = parseUnifiedDiff(diffString);
+    
+    if (hunks.length === 0) {
+      return {
+        success: false,
+        newContent: originalContent,
+        error: 'No valid hunks found in diff',
+        hunksApplied: 0,
+      };
+    }
+    
+    const originalLines = originalContent.split('\n');
+    const resultLines: string[] = [];
+    let originalIndex = 0; // 0-based index into originalLines
+    
+    for (const hunk of hunks) {
+      const hunkStartIndex = hunk.oldStart - 1; // Convert to 0-based
+      
+      // Copy lines before this hunk
+      while (originalIndex < hunkStartIndex && originalIndex < originalLines.length) {
+        resultLines.push(originalLines[originalIndex]);
+        originalIndex++;
+      }
+      
+      // Process hunk lines
+      for (const line of hunk.lines) {
+        if (line.type === 'context') {
+          // Context line - copy from original and advance
+          if (originalIndex < originalLines.length) {
+            resultLines.push(originalLines[originalIndex]);
+            originalIndex++;
+          }
+        } else if (line.type === 'removed') {
+          // Skip this line in original (don't add to result)
+          originalIndex++;
+        } else if (line.type === 'added') {
+          // Add new line to result
+          resultLines.push(line.content);
+        }
+      }
+    }
+    
+    // Copy remaining lines after last hunk
+    while (originalIndex < originalLines.length) {
+      resultLines.push(originalLines[originalIndex]);
+      originalIndex++;
+    }
+    
+    return {
+      success: true,
+      newContent: resultLines.join('\n'),
+      hunksApplied: hunks.length,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      newContent: originalContent,
+      error: error instanceof Error ? error.message : 'Failed to apply diff',
+      hunksApplied: 0,
+    };
+  }
+}
 
 /**
  * Generate diff lines between original and new content
@@ -1408,215 +1575,12 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
 }
 
 /**
- * Section identification result
- */
-interface SectionIdentificationResult {
-  found: boolean;
-  sectionContent: string;
-  sectionStart: number;
-  sectionEnd: number;
-  confidence: number;
-  reasoning?: string;
-  method?: string;
-}
-
-
-/**
- * Identify section in document using simplified 3-level cascade matching
- * Used only for large files (>50KB) - small files use full rewrite instead
- *
- * Cascade order:
- * 1. Special keywords (end, start, bottom, top)
- * 2. Line number specification (line:42, lines:10-25)
- * 3. Exact text match
- */
-function identifySection(
-  content: string,
-  sectionIdentifier: string,
-): SectionIdentificationResult {
-  const notFound: SectionIdentificationResult = {
-    found: false,
-    sectionContent: "",
-    sectionStart: -1,
-    sectionEnd: -1,
-    confidence: 0,
-  };
-
-  const identifier = sectionIdentifier.trim();
-  const identifierLower = identifier.toLowerCase();
-
-  // ============================================
-  // Level 1: Special Keywords
-  // ============================================
-  const endKeywords = ["end", "bottom", "eof", "fim", "final", "末尾", "append"];
-  if (endKeywords.includes(identifierLower)) {
-    const trimmedContent = content.trimEnd();
-    return {
-      found: true,
-      sectionContent: "",
-      sectionStart: trimmedContent.length,
-      sectionEnd: trimmedContent.length,
-      confidence: 1.0,
-      reasoning: `Special keyword "${identifier}" - targeting end of document`,
-      method: "special_keyword",
-    };
-  }
-
-  const startKeywords = ["start", "beginning", "top", "início", "inicio", "開始", "prepend"];
-  if (startKeywords.includes(identifierLower)) {
-    return {
-      found: true,
-      sectionContent: "",
-      sectionStart: 0,
-      sectionEnd: 0,
-      confidence: 1.0,
-      reasoning: `Special keyword "${identifier}" - targeting start of document`,
-      method: "special_keyword",
-    };
-  }
-
-  // ============================================
-  // Level 2: Line Number Specification
-  // ============================================
-  const lineSpec = parseLineNumberSpec(identifier);
-  if (lineSpec) {
-    const offsets = getOffsetFromLineNumbers(content, lineSpec.startLine, lineSpec.endLine);
-    if (offsets) {
-      return {
-        found: true,
-        sectionContent: content.slice(offsets.startOffset, offsets.endOffset),
-        sectionStart: offsets.startOffset,
-        sectionEnd: offsets.endOffset,
-        confidence: 1.0,
-        reasoning: `Line number specification: ${identifier}`,
-        method: "line_number",
-      };
-    }
-  }
-
-  // ============================================
-  // Level 3: Exact Text Match
-  // ============================================
-  const exactIndex = content.indexOf(identifier);
-  if (exactIndex !== -1) {
-    return {
-      found: true,
-      sectionContent: identifier,
-      sectionStart: exactIndex,
-      sectionEnd: exactIndex + identifier.length,
-      confidence: 1.0,
-      reasoning: "Exact text match found",
-      method: "exact_match",
-    };
-  }
-
-  // Not found - return helpful error
-  return {
-    ...notFound,
-    reasoning: `Could not find "${identifier}" in the document. For large files, please use exact text, line numbers (e.g., "line:42" or "lines:10-25"), or keywords like "end"/"start".`,
-    method: "not_found",
-  };
-}
-
-/**
- * Full file rewrite using LLM
- * For files under 50KB, send entire content to LLM and let it apply the edit
- */
-async function fullRewriteFile(
-  content: string,
-  editInstruction: string,
-  fileName: string,
-): Promise<{ success: boolean; newContent: string; error?: string }> {
-  try {
-    const response = await chatCompletion({
-      messages: [
-        { role: "system", content: FULL_REWRITE_PROMPT },
-        {
-          role: "user",
-          content: `File: ${fileName}\n\n---\n\n${content}\n\n---\n\nEdit instruction: ${editInstruction}`,
-        },
-      ],
-      temperature: 0.3,
-      maxTokens: 16000, // Allow for large output
-    });
-
-    // Clean up the response - remove any markdown code blocks if present
-    let newContent = response.content.trim();
-    
-    // Remove markdown code block wrapper if present
-    const codeBlockMatch = newContent.match(/^```(?:markdown|md)?\s*\n?([\s\S]*?)\n?```$/);
-    if (codeBlockMatch) {
-      newContent = codeBlockMatch[1];
-    }
-
-    return {
-      success: true,
-      newContent,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      newContent: "",
-      error: error instanceof Error ? error.message : "Failed to rewrite file",
-    };
-  }
-}
-
-/**
- * Escape special regex characters
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Apply update operation to content
- */
-function applyUpdateOperation(
-  originalContent: string,
-  sectionStart: number,
-  sectionEnd: number,
-  newContent: string,
-  operation: UpdateOperation,
-): string {
-  switch (operation) {
-    case "insert_before":
-      return (
-        originalContent.slice(0, sectionStart) +
-        newContent +
-        "\n\n" +
-        originalContent.slice(sectionStart)
-      );
-
-    case "insert_after":
-      return (
-        originalContent.slice(0, sectionEnd) +
-        "\n\n" +
-        newContent +
-        originalContent.slice(sectionEnd)
-      );
-
-    case "replace":
-    default:
-      // Default to 'replace' operation for any unrecognized operation
-      return (
-        originalContent.slice(0, sectionStart) +
-        newContent +
-        originalContent.slice(sectionEnd)
-      );
-  }
-}
-
-/**
- * Execute the updateFile tool
- * Routes by file size:
- * - Files under 50KB: Full rewrite via LLM (simpler, more reliable)
- * - Files over 50KB: Simplified 3-level cascade (keywords, line numbers, exact match)
+ * Execute the updateFile tool using chain-of-thought reasoning
+ * The tool analyzes the file and generates a unified diff based on the instruction
  */
 export async function executeUpdateFileTool(
   projectId: string,
   params: UpdateFileToolParams,
-  userMessage?: string,
 ): Promise<ToolResult & { preview?: UpdateFilePreview }> {
   try {
     // Find the file
@@ -1656,75 +1620,93 @@ export async function executeUpdateFileTool(
       content = stitchChunks(chunks);
     }
 
-    let newFullContent: string;
-    let sectionContent = "";
-    let confidence = 1.0;
-
-    // Route by file size
-    if (content.length < FULL_REWRITE_THRESHOLD) {
-      // ============================================
-      // Small files (<50KB): Full rewrite via LLM
-      // ============================================
-      const editInstruction = userMessage || params.newContent || params.sectionIdentifier;
-      
-      if (!editInstruction) {
-        return {
-          success: false,
-          tool: "updateFile",
-          error: "No edit instruction provided. Please describe what changes you want to make.",
-        };
-      }
-
-      const rewriteResult = await fullRewriteFile(content, editInstruction, file.name);
-      
-      if (!rewriteResult.success) {
-        return {
-          success: false,
-          tool: "updateFile",
-          error: rewriteResult.error || "Failed to apply edit",
-        };
-      }
-
-      newFullContent = rewriteResult.newContent;
-      sectionContent = "(full file rewrite)";
-    } else {
-      // ============================================
-      // Large files (>50KB): Simplified 3-level cascade
-      // ============================================
-      const sectionResult = identifySection(content, params.sectionIdentifier);
-
-      if (!sectionResult.found) {
-        return {
-          success: false,
-          tool: "updateFile",
-          error: `Could not find section "${params.sectionIdentifier}" in file "${file.name}". ${sectionResult.reasoning || ""}`,
-        };
-      }
-
-      sectionContent = sectionResult.sectionContent;
-      confidence = sectionResult.confidence;
-
-      // For large files, newContent must be provided explicitly
-      const newContent = params.newContent;
-      if (!newContent) {
-        return {
-          success: false,
-          tool: "updateFile",
-          error: "For large files (>50KB), you must provide the exact new content. Please include the 'newContent' parameter.",
-        };
-      }
-
-      // Apply the update operation
-      newFullContent = applyUpdateOperation(
-        content,
-        sectionResult.sectionStart,
-        sectionResult.sectionEnd,
-        newContent,
-        params.operation,
-      );
+    // Validate instruction
+    if (!params.instruction) {
+      return {
+        success: false,
+        tool: "updateFile",
+        error: "No edit instruction provided. Please describe what changes you want to make.",
+      };
     }
 
-    // Generate diff
+    // Build the user message with file content and instruction
+    const lines = content.split('\n');
+    const numberedContent = lines
+      .map((line, i) => `${String(i + 1).padStart(4, ' ')} | ${line}`)
+      .join('\n');
+
+    let userMessageContent = `File: ${file.name}
+Total lines: ${lines.length}
+
+--- FILE CONTENT (with line numbers) ---
+${numberedContent}
+--- END FILE CONTENT ---
+
+Edit instruction: ${params.instruction}`;
+
+    // Add selection context if provided
+    if (params.selectionContext) {
+      userMessageContent += `
+
+SELECTION CONTEXT (focus your changes here):
+- Selected lines: ${params.selectionContext.startLine}-${params.selectionContext.endLine}
+- Selected text:
+\`\`\`
+${params.selectionContext.selectedText}
+\`\`\``;
+    }
+
+    // Call LLM with chain-of-thought prompt
+    const response = await chatCompletion({
+      messages: [
+        { role: "system", content: UPDATEFILE_COT_PROMPT },
+        { role: "user", content: userMessageContent },
+      ],
+      temperature: 0.3,
+      maxTokens: 8000,
+    });
+
+    // Parse the JSON response
+    let parsed: { reasoning: string; affectedLines: string; diff: string };
+    try {
+      // Clean up response - remove markdown code blocks if present
+      let responseText = response.content.trim();
+      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        responseText = jsonMatch[1].trim();
+      }
+      parsed = JSON.parse(responseText);
+    } catch (parseError) {
+      return {
+        success: false,
+        tool: "updateFile",
+        error: `Failed to parse LLM response as JSON. Response: ${response.content.slice(0, 200)}...`,
+      };
+    }
+
+    // Validate parsed response
+    if (!parsed.diff) {
+      return {
+        success: false,
+        tool: "updateFile",
+        error: `LLM did not provide a diff. Reasoning: ${parsed.reasoning || 'No reasoning provided'}`,
+      };
+    }
+
+    // Apply the unified diff
+    const diffResult = applyUnifiedDiff(content, parsed.diff);
+
+    if (!diffResult.success) {
+      return {
+        success: false,
+        tool: "updateFile",
+        error: `Failed to apply diff: ${diffResult.error}. You may need to rephrase your instruction.`,
+      };
+    }
+
+    const newFullContent = diffResult.newContent;
+
+    // Generate visual diff lines for preview
     const diffLines = generateDiffLines(content, newFullContent);
 
     // Create preview
@@ -1734,15 +1716,11 @@ export async function executeUpdateFileTool(
       fileId: file.id,
       fileName: file.name,
       fileType: file.type as "md" | "docx",
-      operation: params.operation,
-      identifiedSection: sectionContent,
-      originalContent: sectionContent,
-      newContent: newFullContent,
+      reasoning: parsed.reasoning,
       originalFullContent: content,
       newFullContent,
       diffLines,
-      sectionFound: true,
-      confidence,
+      unifiedDiff: parsed.diff,
       createdAt: new Date(),
     };
 
@@ -1769,9 +1747,8 @@ export async function executeUpdateFileTool(
       tool: "updateFile",
       data: `**Preview of changes to "${file.name}"**
 
-**Operation:** ${params.operation}
-**Section:** ${params.sectionIdentifier}
-**Confidence:** ${(confidence * 100).toFixed(0)}%
+**Analysis:** ${parsed.reasoning}
+**Affected lines:** ${parsed.affectedLines}
 
 \`\`\`diff
 ${diffDisplay}
@@ -1828,7 +1805,6 @@ export async function applyFileUpdate(
       success: false,
       fileId: "",
       fileName: "",
-      operation: "replace",
       error: "Preview not found or expired. Please try the update again.",
       reIndexed: false,
     };
@@ -1848,7 +1824,6 @@ export async function applyFileUpdate(
         success: false,
         fileId: preview.fileId,
         fileName: preview.fileName,
-        operation: preview.operation,
         error: "File no longer exists.",
         reIndexed: false,
       };
@@ -1904,7 +1879,6 @@ export async function applyFileUpdate(
       success: true,
       fileId: preview.fileId,
       fileName: preview.fileName,
-      operation: preview.operation,
       reIndexed,
     };
   } catch (error) {
@@ -1912,7 +1886,6 @@ export async function applyFileUpdate(
       success: false,
       fileId: preview.fileId,
       fileName: preview.fileName,
-      operation: preview.operation,
       error:
         error instanceof Error ? error.message : "Failed to apply file update",
       reIndexed: false,
@@ -2146,18 +2119,33 @@ async function executeToolInternal(
         };
       }
 
-      // Validate operation - must be one of the valid values, default to 'replace'
-      const validOperations: UpdateOperation[] = [
-        "replace",
-        "insert_before",
-        "insert_after",
-      ];
-      const rawOperation = call.params.operation?.toLowerCase?.() || "";
-      const operation: UpdateOperation = validOperations.includes(
-        rawOperation as UpdateOperation,
-      )
-        ? (rawOperation as UpdateOperation)
-        : "replace";
+      // Build selection context if provided (might be object or JSON string from planner)
+      let selectionContext: SelectionContext | undefined;
+      if (call.params.selectionContext) {
+        const rawCtx = call.params.selectionContext;
+        // Parse if it's a JSON string
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let ctx: any = rawCtx;
+        if (typeof rawCtx === 'string') {
+          try {
+            ctx = JSON.parse(rawCtx);
+          } catch {
+            // If parsing fails, skip selection context
+            ctx = undefined;
+          }
+        }
+        if (ctx && typeof ctx === 'object') {
+          selectionContext = {
+            filePath: ctx.filePath || "",
+            startLine: ctx.startLine || 1,
+            endLine: ctx.endLine || 1,
+            selectedText: ctx.selectedText || "",
+          };
+        }
+      }
+
+      // The instruction can come from multiple sources
+      const instruction = call.params.instruction || userMessage || "";
 
       return executeUpdateFileTool(
         targetProjectId,
@@ -2165,12 +2153,9 @@ async function executeToolInternal(
           fileId: call.params.fileId || call.params.file_id,
           fileName:
             call.params.fileName || call.params.file || call.params.name,
-          operation,
-          sectionIdentifier:
-            call.params.section || call.params.sectionIdentifier || "",
-          newContent: call.params.newContent || call.params.content || "",
+          instruction,
+          selectionContext,
         },
-        userMessage,
       );
     }
 
@@ -2412,7 +2397,7 @@ Available tools:
 - search: Semantic search across documents. Params: {query: "search query", project?: "project name"}
 - summarize: Create a summary of a document. Params: {file: "filename", project?: "project name"}
 - write: Create a file. AI generates title if not provided and decides directory for all formats. For MD: also formats content. Params: {format: "md"|"pdf"|"docx", content: "content", title?: "title", path?: "directory", project?: "project name"}
-- updateFile: Update an existing file. Params: {file: "filename", section: "section to find", operation: "replace"|"insert_before"|"insert_after", newContent: "new content"}
+- updateFile: Update an existing file. The tool itself analyzes the file and generates precise changes. Params: {file: "filename", instruction: "natural language description of what to change", selectionContext?: {filePath, startLine, endLine, selectedText}}
 - createProject: Create a new project. Params: {name: "project name", description?: "description"}
 - moveFile: Rename or move a file. Params: {file: "filename", newName?: "new-name.md" (for rename), directory?: "target/dir" (for move within project), fromProject?: "source", toProject?: "destination" (for cross-project move)}
 - deleteFile: Delete a file. Params: {file: "filename", project?: "project name"}
@@ -2428,12 +2413,16 @@ User message references:
 IMPORTANT RULES:
 1. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
 2. For content generation (write), the Executor will generate content based on accumulated context
-3. **Selection Edit Behavior**: When the user includes @selection: with a file path and asks to:
-   - "rephrase", "rewrite", "improve", "fix", "edit", "change", "modify", "update", etc.
-   - You MUST use the "updateFile" tool to edit that specific section in the existing file
+3. **Current File Context**: When user says "this file", "this document", "here", "the file", "current file" etc.:
+   - Check the "Currently open file in editor" section in the context
+   - Use that file's name/path for the operation
+   - If no file is open, ask for clarification about which file they mean
+4. **Selection Edit Behavior**: When the user includes @selection: with a file path and asks to edit/change/modify:
+   - You MUST use the "updateFile" tool to edit that specific section
+   - Pass the user's request as the "instruction" parameter
+   - Include selectionContext with the file path, line numbers, and selected text
    - Do NOT create a new file when a selection reference is provided
-   - The updateFile params should target the file from the selection, with section set to find the selected text
-   - Example: @selection:notes/doc.md:10-15 + "rephrase this" → updateFile on notes/doc.md
+   - Example: @selection:notes/doc.md:10-15 + "rephrase this" → updateFile with instruction="rephrase this" and selectionContext from the selection
 
 Context propagation (CRITICAL):
 - projectId: When createProject runs first, ALL subsequent steps MUST include "projectId" in contextNeeded
@@ -2543,6 +2532,17 @@ function buildRuntimeContext(): string {
 - Locale: ${locale}`;
 }
 
+/**
+ * Context about the currently open file in the editor
+ */
+interface CurrentFileContext {
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  projectId?: string;
+  projectName?: string;
+}
+
 export async function createExecutionPlan(
   userMessage: string,
   projectId: string | undefined,
@@ -2550,6 +2550,7 @@ export async function createExecutionPlan(
   conversationContext?: string,
   replanContext?: string,
   workingContext?: WorkingContext,
+  currentFileContext?: CurrentFileContext,
 ): Promise<ExecutionPlan> {
   const runtimeContext = buildRuntimeContext();
 
@@ -2580,7 +2581,17 @@ ${workingContext.recentFiles.length > 0
   : ''}`
     : "";
 
-  const systemContent = PLANNER_PROMPT + runtimeContext + filesContext + projectInfo + workingContextInfo + contextInfo + replanInfo;
+  // Current file context - what the user is looking at in the editor
+  const currentFileInfo = currentFileContext
+    ? `\n\nCurrently open file in editor:
+- File name: "${currentFileContext.fileName}"
+- File path: ${currentFileContext.filePath}
+- File type: ${currentFileContext.fileType}
+${currentFileContext.projectName ? `- Project: "${currentFileContext.projectName}"` : ''}
+(When user says "this file", "here", "this document", etc. - they mean this file)`
+    : "\n\nNo file currently open in editor.";
+
+  const systemContent = PLANNER_PROMPT + runtimeContext + filesContext + projectInfo + workingContextInfo + currentFileInfo + contextInfo + replanInfo;
   
   // Build conversation messages - will be extended if retries are needed
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [

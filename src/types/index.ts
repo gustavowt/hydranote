@@ -967,16 +967,6 @@ export interface GlobalAddNoteResult {
 // ============================================
 
 /**
- * Update operation type
- */
-export type UpdateOperation = 'replace' | 'insert_before' | 'insert_after';
-
-/**
- * Section identification method
- */
-export type SectionIdentificationMethod = 'header' | 'exact_match' | 'semantic' | 'line_number';
-
-/**
  * Document section for structural parsing
  */
 export interface DocumentSection {
@@ -1003,21 +993,32 @@ export interface DocumentSection {
 }
 
 /**
+ * Selection context from editor (when user selects text and references it)
+ */
+export interface SelectionContext {
+  /** File path from the selection reference */
+  filePath: string;
+  /** Start line number (1-based) */
+  startLine: number;
+  /** End line number (1-based) */
+  endLine: number;
+  /** The selected text content */
+  selectedText: string;
+}
+
+/**
  * UpdateFile tool input parameters
+ * The tool itself handles analysis and diff generation via chain-of-thought reasoning
  */
 export interface UpdateFileToolParams {
   /** File ID to update */
   fileId?: string;
   /** File name to update */
   fileName?: string;
-  /** Operation type: replace, insert_before, or insert_after */
-  operation: UpdateOperation;
-  /** Section identifier - can be a header name, exact text, or semantic description */
-  sectionIdentifier: string;
-  /** Method to identify the section */
-  identificationMethod?: SectionIdentificationMethod;
-  /** New content to insert or replace with */
-  newContent: string;
+  /** Natural language instruction describing what to change */
+  instruction: string;
+  /** Optional selection context from editor (@selection: reference) */
+  selectionContext?: SelectionContext;
 }
 
 /**
@@ -1046,24 +1047,16 @@ export interface UpdateFilePreview {
   fileName: string;
   /** File type (md or docx) */
   fileType: 'md' | 'docx';
-  /** Operation performed */
-  operation: UpdateOperation;
-  /** Section that was identified */
-  identifiedSection: string;
-  /** Original content of the affected section */
-  originalContent: string;
-  /** New content after update */
-  newContent: string;
+  /** Chain-of-thought reasoning from the LLM */
+  reasoning: string;
   /** Full original file content */
   originalFullContent: string;
   /** Full new file content after update */
   newFullContent: string;
   /** Diff lines for display */
   diffLines: DiffLine[];
-  /** Whether the section was found */
-  sectionFound: boolean;
-  /** Confidence score for semantic matching (0-1) */
-  confidence?: number;
+  /** Raw unified diff from LLM */
+  unifiedDiff: string;
   /** Creation timestamp */
   createdAt: Date;
 }
@@ -1078,8 +1071,6 @@ export interface UpdateFileResult {
   fileId: string;
   /** Updated file name */
   fileName: string;
-  /** Operation performed */
-  operation: UpdateOperation;
   /** Error message if failed */
   error?: string;
   /** Whether file was re-indexed */
