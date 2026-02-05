@@ -261,6 +261,14 @@ Full markdown editor with edit/split/preview modes, Mermaid diagram support, inl
 ### ChatSidebar (`ChatSidebar.vue`)
 AI chat panel with project context, `@file:` autocomplete, `@selection:` references from editor.
 
+**Reference Visual Rendering:**
+User messages containing `@` references are parsed and rendered as styled UI components:
+- `@file:path/file.md` → File pill (compact badge with file icon and name)
+- `@project:ProjectName` → Project pill (badge with folder icon)
+- `@selection:file:lines` + code block → Selection card with collapsible syntax-highlighted code
+
+This is a display-only feature - the raw content is preserved for LLM processing.
+
 ### ProjectsTreeSidebar (`ProjectsTreeSidebar.vue`)
 Hierarchical project/file navigator with drag-and-drop between projects.
 
