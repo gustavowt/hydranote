@@ -106,7 +106,7 @@
                 class="message-content markdown-content" 
                 v-html="renderMarkdown(message.content)"
               ></div>
-              <div v-else class="message-content">{{ message.content }}</div>
+              <div v-else class="message-content user-message-content" v-html="renderUserMessage(message.content)"></div>
               <div class="message-time">{{ formatTime(message.timestamp) }}</div>
             </div>
             
@@ -367,16 +367,21 @@
       <!-- Chat Input -->
       <div class="chat-input" v-if="sessionReady" ref="inputContainerRef">
         <div class="input-container">
-          <ion-textarea
-            ref="textareaRef"
-            v-model="inputMessage"
-            :rows="1"
-            :auto-grow="true"
-            :placeholder="isGlobalMode ? 'Ask across all projects... (@ to reference files)' : 'Ask about your documents... (@ to reference files)'"
-            :disabled="isTyping"
-            @keydown="handleKeydown"
-            @ionInput="handleInputChange"
-          />
+          <!-- Rich input with styled references -->
+          <div class="rich-input-wrapper">
+            <div
+              ref="richInputRef"
+              class="rich-input"
+              contenteditable="true"
+              :class="{ disabled: isTyping, 'has-content': inputMessage.trim() }"
+              @input="handleRichInput"
+              @keydown="handleKeydown"
+              @paste="handlePaste"
+              @focus="handleInputFocus"
+              @blur="handleInputBlur"
+              :data-placeholder="isGlobalMode ? 'Ask across all projects... (@ to reference files)' : 'Ask about your documents... (@ to reference files)'"
+            ></div>
+          </div>
           <ion-button 
             fill="clear" 
             :disabled="!inputMessage.trim() || isTyping"
@@ -402,7 +407,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick, computed } from 'vue';
+import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
@@ -512,7 +517,9 @@ const sessionId = ref('');
 const sessionReady = ref(false); // Whether a session is loaded
 const chatContentRef = ref<HTMLElement | null>(null);
 const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
+const richInputRef = ref<HTMLElement | null>(null);
 const inputContainerRef = ref<HTMLElement | null>(null);
+const isInputFocused = ref(false);
 
 // Working context for global mode - tracks recently created projects/files
 // Resets when starting a new chat session
@@ -557,6 +564,8 @@ const pendingFinalAnswer = ref(''); // Holds the final answer until next query (
 
 // Inline tool indicators state
 const expandedToolIds = ref<Set<string>>(new Set());
+// Selection card expand/collapse state (for user message references)
+const expandedSelectionIds = ref<Set<string>>(new Set());
 const currentRunningToolId = computed(() => {
   const running = toolLogs.value.find(l => l.status === 'running');
   return running?.id || null;
@@ -592,12 +601,31 @@ const currentQuickActions = computed(() =>
   isGlobalMode.value ? globalQuickActions : projectQuickActions
 );
 
+// Handler for selection card toggle events (from rendered HTML)
+function handleToggleSelection(event: CustomEvent<string>) {
+  const selectionId = event.detail;
+  if (expandedSelectionIds.value.has(selectionId)) {
+    expandedSelectionIds.value.delete(selectionId);
+  } else {
+    expandedSelectionIds.value.add(selectionId);
+  }
+  // Force reactivity update
+  expandedSelectionIds.value = new Set(expandedSelectionIds.value);
+}
+
 onMounted(async () => {
   if (props.initialProjectId) {
     selectedScope.value = props.initialProjectId;
     selectedProjectId.value = props.initialProjectId;
   }
   await loadSession();
+  
+  // Listen for selection toggle events from rendered HTML
+  window.addEventListener('toggle-selection', handleToggleSelection as EventListener);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('toggle-selection', handleToggleSelection as EventListener);
 });
 
 watch(() => props.initialProjectId, async (newId) => {
@@ -649,6 +677,10 @@ async function handleNewChat() {
   isToolLogExpanded.value = true;
   activePreview.value = null;
   expandedToolIds.value = new Set();
+  inputMessage.value = '';
+  if (richInputRef.value) {
+    richInputRef.value.innerHTML = '';
+  }
   
   // Reset working context for global mode
   workingContext.value = { recentFiles: [] };
@@ -727,6 +759,10 @@ async function sendMessage(text?: string) {
   await ensureFileSystemPermission();
 
   inputMessage.value = '';
+  // Clear the rich input
+  if (richInputRef.value) {
+    richInputRef.value.innerHTML = '';
+  }
 
   // Commit any pending final answer from previous query to messages
   if (pendingFinalAnswer.value) {
@@ -1040,8 +1076,259 @@ function handleInputChange() {
   closeAutocomplete();
 }
 
+/**
+ * Handle input in the rich contenteditable div
+ */
+function handleRichInput(event: Event) {
+  const target = event.target as HTMLElement;
+  // Extract text content, restoring original references from data attributes
+  const rawText = extractRawTextFromRichInput(target);
+  inputMessage.value = rawText;
+  
+  // Re-render with styled references
+  renderRichInputContent();
+  
+  // Handle autocomplete
+  handleInputChange();
+}
+
+/**
+ * Extract raw text from rich input, restoring original @references from data attributes
+ */
+function extractRawTextFromRichInput(element: HTMLElement): string {
+  let result = '';
+  
+  function processNode(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      result += node.textContent || '';
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      
+      // Check if this is a pill with stored reference
+      if (el.classList.contains('input-pill') && el.dataset.reference) {
+        // Restore the original reference text
+        result += decodeHtmlEntities(el.dataset.reference);
+      } else if (el.tagName === 'BR') {
+        result += '\n';
+      } else {
+        // Process child nodes
+        for (const child of Array.from(el.childNodes)) {
+          processNode(child);
+        }
+      }
+    }
+  }
+  
+  processNode(element);
+  return result;
+}
+
+/**
+ * Decode HTML entities back to original characters
+ */
+function decodeHtmlEntities(text: string): string {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = text;
+  return textarea.value;
+}
+
+/**
+ * Handle paste in rich input - strip formatting
+ */
+function handlePaste(event: ClipboardEvent) {
+  event.preventDefault();
+  const text = event.clipboardData?.getData('text/plain') || '';
+  
+  // Insert plain text at cursor position
+  const selection = window.getSelection();
+  if (selection && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    
+    // Move cursor after inserted text
+    range.setStartAfter(textNode);
+    range.setEndAfter(textNode);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  
+  // Trigger input handler
+  if (richInputRef.value) {
+    handleRichInput({ target: richInputRef.value } as unknown as Event);
+  }
+}
+
+function handleInputFocus() {
+  isInputFocused.value = true;
+}
+
+function handleInputBlur() {
+  isInputFocused.value = false;
+}
+
+/**
+ * Render styled references in the rich input while preserving cursor position
+ */
+function renderRichInputContent() {
+  if (!richInputRef.value) return;
+  
+  const content = inputMessage.value;
+  
+  // Check if we have any references to style
+  const hasReferences = /@(file|project|selection):/.test(content);
+  
+  if (!hasReferences) {
+    // No references - just show plain text (don't re-render to preserve cursor)
+    return;
+  }
+  
+  // Save cursor position
+  const selection = window.getSelection();
+  const cursorOffset = getCursorOffsetInElement(richInputRef.value);
+  
+  // Render with styled references (for input, we use a simpler inline version)
+  const styledHtml = renderInputReferences(content);
+  
+  // Only update if content changed
+  if (richInputRef.value.innerHTML !== styledHtml) {
+    richInputRef.value.innerHTML = styledHtml;
+    
+    // Restore cursor position
+    if (cursorOffset !== null && selection) {
+      restoreCursorPosition(richInputRef.value, cursorOffset);
+    }
+  }
+}
+
+/**
+ * Get cursor offset from start of element
+ */
+function getCursorOffsetInElement(element: HTMLElement): number | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  
+  const range = selection.getRangeAt(0);
+  const preCaretRange = range.cloneRange();
+  preCaretRange.selectNodeContents(element);
+  preCaretRange.setEnd(range.endContainer, range.endOffset);
+  
+  return preCaretRange.toString().length;
+}
+
+/**
+ * Restore cursor position in element
+ */
+function restoreCursorPosition(element: HTMLElement, offset: number) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  
+  const range = document.createRange();
+  let charCount = 0;
+  let found = false;
+  
+  function traverseNodes(node: Node): boolean {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textLength = node.textContent?.length || 0;
+      if (charCount + textLength >= offset) {
+        range.setStart(node, offset - charCount);
+        range.setEnd(node, offset - charCount);
+        return true;
+      }
+      charCount += textLength;
+    } else {
+      for (const child of Array.from(node.childNodes)) {
+        if (traverseNodes(child)) return true;
+      }
+    }
+    return false;
+  }
+  
+  found = traverseNodes(element);
+  
+  if (found) {
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else {
+    // Put cursor at end if position not found
+    range.selectNodeContents(element);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+}
+
+/**
+ * Render references for the input field (inline pills only, hide code blocks)
+ */
+function renderInputReferences(content: string): string {
+  // Use a marker system to handle replacements while preserving text escaping
+  const markers: { placeholder: string; html: string }[] = [];
+  let markerIndex = 0;
+  let result = content;
+  
+  // Helper to create unique placeholder
+  const createMarker = (html: string): string => {
+    const placeholder = `\x00PILL${markerIndex++}\x00`;
+    markers.push({ placeholder, html });
+    return placeholder;
+  };
+  
+  // First, handle @selection with code blocks - match the ENTIRE selection including code block
+  // Pattern: @selection:filepath:startLine-endLine followed by newline and code block
+  // Filepath captured until :digits pattern (handles spaces in paths)
+  result = result.replace(/@selection:(.+?):(\d+)-(\d+)\s*\n```[\s\S]*?```\n?/g, (match, filePath, startLine, endLine) => {
+    const fileName = getFileName(filePath);
+    const iconClass = getFileIconClass(filePath);
+    const html = `<span class="input-pill selection-pill ${iconClass}" contenteditable="false" data-reference="${escapeHtml(match)}"><span class="pill-icon">📄</span><span class="pill-text">${escapeHtml(fileName)}</span><span class="pill-lines">:${startLine}-${endLine}</span></span>`;
+    return createMarker(html);
+  });
+  
+  // Also handle @selection without code block (just the reference line)
+  // Filepath captured until :digits pattern (handles spaces in paths)
+  result = result.replace(/@selection:(.+?):(\d+)-(\d+)/g, (match, filePath, startLine, endLine) => {
+    const fileName = getFileName(filePath);
+    const iconClass = getFileIconClass(filePath);
+    const html = `<span class="input-pill selection-pill ${iconClass}" contenteditable="false" data-reference="${escapeHtml(match)}"><span class="pill-icon">📄</span><span class="pill-text">${escapeHtml(fileName)}</span><span class="pill-lines">:${startLine}-${endLine}</span></span>`;
+    return createMarker(html);
+  });
+  
+  // Handle @file:path references - show only filename
+  // Match until file extension (handles paths with spaces)
+  result = result.replace(/@file:(.+?\.(?:md|pdf|docx|doc|txt|png|jpg|jpeg|webp|gif))(?=\s|$)/gi, (match, filePath) => {
+    const fileName = getFileName(filePath);
+    const iconClass = getFileIconClass(filePath);
+    const html = `<span class="input-pill file-pill ${iconClass}" contenteditable="false" data-reference="${escapeHtml(match)}"><span class="pill-icon">📄</span><span class="pill-text">${escapeHtml(fileName)}</span></span>`;
+    return createMarker(html);
+  });
+  
+  // Handle @project:name references (match until double space, newline, or end)
+  result = result.replace(/@project:(.+?)(?=\s{2}|\n|$)/g, (match, projectName) => {
+    // Trim trailing single space if present
+    const cleanName = projectName.trim();
+    const html = `<span class="input-pill project-pill" contenteditable="false" data-reference="${escapeHtml(match)}"><span class="pill-icon">📁</span><span class="pill-text">${escapeHtml(cleanName)}</span></span>`;
+    return createMarker(html);
+  });
+  
+  // Escape HTML for all remaining text
+  result = escapeHtml(result);
+  
+  // Replace markers with actual HTML
+  for (const { placeholder, html } of markers) {
+    result = result.replace(placeholder, html);
+  }
+  
+  return result;
+}
+
 function getCursorPosition(): number {
-  // For IonTextarea, we need to get the actual textarea element
+  // For rich input, get cursor position from contenteditable
+  if (richInputRef.value) {
+    const offset = getCursorOffsetInElement(richInputRef.value);
+    if (offset !== null) return offset;
+  }
+  // Fallback for IonTextarea
   const textarea = textareaRef.value?.$el?.querySelector('textarea');
   if (textarea) {
     return textarea.selectionStart || inputMessage.value.length;
@@ -1078,11 +1365,21 @@ function handleAutocompleteSelect(item: { id: string; name: string; path: string
   
   closeAutocomplete();
   
-  // Focus back on the textarea
+  // Update the rich input and focus it
   nextTick(() => {
-    const textarea = textareaRef.value?.$el?.querySelector('textarea');
-    if (textarea) {
-      textarea.focus();
+    if (richInputRef.value) {
+      richInputRef.value.innerHTML = renderInputReferences(inputMessage.value);
+      richInputRef.value.focus();
+      
+      // Place cursor at the end
+      const range = document.createRange();
+      range.selectNodeContents(richInputRef.value);
+      range.collapse(false);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
     }
   });
 }
@@ -1536,6 +1833,227 @@ function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string;
 }
 
+// ============================================
+// User Message Reference Parsing & Rendering
+// ============================================
+
+interface ParsedReference {
+  type: 'file' | 'project' | 'selection';
+  fullMatch: string;
+  filePath?: string;
+  projectName?: string;
+  startLine?: number;
+  endLine?: number;
+  codeContent?: string;
+  id?: string; // Unique ID for selection cards (for expand/collapse state)
+}
+
+/**
+ * Parse user message for @file:, @project:, and @selection: references
+ */
+function parseUserMessageReferences(content: string): { parts: Array<string | ParsedReference>; references: ParsedReference[] } {
+  const references: ParsedReference[] = [];
+  const parts: Array<string | ParsedReference> = [];
+  
+  // Combined pattern to match all reference types in order
+  // Pattern 1: @selection:filepath:startLine-endLine followed by code block (filepath can have spaces, captured until :digits)
+  // Pattern 2: @file:path/to/file.md (match until file extension, handles spaces in paths)
+  // Pattern 3: @project:ProjectName (match until double space, newline, or another @ reference)
+  const combinedPattern = /(@selection:(.+?):(\d+)-(\d+)\s*\n```(?:\w*\n)?([\s\S]*?)```)|(@file:(.+?\.(?:md|pdf|docx|doc|txt|png|jpg|jpeg|webp|gif)))(?=\s|$|@)|(@project:(.+?))(?=\s{2}|\n|$|@)/gi;
+  
+  let lastIndex = 0;
+  let match;
+  let selectionCounter = 0;
+  
+  while ((match = combinedPattern.exec(content)) !== null) {
+    // Add text before this match
+    if (match.index > lastIndex) {
+      const textBefore = content.substring(lastIndex, match.index);
+      if (textBefore.trim()) {
+        parts.push(textBefore);
+      }
+    }
+    
+    if (match[1]) {
+      // Selection reference with code block
+      const ref: ParsedReference = {
+        type: 'selection',
+        fullMatch: match[1],
+        filePath: match[2],
+        startLine: parseInt(match[3], 10),
+        endLine: parseInt(match[4], 10),
+        codeContent: match[5]?.trim() || '',
+        id: `selection-${selectionCounter++}`,
+      };
+      references.push(ref);
+      parts.push(ref);
+    } else if (match[6]) {
+      // File reference
+      const ref: ParsedReference = {
+        type: 'file',
+        fullMatch: match[6],
+        filePath: match[7],
+      };
+      references.push(ref);
+      parts.push(ref);
+    } else if (match[8]) {
+      // Project reference
+      const ref: ParsedReference = {
+        type: 'project',
+        fullMatch: match[8],
+        projectName: match[9],
+      };
+      references.push(ref);
+      parts.push(ref);
+    }
+    
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Add remaining text after last match
+  if (lastIndex < content.length) {
+    const remaining = content.substring(lastIndex);
+    if (remaining.trim()) {
+      parts.push(remaining);
+    }
+  }
+  
+  return { parts, references };
+}
+
+/**
+ * Escape HTML entities in plain text to prevent XSS
+ */
+function escapeHtml(text: string): string {
+  const htmlEntities: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return text.replace(/[&<>"']/g, char => htmlEntities[char]);
+}
+
+/**
+ * Get file extension icon class based on file path
+ */
+function getFileIconClass(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  switch (ext) {
+    case 'md':
+      return 'file-icon-md';
+    case 'pdf':
+      return 'file-icon-pdf';
+    case 'docx':
+    case 'doc':
+      return 'file-icon-docx';
+    case 'txt':
+      return 'file-icon-txt';
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'webp':
+    case 'gif':
+      return 'file-icon-image';
+    default:
+      return 'file-icon-default';
+  }
+}
+
+/**
+ * Extract just the filename from a path
+ */
+function getFileName(filePath: string): string {
+  return filePath.split('/').pop() || filePath;
+}
+
+/**
+ * Render user message with styled reference components
+ */
+function renderUserMessage(content: string): string {
+  const { parts } = parseUserMessageReferences(content);
+  
+  // If no references found, return escaped plain text
+  if (parts.length === 0 || (parts.length === 1 && typeof parts[0] === 'string')) {
+    return escapeHtml(content);
+  }
+  
+  let html = '';
+  
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      // Plain text - escape and preserve whitespace
+      html += `<span class="user-text">${escapeHtml(part)}</span>`;
+    } else if (part.type === 'file') {
+      // File pill
+      const fileName = getFileName(part.filePath || '');
+      const iconClass = getFileIconClass(part.filePath || '');
+      html += `<span class="reference-pill file-pill ${iconClass}" title="${escapeHtml(part.filePath || '')}">
+        <span class="pill-icon">📄</span>
+        <span class="pill-label">${escapeHtml(fileName)}</span>
+      </span>`;
+    } else if (part.type === 'project') {
+      // Project pill
+      html += `<span class="reference-pill project-pill" title="Project: ${escapeHtml(part.projectName || '')}">
+        <span class="pill-icon">📁</span>
+        <span class="pill-label">${escapeHtml(part.projectName || '')}</span>
+      </span>`;
+    } else if (part.type === 'selection') {
+      // Selection card with collapsible code
+      const fileName = getFileName(part.filePath || '');
+      const lineRange = `Lines ${part.startLine}-${part.endLine}`;
+      const iconClass = getFileIconClass(part.filePath || '');
+      const cardId = part.id || 'selection-0';
+      const isExpanded = expandedSelectionIds.value.has(cardId);
+      
+      // Syntax highlight the code content
+      let highlightedCode = escapeHtml(part.codeContent || '');
+      try {
+        // Try to detect language from file extension
+        const ext = (part.filePath || '').split('.').pop()?.toLowerCase() || '';
+        const langMap: Record<string, string> = {
+          'ts': 'typescript',
+          'tsx': 'typescript',
+          'js': 'javascript',
+          'jsx': 'javascript',
+          'vue': 'html',
+          'md': 'markdown',
+          'py': 'python',
+          'json': 'json',
+          'css': 'css',
+          'scss': 'scss',
+          'html': 'html',
+        };
+        const lang = langMap[ext] || ext;
+        if (lang && hljs.getLanguage(lang)) {
+          highlightedCode = hljs.highlight(part.codeContent || '', { language: lang }).value;
+        } else {
+          highlightedCode = hljs.highlightAuto(part.codeContent || '').value;
+        }
+      } catch {
+        // Fallback to escaped text
+      }
+      
+      html += `<div class="selection-card ${isExpanded ? 'expanded' : 'collapsed'}" data-selection-id="${cardId}">
+        <div class="selection-header" onclick="window.dispatchEvent(new CustomEvent('toggle-selection', { detail: '${cardId}' }))">
+          <span class="reference-pill file-pill ${iconClass} inline-pill">
+            <span class="pill-icon">📄</span>
+            <span class="pill-label">${escapeHtml(fileName)}</span>
+          </span>
+          <span class="line-range-badge">${lineRange}</span>
+          <span class="expand-icon">${isExpanded ? '▼' : '▶'}</span>
+        </div>
+        <div class="selection-code-container" style="display: ${isExpanded ? 'block' : 'none'}">
+          <pre class="selection-code"><code class="hljs">${highlightedCode}</code></pre>
+        </div>
+      </div>`;
+    }
+  }
+  
+  return html;
+}
+
 function formatTime(date: Date): string {
   return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
@@ -1589,13 +2107,22 @@ function insertSelection(selection: SelectionContext) {
   
   inputMessage.value = selectionRef + inputMessage.value;
   
-  // Focus the textarea
+  // Update the rich input and focus it
   nextTick(() => {
-    const textarea = textareaRef.value?.$el?.querySelector('textarea');
-    if (textarea) {
-      textarea.focus();
+    if (richInputRef.value) {
+      // Render the styled content
+      richInputRef.value.innerHTML = renderInputReferences(inputMessage.value);
+      richInputRef.value.focus();
+      
       // Place cursor at the end
-      textarea.setSelectionRange(inputMessage.value.length, inputMessage.value.length);
+      const range = document.createRange();
+      range.selectNodeContents(richInputRef.value);
+      range.collapse(false);
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }
   });
 }
@@ -2153,6 +2680,168 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
   border-radius: 8px;
   max-height: 100px;
   font-size: 0.9rem;
+}
+
+/* Rich Input Wrapper & Contenteditable */
+.rich-input-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.rich-input {
+  background: var(--hn-bg-elevated);
+  color: var(--hn-text-primary);
+  padding: 10px 12px;
+  border-radius: 8px;
+  min-height: 20px;
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  outline: none;
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.rich-input:focus {
+  border-color: var(--hn-purple);
+}
+
+.rich-input.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Placeholder */
+.rich-input:empty:not(:focus)::before {
+  content: attr(data-placeholder);
+  color: var(--hn-text-muted);
+  pointer-events: none;
+}
+
+.rich-input.has-content:empty::before {
+  content: '';
+}
+
+/* Rich input scrollbar */
+.rich-input::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rich-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rich-input::-webkit-scrollbar-thumb {
+  background: var(--hn-border-default);
+  border-radius: 3px;
+}
+
+/* Input Pills (inline in contenteditable) - Outline Style */
+/* Using :deep() because v-html content doesn't get scoped attributes */
+.rich-input :deep(.input-pill) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  margin: 0 3px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  vertical-align: baseline;
+  line-height: 1.4;
+  user-select: none;
+  background: transparent;
+  border: 1.5px solid;
+  transition: all 0.15s ease;
+}
+
+.rich-input :deep(.input-pill .pill-icon) {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.rich-input :deep(.input-pill .pill-text) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rich-input :deep(.input-pill .pill-lines) {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+/* File pill in input - outline style */
+.rich-input :deep(.input-pill.file-pill) {
+  color: #a8c7fa;
+  border-color: rgba(138, 180, 248, 0.6);
+}
+
+.rich-input :deep(.input-pill.file-pill:hover) {
+  background: rgba(138, 180, 248, 0.1);
+  border-color: rgba(138, 180, 248, 0.8);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-md) {
+  color: #a8c7fa;
+  border-color: rgba(138, 180, 248, 0.6);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-pdf) {
+  color: #ff8a8a;
+  border-color: rgba(255, 82, 82, 0.6);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-pdf:hover) {
+  background: rgba(255, 82, 82, 0.1);
+  border-color: rgba(255, 82, 82, 0.8);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-docx) {
+  color: #66d9a0;
+  border-color: rgba(0, 200, 83, 0.6);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-docx:hover) {
+  background: rgba(0, 200, 83, 0.1);
+  border-color: rgba(0, 200, 83, 0.8);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-txt) {
+  color: #bdbdbd;
+  border-color: rgba(189, 189, 189, 0.5);
+}
+
+.rich-input :deep(.input-pill.file-pill.file-icon-image) {
+  color: #ce93d8;
+  border-color: rgba(186, 104, 200, 0.5);
+}
+
+/* Project pill in input - outline style */
+.rich-input :deep(.input-pill.project-pill) {
+  color: #66d9a0;
+  border-color: rgba(0, 200, 83, 0.6);
+}
+
+.rich-input :deep(.input-pill.project-pill:hover) {
+  background: rgba(0, 200, 83, 0.1);
+  border-color: rgba(0, 200, 83, 0.8);
+}
+
+/* Selection pill in input - outline style */
+.rich-input :deep(.input-pill.selection-pill) {
+  color: #ce93d8;
+  border-color: rgba(186, 104, 200, 0.6);
+}
+
+.rich-input :deep(.input-pill.selection-pill:hover) {
+  background: rgba(186, 104, 200, 0.1);
+  border-color: rgba(186, 104, 200, 0.8);
 }
 
 .input-container ion-button {
@@ -3000,5 +3689,242 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 .plan-steps::-webkit-scrollbar-thumb {
   background: var(--hn-border-default);
   border-radius: 3px;
+}
+
+/* ============================================
+   User Message Reference Pills & Cards
+   ============================================ */
+
+/* Base styles for user message content with references */
+.user-message-content {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.user-message-content .user-text {
+  white-space: pre-wrap;
+}
+
+/* Reference Pills (base) */
+.reference-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  vertical-align: middle;
+  margin: 2px 4px 2px 0;
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.reference-pill .pill-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.reference-pill .pill-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* File Pill Styling */
+.file-pill {
+  background: rgba(138, 180, 248, 0.2);
+  color: #a8c7fa;
+  border: 1px solid rgba(138, 180, 248, 0.3);
+}
+
+.file-pill:hover {
+  background: rgba(138, 180, 248, 0.3);
+  border-color: rgba(138, 180, 248, 0.5);
+}
+
+/* File type-specific colors */
+.file-pill.file-icon-md {
+  background: rgba(138, 180, 248, 0.2);
+  color: #a8c7fa;
+  border-color: rgba(138, 180, 248, 0.3);
+}
+
+.file-pill.file-icon-pdf {
+  background: rgba(255, 82, 82, 0.15);
+  color: #ff8a8a;
+  border-color: rgba(255, 82, 82, 0.3);
+}
+
+.file-pill.file-icon-docx {
+  background: rgba(0, 200, 83, 0.15);
+  color: #66d9a0;
+  border-color: rgba(0, 200, 83, 0.3);
+}
+
+.file-pill.file-icon-txt {
+  background: rgba(189, 189, 189, 0.15);
+  color: #bdbdbd;
+  border-color: rgba(189, 189, 189, 0.3);
+}
+
+.file-pill.file-icon-image {
+  background: rgba(186, 104, 200, 0.15);
+  color: #ce93d8;
+  border-color: rgba(186, 104, 200, 0.3);
+}
+
+/* Project Pill Styling */
+.project-pill {
+  background: rgba(0, 200, 83, 0.15);
+  color: #66d9a0;
+  border: 1px solid rgba(0, 200, 83, 0.25);
+}
+
+.project-pill:hover {
+  background: rgba(0, 200, 83, 0.25);
+  border-color: rgba(0, 200, 83, 0.4);
+}
+
+/* Selection Card */
+.selection-card {
+  display: block;
+  margin: 8px 0;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.selection-card.expanded {
+  border-color: rgba(138, 180, 248, 0.3);
+}
+
+.selection-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.selection-header:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.selection-header .inline-pill {
+  margin: 0;
+}
+
+.line-range-badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(138, 180, 248, 0.15);
+  color: #a8c7fa;
+  font-weight: 500;
+}
+
+.expand-icon {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  transition: transform 0.2s ease;
+}
+
+.selection-card.expanded .expand-icon {
+  transform: rotate(0deg);
+}
+
+/* Selection Code Container */
+.selection-code-container {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.selection-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.selection-code code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Scrollbar for selection code */
+.selection-code::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.selection-code::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.selection-code::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.selection-code::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Syntax highlighting overrides for selection cards */
+.selection-code .hljs {
+  background: transparent;
+  padding: 0;
+}
+
+.selection-code .hljs-keyword,
+.selection-code .hljs-selector-tag,
+.selection-code .hljs-title,
+.selection-code .hljs-section,
+.selection-code .hljs-doctag,
+.selection-code .hljs-name,
+.selection-code .hljs-strong {
+  color: #c792ea;
+}
+
+.selection-code .hljs-string,
+.selection-code .hljs-attr {
+  color: #c3e88d;
+}
+
+.selection-code .hljs-number,
+.selection-code .hljs-literal,
+.selection-code .hljs-variable,
+.selection-code .hljs-template-variable,
+.selection-code .hljs-tag .hljs-attr {
+  color: #f78c6c;
+}
+
+.selection-code .hljs-comment,
+.selection-code .hljs-quote {
+  color: #676e95;
+  font-style: italic;
+}
+
+.selection-code .hljs-function .hljs-keyword {
+  color: #89ddff;
+}
+
+.selection-code .hljs-built_in {
+  color: #82aaff;
 }
 </style>
