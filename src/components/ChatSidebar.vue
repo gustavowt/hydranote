@@ -1203,22 +1203,65 @@ function renderRichInputContent() {
 }
 
 /**
- * Get cursor offset from start of element
+ * Get cursor offset from start of element, accounting for pills
+ * Pills display shortened text but we need to count their full data-reference length
  */
 function getCursorOffsetInElement(element: HTMLElement): number | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
   
   const range = selection.getRangeAt(0);
-  const preCaretRange = range.cloneRange();
-  preCaretRange.selectNodeContents(element);
-  preCaretRange.setEnd(range.endContainer, range.endOffset);
+  let offset = 0;
+  let found = false;
   
-  return preCaretRange.toString().length;
+  function traverseNode(node: Node): boolean {
+    if (found) return true;
+    
+    if (node.nodeType === Node.TEXT_NODE) {
+      // Check if this text node contains the cursor
+      if (node === range.endContainer) {
+        offset += range.endOffset;
+        found = true;
+        return true;
+      }
+      offset += node.textContent?.length || 0;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      
+      // Check if this is a pill with stored reference
+      if (el.classList.contains('input-pill') && el.dataset.reference) {
+        // Check if cursor is inside or after this pill
+        if (range.endContainer === el || el.contains(range.endContainer)) {
+          // Cursor is inside the pill - count full reference length
+          offset += decodeHtmlEntities(el.dataset.reference).length;
+          found = true;
+          return true;
+        }
+        // Cursor is after this pill - count full reference length
+        offset += decodeHtmlEntities(el.dataset.reference).length;
+      } else if (el.tagName === 'BR') {
+        if (el === range.endContainer) {
+          found = true;
+          return true;
+        }
+        offset += 1; // Count BR as newline
+      } else {
+        // Traverse child nodes
+        for (const child of Array.from(el.childNodes)) {
+          if (traverseNode(child)) return true;
+        }
+      }
+    }
+    return false;
+  }
+  
+  traverseNode(element);
+  return found ? offset : null;
 }
 
 /**
- * Restore cursor position in element
+ * Restore cursor position in element, accounting for pills
+ * Pills display shortened text but we count their full data-reference length
  */
 function restoreCursorPosition(element: HTMLElement, offset: number) {
   const selection = window.getSelection();
@@ -1229,17 +1272,44 @@ function restoreCursorPosition(element: HTMLElement, offset: number) {
   let found = false;
   
   function traverseNodes(node: Node): boolean {
+    if (found) return true;
+    
     if (node.nodeType === Node.TEXT_NODE) {
       const textLength = node.textContent?.length || 0;
       if (charCount + textLength >= offset) {
         range.setStart(node, offset - charCount);
         range.setEnd(node, offset - charCount);
+        found = true;
         return true;
       }
       charCount += textLength;
-    } else {
-      for (const child of Array.from(node.childNodes)) {
-        if (traverseNodes(child)) return true;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      
+      // Check if this is a pill with stored reference
+      if (el.classList.contains('input-pill') && el.dataset.reference) {
+        const refLength = decodeHtmlEntities(el.dataset.reference).length;
+        if (charCount + refLength >= offset) {
+          // Target position is within or at end of this pill - place cursor after pill
+          range.setStartAfter(el);
+          range.setEndAfter(el);
+          found = true;
+          return true;
+        }
+        charCount += refLength;
+      } else if (el.tagName === 'BR') {
+        if (charCount + 1 >= offset) {
+          range.setStartAfter(el);
+          range.setEndAfter(el);
+          found = true;
+          return true;
+        }
+        charCount += 1;
+      } else {
+        // Traverse child nodes
+        for (const child of Array.from(el.childNodes)) {
+          if (traverseNodes(child)) return true;
+        }
       }
     }
     return false;
