@@ -133,8 +133,7 @@ async function createSchema(): Promise<void> {
       binary_data BLOB,
       html_content TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (project_id) REFERENCES projects(id)
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -148,9 +147,7 @@ async function createSchema(): Promise<void> {
       text TEXT NOT NULL,
       start_offset INTEGER NOT NULL,
       end_offset INTEGER NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (file_id) REFERENCES files(id),
-      FOREIGN KEY (project_id) REFERENCES projects(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -162,10 +159,7 @@ async function createSchema(): Promise<void> {
       file_id VARCHAR NOT NULL,
       project_id VARCHAR NOT NULL,
       vector DOUBLE[] NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (chunk_id) REFERENCES chunks(id),
-      FOREIGN KEY (file_id) REFERENCES files(id),
-      FOREIGN KEY (project_id) REFERENCES projects(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -191,8 +185,7 @@ async function createSchema(): Promise<void> {
       chunk_index INTEGER NOT NULL,
       text TEXT NOT NULL,
       embedding DOUBLE[] NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (cache_id) REFERENCES web_search_cache(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -223,8 +216,7 @@ async function createSchema(): Promise<void> {
       session_id VARCHAR NOT NULL,
       role VARCHAR NOT NULL,
       content TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -246,8 +238,7 @@ async function createSchema(): Promise<void> {
       is_full_content BOOLEAN NOT NULL,
       content_or_patch TEXT NOT NULL,
       source VARCHAR NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (file_id) REFERENCES files(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -352,6 +343,15 @@ export async function updateProjectStatus(projectId: string, status: string): Pr
   await conn.query(`
     UPDATE projects SET status = '${status}', updated_at = CURRENT_TIMESTAMP WHERE id = '${projectId}'
   `);
+}
+
+export async function updateProjectName(projectId: string, newName: string): Promise<void> {
+  const conn = getConnection();
+  const escapedName = newName.replace(/'/g, "''");
+  await conn.query(`
+    UPDATE projects SET name = '${escapedName}', updated_at = CURRENT_TIMESTAMP WHERE id = '${projectId}'
+  `);
+  await flushDatabase();
 }
 
 export async function getAllProjects(): Promise<Project[]> {
@@ -496,40 +496,10 @@ export async function updateFileName(fileId: string, newName: string): Promise<v
 
 /**
  * Update file's project and/or name (for moving files)
- * 
- * Due to DuckDB's strict FK constraint enforcement during updates,
- * we delete and recreate the dependent records with the new project_id.
  */
 export async function updateFileProject(fileId: string, newProjectId: string, newName: string): Promise<void> {
   const conn = getConnection();
   const escapedName = newName.replace(/'/g, "''");
-  
-  // Helper to convert DuckDB timestamp to ISO string
-  const toISOString = (ts: unknown): string => {
-    if (ts instanceof Date) return ts.toISOString();
-    if (typeof ts === 'string') return ts;
-    if (typeof ts === 'number' || typeof ts === 'bigint') {
-      return new Date(Number(ts)).toISOString();
-    }
-    return new Date().toISOString();
-  };
-  
-  // First, gather all existing chunks and embeddings data
-  const chunksResult = await conn.query(`
-    SELECT * FROM chunks WHERE file_id = '${fileId}'
-  `);
-  const chunks = chunksResult.toArray();
-  
-  const embeddingsResult = await conn.query(`
-    SELECT * FROM embeddings WHERE file_id = '${fileId}'
-  `);
-  const embeddings = embeddingsResult.toArray();
-  
-  // Delete embeddings first (depends on chunks)
-  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
-  
-  // Delete chunks (depends on files)
-  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
   
   // Update the file's project_id and name
   await conn.query(`
@@ -538,27 +508,15 @@ export async function updateFileProject(fileId: string, newProjectId: string, ne
     WHERE id = '${fileId}'
   `);
   
-  // Re-insert chunks with new project_id
-  for (const chunk of chunks) {
-    const escapedText = (chunk.text as string).replace(/'/g, "''");
-    const createdAt = toISOString(chunk.created_at);
-    await conn.query(`
-      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-      VALUES ('${chunk.id}', '${chunk.file_id}', '${newProjectId}', ${chunk.chunk_index}, '${escapedText}', ${chunk.start_offset}, ${chunk.end_offset}, '${createdAt}')
-    `);
-  }
+  // Update project_id in chunks
+  await conn.query(`
+    UPDATE chunks SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
+  `);
   
-  // Re-insert embeddings with new project_id
-  for (const embedding of embeddings) {
-    // Convert vector to regular array (DuckDB may return typed arrays like Float64Array)
-    const vectorArray = Array.from(embedding.vector as ArrayLike<number>);
-    const vectorStr = `[${vectorArray.join(', ')}]`;
-    const createdAt = toISOString(embedding.created_at);
-    await conn.query(`
-      INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
-      VALUES ('${embedding.id}', '${embedding.chunk_id}', '${embedding.file_id}', '${newProjectId}', ${vectorStr}::DOUBLE[], '${createdAt}')
-    `);
-  }
+  // Update project_id in embeddings
+  await conn.query(`
+    UPDATE embeddings SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
+  `);
   
   await flushDatabase();
 }
@@ -881,7 +839,7 @@ export async function cleanExpiredWebCache(maxAgeMinutes: number = 60): Promise<
   
   const idsStr = expiredIds.map(id => `'${id}'`).join(', ');
   
-  // Delete chunks first (foreign key)
+  // Delete chunks first
   await conn.query(`DELETE FROM web_search_chunks WHERE cache_id IN (${idsStr})`);
   
   // Delete cache entries
@@ -1117,7 +1075,7 @@ export async function touchChatSession(sessionId: string): Promise<void> {
 export async function deleteChatSession(sessionId: string): Promise<void> {
   const conn = getConnection();
   
-  // Delete messages first (foreign key)
+  // Delete messages first
   await conn.query(`DELETE FROM chat_messages WHERE session_id = '${sessionId}'`);
   
   // Delete the session
