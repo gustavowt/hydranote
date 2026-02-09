@@ -1089,7 +1089,7 @@ export type ContextMenuTargetType = 'project' | 'directory' | 'file';
 /**
  * Available context menu actions
  */
-export type ContextMenuAction = 'new-file' | 'delete-project' | 'delete-directory' | 'delete-file';
+export type ContextMenuAction = 'new-file' | 'delete-project' | 'delete-directory' | 'delete-file' | 'rename-file' | 'rename-directory' | 'rename-project';
 
 /**
  * Context menu event payload

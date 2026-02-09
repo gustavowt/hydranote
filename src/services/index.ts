@@ -24,6 +24,8 @@ export {
   getFileWithChunks,
   updateFile,
   renameFile,
+  renameProject,
+  renameDirectory,
   getProjectStats,
   deleteFile,
   moveFile,

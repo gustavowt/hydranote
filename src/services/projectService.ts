@@ -35,6 +35,7 @@ import {
   updateFileStatus,
   updateFileContent,
   updateFileName as dbUpdateFileName,
+  updateProjectName as dbUpdateProjectName,
   createChunks as dbCreateChunks,
   createEmbeddings as dbCreateEmbeddings,
   vectorSearch as dbVectorSearch,
@@ -708,6 +709,83 @@ export async function renameFile(fileId: string, newName: string): Promise<Proje
     name: newFullPath,
     updatedAt: new Date(),
   };
+}
+
+/**
+ * Rename a project (update name in DB + sync filesystem directory)
+ */
+export async function renameProject(projectId: string, newName: string): Promise<Project | null> {
+  await ensureInitialized();
+  
+  const project = await dbGetProject(projectId);
+  if (!project) return null;
+  
+  const oldName = project.name;
+  
+  // Create new project directory on filesystem
+  await syncProjectCreate(newName);
+  
+  // Get all files for this project to re-sync them
+  const files = await get_project_files(projectId);
+  
+  // Re-sync all files: delete from old project dir, write to new
+  for (const file of files) {
+    if (file.content) {
+      await syncFileDelete(oldName, file.name);
+      await syncFileToFileSystem(newName, file.name, file.content);
+    }
+  }
+  
+  // Delete old project directory
+  await syncProjectDelete(oldName);
+  
+  // Update project name in database
+  await dbUpdateProjectName(projectId, newName);
+  
+  return {
+    ...project,
+    name: newName,
+    updatedAt: new Date(),
+  };
+}
+
+/**
+ * Rename a directory (update all file paths within the directory)
+ * Handles database update and file system sync for all affected files
+ */
+export async function renameDirectory(projectId: string, oldDirPath: string, newDirName: string): Promise<void> {
+  await ensureInitialized();
+  
+  const project = await dbGetProject(projectId);
+  if (!project) return;
+  
+  // Build the new directory path (replace last segment of the old path)
+  const lastSlash = oldDirPath.lastIndexOf('/');
+  const parentDir = lastSlash > 0 ? oldDirPath.substring(0, lastSlash) : '';
+  const newDirPath = parentDir ? `${parentDir}/${newDirName}` : newDirName;
+  
+  // Get all files for this project
+  const files = await get_project_files(projectId);
+  
+  // Find files that are inside the old directory
+  const affectedFiles = files.filter(f => 
+    f.name === oldDirPath || f.name.startsWith(oldDirPath + '/')
+  );
+  
+  // Update each affected file's path
+  for (const file of affectedFiles) {
+    const oldPath = file.name;
+    const newPath = newDirPath + oldPath.substring(oldDirPath.length);
+    
+    // Update in database
+    await dbUpdateFileName(file.id, newPath);
+    
+    // Sync filesystem: delete old, write new
+    if (file.content) {
+      await syncFileDelete(project.name, oldPath);
+      await syncFileToFileSystem(project.name, newPath, file.content);
+    }
+  }
 }
 
 /**
