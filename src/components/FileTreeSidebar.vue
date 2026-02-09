@@ -86,7 +86,7 @@ import {
   chevronBackOutline,
 } from 'ionicons/icons';
 import type { ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
-import { getProjectFileTree, deleteFile, moveFile, createEmptyMarkdownFile } from '@/services';
+import { getProjectFileTree, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory } from '@/services';
 import FileTreeNode from './FileTreeNode.vue';
 import FileTreeContextMenu from './FileTreeContextMenu.vue';
 
@@ -198,6 +198,12 @@ async function handleContextMenuAction(action: ContextMenuAction, targetId: stri
     case 'new-file':
       await promptCreateFile(targetId, targetName);
       break;
+    case 'rename-file':
+      await promptRenameFile(targetId, targetName);
+      break;
+    case 'rename-directory':
+      await promptRenameDirectory(targetId, targetName);
+      break;
     case 'delete-file':
       await confirmDeleteFile(targetId, targetName);
       break;
@@ -246,6 +252,87 @@ async function createFile(fileName: string, directory?: string) {
     });
     await alert.present();
   }
+}
+
+async function promptRenameFile(fileId: string, fileName: string) {
+  // Extract just the file name without extension for the input default
+  const lastDot = fileName.lastIndexOf('.');
+  const nameWithoutExt = lastDot > 0 ? fileName.substring(0, lastDot) : fileName;
+  const ext = lastDot > 0 ? fileName.substring(lastDot) : '';
+  
+  const alert = await alertController.create({
+    header: 'Rename File',
+    inputs: [
+      {
+        name: 'newName',
+        type: 'text',
+        value: nameWithoutExt,
+        placeholder: 'New file name',
+      },
+    ],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Rename',
+        handler: async (data) => {
+          if (data.newName?.trim() && data.newName.trim() !== nameWithoutExt) {
+            try {
+              const newFullName = data.newName.trim() + ext;
+              await renameFile(fileId, newFullName);
+              await loadFileTree();
+              emit('files-changed');
+            } catch (error) {
+              const errAlert = await alertController.create({
+                header: 'Error',
+                message: `Failed to rename file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                buttons: ['OK'],
+              });
+              await errAlert.present();
+            }
+          }
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function promptRenameDirectory(directoryId: string, directoryName: string) {
+  const alert = await alertController.create({
+    header: 'Rename Directory',
+    inputs: [
+      {
+        name: 'newName',
+        type: 'text',
+        value: directoryName,
+        placeholder: 'New directory name',
+      },
+    ],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Rename',
+        handler: async (data) => {
+          if (data.newName?.trim() && data.newName.trim() !== directoryName) {
+            try {
+              const dirPath = directoryId.replace('dir:', '');
+              await renameDirectory(props.projectId, dirPath, data.newName.trim());
+              await loadFileTree();
+              emit('files-changed');
+            } catch (error) {
+              const errAlert = await alertController.create({
+                header: 'Error',
+                message: `Failed to rename directory: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                buttons: ['OK'],
+              });
+              await errAlert.present();
+            }
+          }
+        },
+      },
+    ],
+  });
+  await alert.present();
 }
 
 async function confirmDeleteFile(fileId: string, fileName: string) {

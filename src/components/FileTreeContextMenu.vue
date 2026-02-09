@@ -8,6 +8,10 @@
             <ion-icon :icon="addOutline" slot="start" />
             <ion-label>New File</ion-label>
           </ion-item>
+          <ion-item button @click="handleAction('rename-project')">
+            <ion-icon :icon="createOutline" slot="start" />
+            <ion-label>Rename Project</ion-label>
+          </ion-item>
           <ion-item
             button
             @click="handleAction('delete-project')"
@@ -24,6 +28,10 @@
             <ion-icon :icon="addOutline" slot="start" />
             <ion-label>New File</ion-label>
           </ion-item>
+          <ion-item button @click="handleAction('rename-directory')">
+            <ion-icon :icon="createOutline" slot="start" />
+            <ion-label>Rename Directory</ion-label>
+          </ion-item>
           <ion-item
             button
             @click="handleAction('delete-directory')"
@@ -36,6 +44,10 @@
 
         <!-- File Actions -->
         <template v-else-if="targetType === 'file'">
+          <ion-item button @click="handleAction('rename-file')">
+            <ion-icon :icon="createOutline" slot="start" />
+            <ion-label>Rename File</ion-label>
+          </ion-item>
           <ion-item
             button
             @click="handleAction('delete-file')"
@@ -59,7 +71,7 @@ import {
   IonIcon,
   IonLabel,
 } from "@ionic/vue";
-import { addOutline, trashOutline } from "ionicons/icons";
+import { addOutline, trashOutline, createOutline } from "ionicons/icons";
 import type { ContextMenuTargetType, ContextMenuAction } from "@/types";
 
 interface Props {

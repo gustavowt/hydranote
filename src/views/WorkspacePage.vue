@@ -48,6 +48,7 @@
         @select-file="handleFileSelect"
         @create-project="showCreateProjectModal = true"
         @delete-project="handleDeleteProject"
+        @project-renamed="handleProjectRenamed"
         @file-created="handleFileCreatedFromSidebar"
         @file-moved="handleFileMoved"
       />
@@ -495,6 +496,12 @@ function handleDeleteProject(projectId: string) {
     editorInitialContent.value = '';
     markdownEditorRef.value?.clearContent();
   }
+}
+
+// Project rename handler
+async function handleProjectRenamed(_projectId: string, _newName: string) {
+  // Refresh the projects list to reflect the new name
+  await loadProjects();
 }
 
 // Search result selection handlers
