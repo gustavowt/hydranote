@@ -133,12 +133,12 @@ export function getDefaultNoteDirectory(): string {
 // ============================================
 
 /**
- * Check if the model is an OpenAI reasoning model (o1, o3 series)
- * Reasoning models have different API parameter requirements
+ * Check if the model is an OpenAI reasoning model (o-series and GPT-5 series)
+ * These models don't support the temperature parameter and use max_completion_tokens
  */
 function isOpenAIReasoningModel(model: string): boolean {
-  const reasoningModels = ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o4-mini'];
-  return reasoningModels.some(rm => model.startsWith(rm));
+  const reasoningPrefixes = ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o4-mini', 'gpt-5'];
+  return reasoningPrefixes.some(rm => model.startsWith(rm));
 }
 
 async function callOpenAI(
@@ -155,10 +155,10 @@ async function callOpenAI(
   };
 
   if (isReasoning) {
-    // Reasoning models use max_completion_tokens and don't support temperature
+    // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
   } else {
-    // Standard models use max_tokens and support temperature
+    // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
     body.max_tokens = request.maxTokens ?? 4096;
   }
@@ -391,10 +391,10 @@ async function streamOpenAI(
   };
 
   if (isReasoning) {
-    // Reasoning models use max_completion_tokens and don't support temperature
+    // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
   } else {
-    // Standard models use max_tokens and support temperature
+    // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
     body.max_tokens = request.maxTokens ?? 4096;
   }

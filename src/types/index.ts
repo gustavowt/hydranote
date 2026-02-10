@@ -435,7 +435,7 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   provider: 'openai',
   openai: {
     apiKey: '',
-    model: 'gpt-4.1-mini',
+    model: 'gpt-5-mini',
   },
   ollama: {
     baseUrl: 'http://localhost:11434',
@@ -443,7 +443,7 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   },
   anthropic: {
     apiKey: '',
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-5',
   },
   google: {
     apiKey: '',

@@ -321,9 +321,9 @@ Global fuzzy search across all projects (files and content).
 ### Supported AI Providers
 | Provider | Models |
 |----------|--------|
-| OpenAI | GPT-4.1, GPT-4.1 Mini/Nano, o3, o3-mini, GPT-4o, GPT-4o-mini |
-| Anthropic | Claude Opus 4.5/4.1, Claude Sonnet 4, Claude 3.5 Sonnet/Haiku |
-| Google | Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0, Gemini 1.5 |
+| OpenAI | GPT-5.2, GPT-5, GPT-5 Mini/Nano, o4-mini, o3, GPT-4.1 series |
+| Anthropic | Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4 series |
+| Google | Gemini 3 Pro/Flash, Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0 |
 | Ollama | Local models (Llama, Mistral, etc.) |
 | Hugging Face Local | GGUF models via node-llama-cpp (Electron only) |
 

@@ -91,20 +91,25 @@
             :value="modelValue.openai.model"
             @change="updateNestedField('openai', 'model', ($event.target as HTMLSelectElement).value)"
           >
-            <optgroup label="Latest (2025)">
-              <option value="gpt-4.1">GPT-4.1</option>
-              <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-              <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
+            <optgroup label="GPT-5 Series (2025-2026)">
+              <option value="gpt-5.2">GPT-5.2 (Most Powerful)</option>
+              <option value="gpt-5">GPT-5</option>
+              <option value="gpt-5-mini">GPT-5 Mini</option>
+              <option value="gpt-5-nano">GPT-5 Nano</option>
+            </optgroup>
+            <optgroup label="Reasoning">
+              <option value="o4-mini">o4 Mini (Reasoning)</option>
               <option value="o3">o3 (Reasoning)</option>
               <option value="o3-mini">o3 Mini (Reasoning)</option>
             </optgroup>
-            <optgroup label="GPT-4o Series">
-              <option value="gpt-4o">GPT-4o</option>
-              <option value="gpt-4o-mini">GPT-4o Mini</option>
+            <optgroup label="GPT-4.1 Series">
+              <option value="gpt-4.1">GPT-4.1</option>
+              <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+              <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
             </optgroup>
             <optgroup v-if="!compact" label="Previous">
-              <option value="gpt-4-turbo">GPT-4 Turbo</option>
-              <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+              <option value="gpt-4o">GPT-4o</option>
+              <option value="gpt-4o-mini">GPT-4o Mini</option>
             </optgroup>
           </select>
         </div>
@@ -149,19 +154,19 @@
             :value="modelValue.anthropic.model"
             @change="updateNestedField('anthropic', 'model', ($event.target as HTMLSelectElement).value)"
           >
+            <optgroup label="Claude 4.6 / 4.5 (Latest)">
+              <option value="claude-opus-4-6">Claude Opus 4.6 (Most Powerful)</option>
+              <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5 (Fast)</option>
+            </optgroup>
             <optgroup label="Claude 4 (2025)">
-              <option value="claude-opus-4-5-20251101">Claude Opus 4.5 (Most Powerful)</option>
+              <option value="claude-opus-4-5-20251101">Claude Opus 4.5</option>
               <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
               <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
             </optgroup>
-            <optgroup label="Claude 3.5 (2024)">
+            <optgroup v-if="!compact" label="Claude 3.5 (2024)">
               <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
-              <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (Fast)</option>
-            </optgroup>
-            <optgroup v-if="!compact" label="Claude 3">
-              <option value="claude-3-opus-20240229">Claude 3 Opus</option>
-              <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
-              <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+              <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
             </optgroup>
           </select>
         </div>
@@ -196,19 +201,17 @@
             :value="modelValue.google.model"
             @change="updateNestedField('google', 'model', ($event.target as HTMLSelectElement).value)"
           >
-            <optgroup label="Gemini 2.5 (2025)">
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Most Powerful)</option>
+            <optgroup label="Gemini 3 (Latest)">
+              <option value="gemini-3-pro-preview">Gemini 3 Pro (Most Powerful)</option>
+              <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+            </optgroup>
+            <optgroup label="Gemini 2.5">
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
               <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
               <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Fastest)</option>
             </optgroup>
-            <optgroup label="Gemini 2.0">
+            <optgroup v-if="!compact" label="Gemini 2.0">
               <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-              <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
-            </optgroup>
-            <optgroup v-if="!compact" label="Gemini 1.5">
-              <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-              <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-              <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B</option>
             </optgroup>
           </select>
         </div>
@@ -724,19 +727,19 @@ const mainProviders: ProviderConfig[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    description: 'GPT-4.1, o3, GPT-4o series',
+    description: 'GPT-5.2, GPT-5, o4-mini',
     iconComponent: OpenAiIcon,
   },
   {
     id: 'anthropic',
     name: 'Claude',
-    description: 'Claude 4 Opus, Sonnet',
+    description: 'Claude Opus 4.6, Sonnet 4.5',
     iconComponent: ClaudeIcon,
   },
   {
     id: 'google',
     name: 'Gemini',
-    description: 'Gemini 2.5 Pro, Flash',
+    description: 'Gemini 3 Pro, Flash',
     iconComponent: GeminiIcon,
   },
 ];
