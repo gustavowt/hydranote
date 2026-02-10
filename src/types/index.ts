@@ -497,8 +497,9 @@ export interface LLMCompletionResponse {
  * Callback for streaming LLM responses
  * @param chunk - The text chunk received
  * @param done - Whether the stream is complete
+ * @param type - The type of chunk: 'content' (default) or 'reasoning' (thinking/reasoning tokens)
  */
-export type LLMStreamCallback = (chunk: string, done: boolean) => void;
+export type LLMStreamCallback = (chunk: string, done: boolean, type?: 'content' | 'reasoning') => void;
 
 /**
  * Streaming completion request options
