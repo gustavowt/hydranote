@@ -2551,6 +2551,7 @@ export async function createExecutionPlan(
   replanContext?: string,
   workingContext?: WorkingContext,
   currentFileContext?: CurrentFileContext,
+  onReasoningChunk?: (chunk: string) => void,
 ): Promise<ExecutionPlan> {
   const runtimeContext = buildRuntimeContext();
 
@@ -2604,11 +2605,25 @@ ${currentFileContext.projectName ? `- Project: "${currentFileContext.projectName
   let lastError = "";
 
   for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
-    const response = await chatCompletion({
-      messages,
-      temperature: 0,
-      maxTokens: 2000,
-    });
+    let response;
+    if (onReasoningChunk) {
+      // Use streaming to capture reasoning tokens for UI display
+      response = await chatCompletionStreaming(
+        { messages, temperature: 0, maxTokens: 2000 },
+        (_chunk: string, _done: boolean, type?: 'content' | 'reasoning') => {
+          if (type === 'reasoning' && _chunk) {
+            onReasoningChunk(_chunk);
+          }
+          // Content chunks are accumulated by chatCompletionStreaming internally
+        }
+      );
+    } else {
+      response = await chatCompletion({
+        messages,
+        temperature: 0,
+        maxTokens: 2000,
+      });
+    }
 
     lastResponse = response.content.trim();
 
