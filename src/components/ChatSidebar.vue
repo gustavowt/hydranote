@@ -207,6 +207,11 @@
           <!-- Typing Indicator + Streaming Response (AFTER tool execution) -->
           <div v-if="isTyping || streamingContent" class="message assistant">
             <div class="message-bubble">
+              <!-- Reasoning indicator (subtle multi-line for thinking/reasoning models) -->
+              <div v-if="streamingReasoning && !streamingContent" class="reasoning-indicator">
+                <span class="reasoning-text" v-html="renderMarkdown(reasoningDisplayText)"></span>
+              </div>
+
               <!-- Streaming Content (LLM interpretation) -->
               <div 
                 v-if="streamingContent" 
@@ -223,15 +228,15 @@
                 <span v-if="currentStep.detail" class="step-detail">{{ currentStep.detail }}</span>
               </div>
               
-              <!-- Typing dots when no steps and no streaming -->
-              <div v-if="!currentStep && !streamingContent && toolLogs.length === 0" class="typing">
+              <!-- Typing dots when no steps, no streaming, and no reasoning -->
+              <div v-if="!currentStep && !streamingContent && !streamingReasoning && toolLogs.length === 0" class="typing">
                 <span class="dot"></span>
                 <span class="dot"></span>
                 <span class="dot"></span>
               </div>
               
               <!-- Generating response indicator (after tools complete) -->
-              <div v-if="toolLogs.length > 0 && !streamingContent && isTyping && toolLogs.every(l => l.status !== 'running')" class="generating-response">
+              <div v-if="toolLogs.length > 0 && !streamingContent && !streamingReasoning && isTyping && toolLogs.every(l => l.status !== 'running')" class="generating-response">
                 <ion-spinner name="dots" class="response-spinner" />
                 <span>Generating response...</span>
               </div>
@@ -549,6 +554,7 @@ const isApplyingUpdate = ref(false);
 // Streaming state
 const executionSteps = ref<ExecutionStep[]>([]);
 const streamingContent = ref('');
+const streamingReasoning = ref('');
 
 // Planner flow state
 const pendingPlan = ref<ExecutionPlan | null>(null);
@@ -583,6 +589,16 @@ const currentStep = computed(() => {
   const running = executionSteps.value.find(s => s.status === 'running');
   if (running) return running;
   return executionSteps.value[executionSteps.value.length - 1];
+});
+
+// Display text for reasoning stream - shows the last ~3 lines of reasoning content
+const reasoningDisplayText = computed(() => {
+  const text = streamingReasoning.value;
+  if (!text) return '';
+  // Take the last ~300 characters to give roughly 3 lines of text
+  const tail = text.length > 300 ? text.slice(-300) : text;
+  // Clean up: normalize whitespace, trim
+  return tail.replace(/\s+/g, ' ').trim();
 });
 
 const projectQuickActions = [
@@ -669,6 +685,7 @@ async function handleNewChat() {
   currentPlanStep.value = null;
   toolLogs.value = [];
   streamingContent.value = '';
+  streamingReasoning.value = '';
   currentToolStreamingContent.value = '';
   pendingFinalAnswer.value = '';
   pendingToolExecutions.value = [];
@@ -786,6 +803,7 @@ async function sendMessage(text?: string) {
   isTyping.value = true;
   executionSteps.value = [];
   streamingContent.value = '';
+  streamingReasoning.value = '';
   toolLogs.value = [];
   formattedToolOutputs.value = [];
   isToolLogExpanded.value = true;
@@ -827,7 +845,7 @@ async function sendMessage(text?: string) {
       projectName: props.projects.find((p: Project) => p.id === props.currentFile?.projectId)?.name,
     } : undefined;
 
-    // Phase 1: Create execution plan
+    // Phase 1: Create execution plan (with reasoning stream for thinking models)
     const plan = await createExecutionPlan(
       messageText,
       selectedProjectId.value,
@@ -836,7 +854,13 @@ async function sendMessage(text?: string) {
       undefined, // replanContext
       isGlobalMode.value ? workingContext.value : undefined,
       currentFileContext,
+      (chunk: string) => {
+        streamingReasoning.value += chunk;
+        scrollToBottom();
+      },
     );
+    // Clear reasoning when plan is ready (content streaming will take over)
+    streamingReasoning.value = '';
 
     // Handle clarification request
     if (plan.needsClarification) {
@@ -876,11 +900,21 @@ async function sendMessage(text?: string) {
       });
 
       // Stream response directly
+      console.log('[ChatSidebar] Starting streaming with reasoning support');
       const response = await chatCompletionStreaming(
         { messages: llmMessages },
-        (chunk: string, done: boolean) => {
-          if (done) return;
-          streamingContent.value += chunk;
+        (chunk: string, done: boolean, type?: 'content' | 'reasoning') => {
+          if (done) {
+            console.log('[ChatSidebar] Stream done. Reasoning accumulated:', streamingReasoning.value.length, 'chars');
+            streamingReasoning.value = '';
+            return;
+          }
+          if (type === 'reasoning') {
+            console.log('[ChatSidebar] Reasoning chunk received:', chunk.substring(0, 80));
+            streamingReasoning.value += chunk;
+          } else {
+            streamingContent.value += chunk;
+          }
           scrollToBottom();
         }
       );
@@ -889,6 +923,7 @@ async function sendMessage(text?: string) {
       messages.value = [...messages.value, assistantMessage];
       isTyping.value = false;
       streamingContent.value = '';
+      streamingReasoning.value = '';
       await scrollToBottom();
       return;
     }
@@ -922,6 +957,7 @@ async function sendMessage(text?: string) {
   } finally {
     executionSteps.value = [];
     streamingContent.value = '';
+    streamingReasoning.value = '';
     await scrollToBottom();
   }
 }
@@ -981,9 +1017,16 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
           }
           // Don't clear on done - keep visible until execution completes
         },
-        onStreamChunk: (chunk: string, done: boolean) => {
-          if (done) return;
-          streamingContent.value += chunk;
+        onStreamChunk: (chunk: string, done: boolean, type?: 'content' | 'reasoning') => {
+          if (done) {
+            streamingReasoning.value = '';
+            return;
+          }
+          if (type === 'reasoning') {
+            streamingReasoning.value += chunk;
+          } else {
+            streamingContent.value += chunk;
+          }
           scrollToBottom();
         },
         skipInterpretation: false,
@@ -1026,6 +1069,7 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
     currentPlanStep.value = null;
     isTyping.value = false;
     streamingContent.value = '';
+    streamingReasoning.value = '';
     currentToolStreamingContent.value = '';
     // Collapse the tool log (keep it visible but collapsed)
     isToolLogExpanded.value = false;
@@ -1590,9 +1634,16 @@ async function handleExecutePlan() {
           }
           // Don't clear on done - keep visible until execution completes
         },
-        onStreamChunk: (chunk: string, done: boolean) => {
-          if (done) return;
-          streamingContent.value += chunk;
+        onStreamChunk: (chunk: string, done: boolean, type?: 'content' | 'reasoning') => {
+          if (done) {
+            streamingReasoning.value = '';
+            return;
+          }
+          if (type === 'reasoning') {
+            streamingReasoning.value += chunk;
+          } else {
+            streamingContent.value += chunk;
+          }
           scrollToBottom();
         },
       }
@@ -1638,6 +1689,7 @@ async function handleExecutePlan() {
     currentPlanStep.value = null;
     isTyping.value = false;
     streamingContent.value = '';
+    streamingReasoning.value = '';
     currentToolStreamingContent.value = '';
     // Collapse the tool log (keep it visible but collapsed)
     isToolLogExpanded.value = false;
@@ -2684,6 +2736,35 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 @keyframes typing {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
   40% { transform: scale(1); opacity: 1; }
+}
+
+/* Reasoning Indicator - Subtle single-line display for thinking/reasoning models */
+.reasoning-indicator {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 2px;
+  overflow: hidden;
+}
+
+.reasoning-indicator .reasoning-text {
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--hn-text-muted);
+  opacity: 0.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+  max-width: 100%;
+  letter-spacing: 0.01em;
+  animation: reasoning-fade 2s ease-in-out infinite;
+}
+
+@keyframes reasoning-fade {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.6; }
 }
 
 /* Current Step Indicator - Single Line */
