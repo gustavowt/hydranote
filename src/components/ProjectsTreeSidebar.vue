@@ -851,20 +851,19 @@ defineExpose({ refresh, revealFile });
 .projects-tree-sidebar {
   display: flex;
   flex-direction: column;
+  flex: none;
   width: 280px;
-  min-width: 280px;
-  max-width: 280px;
   height: 100%;
   background: var(--hn-bg-deep);
   border-right: 1px solid var(--hn-border-default);
-  transition: all 0.2s ease;
+  transition: width 0.2s ease;
   overflow: hidden;
 }
 
 .projects-tree-sidebar.collapsed {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
   background: transparent;
   border-right: none;
   position: relative;

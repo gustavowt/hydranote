@@ -302,7 +302,7 @@
 
       <!-- Split Mode -->
       <div v-else-if="viewMode === 'split'" class="split-pane">
-        <div class="editor-pane">
+        <div class="editor-pane" :style="{ width: splitLeftWidth + '%' }">
           <textarea 
             ref="splitEditorRef"
             v-model="content"
@@ -314,7 +314,11 @@
             :disabled="saving"
           ></textarea>
         </div>
-        <div class="split-preview markdown-preview" v-html="renderedContent"></div>
+        <div
+          class="split-resizer"
+          @mousedown="startSplitResize"
+        ></div>
+        <div class="split-preview markdown-preview" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent"></div>
       </div>
 
       <!-- View Mode -->
@@ -491,6 +495,40 @@ const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
+
+// Split resizer state
+const splitLeftWidth = ref(50); // percentage
+let isResizingSplit = false;
+let splitPaneEl: HTMLElement | null = null;
+
+function startSplitResize(e: MouseEvent) {
+  e.preventDefault();
+  isResizingSplit = true;
+  splitPaneEl = (e.target as HTMLElement).parentElement;
+  document.addEventListener('mousemove', onSplitResize);
+  document.addEventListener('mouseup', stopSplitResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function onSplitResize(e: MouseEvent) {
+  if (!isResizingSplit || !splitPaneEl) return;
+  const rect = splitPaneEl.getBoundingClientRect();
+  const offsetX = e.clientX - rect.left;
+  let pct = (offsetX / rect.width) * 100;
+  // Clamp between 20% and 80%
+  pct = Math.max(20, Math.min(80, pct));
+  splitLeftWidth.value = pct;
+}
+
+function stopSplitResize() {
+  isResizingSplit = false;
+  splitPaneEl = null;
+  document.removeEventListener('mousemove', onSplitResize);
+  document.removeEventListener('mouseup', stopSplitResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+}
 
 // Actions menu state
 const showActionsMenu = ref(false);
@@ -796,6 +834,8 @@ onUnmounted(() => {
   if (selectionHideTimeout) {
     clearTimeout(selectionHideTimeout);
   }
+  // Cleanup split resizer listeners
+  stopSplitResize();
 });
 
 async function handleSave() {
@@ -1711,11 +1751,37 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   display: flex;
   width: 100%;
   height: 100%;
-  min-width: 0; /* Allow flexbox to shrink */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .split-pane .editor-pane {
-  border-right: 1px solid var(--hn-border-default);
+  flex: none;
+  width: 50%;
+  overflow: hidden;
+}
+
+.split-pane .split-preview {
+  flex: none;
+  width: 50%;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 20px 24px;
+}
+
+.split-resizer {
+  flex: none;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--hn-border-default);
+  transition: background 0.15s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.split-resizer:hover,
+.split-resizer:active {
+  background: var(--hn-accent-primary, #58a6ff);
 }
 
 .markdown-textarea {

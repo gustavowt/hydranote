@@ -65,7 +65,7 @@
 
       <!-- Split Mode -->
       <div v-else-if="viewMode === 'split'" class="split-container">
-        <div class="split-editor">
+        <div class="split-editor" :style="{ width: splitLeftWidth + '%' }">
           <textarea 
             ref="splitEditorRef"
             v-model="editContent"
@@ -74,14 +74,18 @@
             @input="handleInput"
           ></textarea>
         </div>
-        <div class="split-preview markdown-view" v-html="renderedContent"></div>
+        <div
+          class="split-resizer"
+          @mousedown="startSplitResize"
+        ></div>
+        <div class="split-preview markdown-view" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent"></div>
       </div>
     </ion-content>
   </ion-modal>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js';
@@ -180,6 +184,43 @@ const editContent = ref('');
 const originalContent = ref('');
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
+
+// Split resizer state
+const splitLeftWidth = ref(50); // percentage
+let isResizingSplit = false;
+let splitPaneEl: HTMLElement | null = null;
+
+function startSplitResize(e: MouseEvent) {
+  e.preventDefault();
+  isResizingSplit = true;
+  splitPaneEl = (e.target as HTMLElement).parentElement;
+  document.addEventListener('mousemove', onSplitResize);
+  document.addEventListener('mouseup', stopSplitResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function onSplitResize(e: MouseEvent) {
+  if (!isResizingSplit || !splitPaneEl) return;
+  const rect = splitPaneEl.getBoundingClientRect();
+  const offsetX = e.clientX - rect.left;
+  let pct = (offsetX / rect.width) * 100;
+  pct = Math.max(20, Math.min(80, pct));
+  splitLeftWidth.value = pct;
+}
+
+function stopSplitResize() {
+  isResizingSplit = false;
+  splitPaneEl = null;
+  document.removeEventListener('mousemove', onSplitResize);
+  document.removeEventListener('mouseup', stopSplitResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+}
+
+onUnmounted(() => {
+  stopSplitResize();
+});
 
 const isEditing = computed(() => viewMode.value !== 'view');
 const hasChanges = computed(() => editContent.value !== originalContent.value);
@@ -528,20 +569,39 @@ function downloadFile() {
 .split-container {
   display: flex;
   height: 100%;
+  overflow: hidden;
 }
 
 .split-editor {
-  flex: 1;
-  border-right: 1px solid #3d3d5c;
+  flex: none;
+  width: 50%;
+  overflow: hidden;
 }
 
 .split-editor .markdown-editor {
   height: 100%;
 }
 
+.split-resizer {
+  flex: none;
+  width: 4px;
+  cursor: col-resize;
+  background: #3d3d5c;
+  transition: background 0.15s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.split-resizer:hover,
+.split-resizer:active {
+  background: #58a6ff;
+}
+
 .split-preview {
-  flex: 1;
+  flex: none;
+  width: 50%;
   overflow-y: auto;
+  overflow-x: auto;
 }
 </style>
 

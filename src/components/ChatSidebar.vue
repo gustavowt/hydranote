@@ -2204,20 +2204,19 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 .chat-sidebar {
   display: flex;
   flex-direction: column;
+  flex: none;
   width: 360px;
-  min-width: 360px;
-  max-width: 360px;
   height: 100%;
   background: var(--hn-bg-deep);
   border-left: 1px solid var(--hn-border-default);
-  transition: all 0.2s ease;
+  transition: width 0.2s ease;
   overflow: hidden;
 }
 
 .chat-sidebar.collapsed {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
   background: transparent;
   border-left: none;
   position: relative;
