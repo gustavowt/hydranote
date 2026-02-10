@@ -41,6 +41,7 @@
       <!-- Left Sidebar: Projects Tree -->
       <ProjectsTreeSidebar
         ref="projectsTreeRef"
+        :style="leftSidebarStyle"
         :projects="projects"
         :selected-project-id="selectedProjectId"
         :selected-file-id="selectedFileId"
@@ -51,7 +52,15 @@
         @project-renamed="handleProjectRenamed"
         @file-created="handleFileCreatedFromSidebar"
         @file-moved="handleFileMoved"
+        @collapse-change="(v: boolean) => leftCollapsed = v"
       />
+
+      <!-- Left Resizer -->
+      <div
+        v-show="!leftCollapsed"
+        class="workspace-resizer"
+        @mousedown="startLeftResize"
+      ></div>
 
       <!-- Center: Editor (routes based on file type) -->
       <!-- PDF Viewer (readonly, loads from file system) -->
@@ -87,9 +96,17 @@
         @selection-to-chat="handleSelectionToChat"
       />
 
+      <!-- Right Resizer -->
+      <div
+        v-show="!rightCollapsed"
+        class="workspace-resizer"
+        @mousedown="startRightResize"
+      ></div>
+
       <!-- Right Sidebar: Chat -->
       <ChatSidebar
         ref="chatSidebarRef"
+        :style="rightSidebarStyle"
         :projects="projects"
         :initial-project-id="selectedProjectId"
         :current-file="currentFile"
@@ -97,6 +114,7 @@
         @file-updated="handleFileUpdated"
         @file-created="handleFileCreatedFromChat"
         @projects-changed="handleProjectsChanged"
+        @collapse-change="(v: boolean) => rightCollapsed = v"
       />
     </div>
 
@@ -143,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage,
@@ -207,6 +225,76 @@ const currentFile = ref<ProjectFile | null>(null);
 const editorInitialContent = ref('');
 const pdfData = ref<ArrayBuffer | null>(null);
 
+// Sidebar resizer state
+const leftSidebarWidth = ref(280); // px
+const rightSidebarWidth = ref(360); // px
+const leftCollapsed = ref(false);
+const rightCollapsed = ref(false);
+let activeResizer: 'left' | 'right' | null = null;
+
+const leftSidebarStyle = computed(() => {
+  if (leftCollapsed.value) return {};
+  return {
+    width: leftSidebarWidth.value + 'px',
+    minWidth: leftSidebarWidth.value + 'px',
+    maxWidth: leftSidebarWidth.value + 'px',
+    transition: activeResizer ? 'none' : undefined,
+  };
+});
+
+const rightSidebarStyle = computed(() => {
+  if (rightCollapsed.value) return {};
+  return {
+    width: rightSidebarWidth.value + 'px',
+    minWidth: rightSidebarWidth.value + 'px',
+    maxWidth: rightSidebarWidth.value + 'px',
+    transition: activeResizer ? 'none' : undefined,
+  };
+});
+
+function startLeftResize(e: MouseEvent) {
+  e.preventDefault();
+  activeResizer = 'left';
+  document.addEventListener('mousemove', onWorkspaceResize);
+  document.addEventListener('mouseup', stopWorkspaceResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function startRightResize(e: MouseEvent) {
+  e.preventDefault();
+  activeResizer = 'right';
+  document.addEventListener('mousemove', onWorkspaceResize);
+  document.addEventListener('mouseup', stopWorkspaceResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function onWorkspaceResize(e: MouseEvent) {
+  if (!activeResizer) return;
+  const layout = document.querySelector('.workspace-layout') as HTMLElement;
+  if (!layout) return;
+  const rect = layout.getBoundingClientRect();
+
+  if (activeResizer === 'left') {
+    let w = e.clientX - rect.left;
+    w = Math.max(180, Math.min(500, w));
+    leftSidebarWidth.value = w;
+  } else {
+    let w = rect.right - e.clientX;
+    w = Math.max(280, Math.min(600, w));
+    rightSidebarWidth.value = w;
+  }
+}
+
+function stopWorkspaceResize() {
+  activeResizer = null;
+  document.removeEventListener('mousemove', onWorkspaceResize);
+  document.removeEventListener('mouseup', stopWorkspaceResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+}
+
 // Modal state
 const showCreateProjectModal = ref(false);
 
@@ -258,6 +346,9 @@ onUnmounted(() => {
   
   // Remove global keyboard shortcut listener
   document.removeEventListener('keydown', handleGlobalKeydown);
+
+  // Clean up workspace resizer listeners
+  stopWorkspaceResize();
 });
 
 async function loadProjects() {
@@ -767,6 +858,20 @@ async function handleCreateProject() {
   height: calc(100vh - 56px);
   overflow: hidden;
   background: var(--hn-bg-deepest);
+}
+
+.workspace-resizer {
+  flex: none;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--hn-border-default);
+  transition: background 0.15s ease;
+  z-index: 2;
+}
+
+.workspace-resizer:hover,
+.workspace-resizer:active {
+  background: var(--hn-accent-primary, #58a6ff);
 }
 
 /* Modal Styling */
