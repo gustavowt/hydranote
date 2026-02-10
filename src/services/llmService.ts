@@ -141,6 +141,28 @@ function isOpenAIReasoningModel(model: string): boolean {
   return reasoningPrefixes.some(rm => model.startsWith(rm));
 }
 
+/**
+ * Check if the Anthropic model supports extended thinking
+ * Extended thinking is available on Claude 3.7 Sonnet and later models (including Claude 4.x)
+ * Model names: claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5, claude-sonnet-4-20250514, etc.
+ */
+function isAnthropicThinkingModel(model: string): boolean {
+  const thinkingPrefixes = [
+    'claude-3-7', 'claude-3.7',           // Claude 3.7 Sonnet
+    'claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4',  // Claude 4.x named format
+    'claude-4',                             // Claude 4 generic prefix
+  ];
+  return thinkingPrefixes.some(prefix => model.startsWith(prefix));
+}
+
+/**
+ * Check if the Google model supports thinking (Gemini 2.5 and 3 series)
+ * Note: gemini-2.5-flash-lite does not think by default but can be enabled
+ */
+function isGoogleThinkingModel(model: string): boolean {
+  return model.startsWith('gemini-2.5') || model.startsWith('gemini-3') || model.includes('thinking');
+}
+
 async function callOpenAI(
   request: LLMCompletionRequest,
   config: LLMSettings['openai']
@@ -157,6 +179,8 @@ async function callOpenAI(
   if (isReasoning) {
     // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
+    // Disable reasoning to avoid long wait times (reasoning tokens are not exposed via Chat Completions API)
+    body.reasoning_effort = 'none';
   } else {
     // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
@@ -325,11 +349,13 @@ async function callGoogle(
     }
   }
 
+  const isThinking = isGoogleThinkingModel(config.model);
+
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
-      temperature: request.temperature ?? 0.7,
       maxOutputTokens: request.maxTokens ?? 4096,
+      ...(isThinking ? {} : { temperature: request.temperature ?? 0.7 }),
     },
   };
 
@@ -355,8 +381,9 @@ async function callGoogle(
 
   const data = await response.json();
   
-  // Extract text from response
+  // Extract text from response (filter out thought parts for thinking models)
   const content = data.candidates?.[0]?.content?.parts
+    ?.filter((part: { text: string; thought?: boolean }) => !part.thought)
     ?.map((part: { text: string }) => part.text)
     .join('') || '';
 
@@ -393,6 +420,8 @@ async function streamOpenAI(
   if (isReasoning) {
     // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
+    // Disable reasoning to avoid long wait times (reasoning tokens are not exposed via Chat Completions API)
+    body.reasoning_effort = 'none';
   } else {
     // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
@@ -572,12 +601,27 @@ async function streamAnthropic(
     }
   }
 
+  const isThinking = isAnthropicThinkingModel(config.model);
+  const maxTokens = request.maxTokens ?? (isThinking ? 16384 : 4096);
+  // Extended thinking requires enough token budget: max_tokens must be > budget_tokens
+  // Only enable thinking when there's enough room (at least 2000 tokens for budget + output)
+  const canThink = isThinking && maxTokens >= 2000;
+
   const body: Record<string, unknown> = {
     model: config.model,
-    max_tokens: request.maxTokens ?? 4096,
+    max_tokens: canThink ? Math.max(maxTokens, 16384) : maxTokens,
     messages,
     stream: true,
   };
+
+  // Enable extended thinking for supported models (when budget allows)
+  if (canThink) {
+    const budgetTokens = Math.min(10000, Math.max(1024, Math.floor(maxTokens * 0.6)));
+    body.thinking = {
+      type: 'enabled',
+      budget_tokens: budgetTokens,
+    };
+  }
 
   if (systemPrompt) {
     body.system = systemPrompt;
@@ -588,7 +632,7 @@ async function streamAnthropic(
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': config.apiKey,
-      'anthropic-version': '2023-06-01',
+      'anthropic-version': isThinking ? '2025-04-15' : '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify(body),
@@ -624,10 +668,21 @@ async function streamAnthropic(
         try {
           const json = JSON.parse(trimmed.slice(6));
           
-          // Handle content_block_delta events
-          if (json.type === 'content_block_delta' && json.delta?.text) {
+          // Handle thinking_delta events (extended thinking)
+          if (json.type === 'content_block_delta' && json.delta?.type === 'thinking_delta' && json.delta?.thinking) {
+            onChunk(json.delta.thinking, false, 'reasoning');
+          }
+          
+          // Handle text content_block_delta events
+          if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta' && json.delta?.text) {
             fullContent += json.delta.text;
-            onChunk(json.delta.text, false);
+            onChunk(json.delta.text, false, 'content');
+          }
+          
+          // Handle legacy format (non-thinking models)
+          if (json.type === 'content_block_delta' && json.delta?.text && !json.delta?.type) {
+            fullContent += json.delta.text;
+            onChunk(json.delta.text, false, 'content');
           }
           
           // Handle message_stop event
@@ -679,13 +734,22 @@ async function streamGoogle(
     }
   }
 
+  const isThinking = isGoogleThinkingModel(config.model);
+  // Only include thought summaries when there's enough output token room
+  const includeThoughts = isThinking && (request.maxTokens ?? 4096) >= 2000;
+
+  console.log('[streamGoogle] model:', config.model, 'isThinking:', isThinking, 'includeThoughts:', includeThoughts, 'maxTokens:', request.maxTokens);
+
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
-      temperature: request.temperature ?? 0.7,
       maxOutputTokens: request.maxTokens ?? 4096,
+      ...(isThinking ? {} : { temperature: request.temperature ?? 0.7 }),
+      ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
     },
   };
+
+  console.log('[streamGoogle] Request body:', JSON.stringify(body, null, 2));
 
   if (systemInstruction) {
     body.systemInstruction = { parts: [{ text: systemInstruction }] };
@@ -704,6 +768,7 @@ async function streamGoogle(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
+    console.error('[streamGoogle] API error:', error);
     throw new Error(error.error?.message || `Gemini API error: ${response.status}`);
   }
 
@@ -715,6 +780,7 @@ async function streamGoogle(
   const decoder = new TextDecoder();
   let fullContent = '';
   let buffer = '';
+  let debugChunkCount = 0;
 
   try {
     while (true) {
@@ -732,14 +798,23 @@ async function streamGoogle(
         try {
           const json = JSON.parse(trimmed.slice(6));
           
-          // Extract text from candidates
-          const text = json.candidates?.[0]?.content?.parts
-            ?.map((part: { text: string }) => part.text)
-            .join('') || '';
+          // Extract parts from candidates
+          const parts = json.candidates?.[0]?.content?.parts || [];
           
-          if (text) {
-            fullContent += text;
-            onChunk(text, false);
+          // Debug: log first few chunks to see the raw structure
+          if (debugChunkCount < 5) {
+            console.log(`[streamGoogle] Chunk #${debugChunkCount}:`, JSON.stringify(parts));
+            debugChunkCount++;
+          }
+          
+          for (const part of parts) {
+            // Gemini 2.5+ models flag thinking parts with thought: true
+            if (part.thought && part.text) {
+              onChunk(part.text, false, 'reasoning');
+            } else if (part.text) {
+              fullContent += part.text;
+              onChunk(part.text, false, 'content');
+            }
           }
         } catch {
           // Skip malformed JSON lines
