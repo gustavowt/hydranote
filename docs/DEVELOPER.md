@@ -453,6 +453,41 @@ Use GitHub Actions for cross-platform builds (see `.github/workflows/build-windo
 
 ---
 
+### Docker Development
+
+HydraNote includes a Docker-based dev workflow for contributor onboarding.
+
+**Files:**
+- `Dockerfile.dev` - Development image for Vite app
+- `docker-compose.yml` - Local container orchestration with live mount
+- `.dockerignore` - Keeps build context lean
+- `.env.example` - Example environment variables for local/container setups
+
+**Run:**
+```bash
+docker compose up --build
+```
+
+App URL: `http://localhost:5173`
+
+---
+
+### Open Source Community Files
+
+For public contribution workflows, this repository includes:
+
+- `LICENSE` (MIT)
+- `CONTRIBUTING.md`
+- `CODE_OF_CONDUCT.md`
+- `.github/ISSUE_TEMPLATE/bug_report.md`
+- `.github/ISSUE_TEMPLATE/feature_request.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `.github/GOOD_FIRST_ISSUES.md`
+
+When adding major features, keep these files aligned with the actual workflow and update contributor-facing docs.
+
+---
+
 ## File Structure
 
 ```
