@@ -1,0 +1,8 @@
+node_modules
+dist
+electron/dist
+.git
+.git.bak
+npm-debug.log*
+yarn-error.log*
+.DS_Store

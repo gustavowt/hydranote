@@ -1,0 +1,16 @@
+services:
+  hydranote:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - hydranote_node_modules:/app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+
+volumes:
+  hydranote_node_modules:
