@@ -327,6 +327,14 @@ Global fuzzy search across all projects (files and content).
 | Ollama | Local models (Llama, Mistral, etc.) |
 | Hugging Face Local | GGUF models via node-llama-cpp (Electron only) |
 
+**OpenAI reasoning model request behavior:**
+- For reasoning-capable OpenAI models (`o*` and `gpt-5*`), HydraNote sends `max_completion_tokens` and a valid `reasoning_effort` (`low` by default).
+- `reasoning_effort: "none"` is not used because OpenAI reasoning models reject it.
+
+**Anthropic request behavior:**
+- HydraNote sends `anthropic-version: "2023-06-01"` for both regular and streaming Claude requests.
+- Keep this header on a valid Anthropic API version; unsupported versions are rejected before model execution.
+
 ---
 
 ## File System Sync

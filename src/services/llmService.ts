@@ -18,6 +18,7 @@ import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
 import { isLocalModelsAvailable, runInference, getRuntimeStatus, loadModel } from './localModelService';
 
 const STORAGE_KEY = 'hydranote_llm_settings';
+const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ============================================
 // Settings Management
@@ -142,6 +143,12 @@ function isOpenAIReasoningModel(model: string): boolean {
 }
 
 /**
+ * Default reasoning effort for OpenAI reasoning-capable models.
+ * OpenAI reasoning models reject "none" and require low/medium/high/xhigh.
+ */
+const OPENAI_DEFAULT_REASONING_EFFORT = 'low';
+
+/**
  * Check if the Anthropic model supports extended thinking
  * Extended thinking is available on Claude 3.7 Sonnet and later models (including Claude 4.x)
  * Model names: claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5, claude-sonnet-4-20250514, etc.
@@ -179,8 +186,8 @@ async function callOpenAI(
   if (isReasoning) {
     // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
-    // Disable reasoning to avoid long wait times (reasoning tokens are not exposed via Chat Completions API)
-    body.reasoning_effort = 'none';
+    // Reasoning models require a supported reasoning_effort value.
+    body.reasoning_effort = OPENAI_DEFAULT_REASONING_EFFORT;
   } else {
     // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
@@ -295,7 +302,7 @@ async function callAnthropic(
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': config.apiKey,
-      'anthropic-version': '2023-06-01',
+      'anthropic-version': ANTHROPIC_API_VERSION,
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify(body),
@@ -420,8 +427,8 @@ async function streamOpenAI(
   if (isReasoning) {
     // GPT-5 series and o-series use max_completion_tokens and don't support temperature
     body.max_completion_tokens = request.maxTokens ?? 16384;
-    // Disable reasoning to avoid long wait times (reasoning tokens are not exposed via Chat Completions API)
-    body.reasoning_effort = 'none';
+    // Reasoning models require a supported reasoning_effort value.
+    body.reasoning_effort = OPENAI_DEFAULT_REASONING_EFFORT;
   } else {
     // Older models use max_tokens and support temperature
     body.temperature = request.temperature ?? 0.7;
@@ -632,7 +639,7 @@ async function streamAnthropic(
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': config.apiKey,
-      'anthropic-version': isThinking ? '2025-04-15' : '2023-06-01',
+      'anthropic-version': ANTHROPIC_API_VERSION,
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify(body),
