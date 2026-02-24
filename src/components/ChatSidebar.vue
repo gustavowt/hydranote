@@ -145,6 +145,22 @@
                 </div>
               </div>
             </div>
+
+            <!-- Persisted attachments for this message -->
+            <div v-if="message.attachments && message.attachments.length > 0" class="attachment-cards">
+              <div
+                v-for="att in message.attachments"
+                :key="att.id"
+                class="attachment-card"
+                @click="activeAttachment = att"
+              >
+                <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
+                <div class="attachment-card-body">
+                  <span class="attachment-card-title">{{ att.title }}</span>
+                  <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Inline Tool Indicators (real-time during execution) -->
@@ -250,6 +266,21 @@
                 class="message-content markdown-content"
                 v-html="renderMarkdown(pendingFinalAnswer)"
               ></div>
+            </div>
+            <!-- Pending attachments (not yet persisted) -->
+            <div v-if="pendingAttachments.length > 0" class="attachment-cards">
+              <div
+                v-for="att in pendingAttachments"
+                :key="att.id"
+                class="attachment-card"
+                @click="activeAttachment = att"
+              >
+                <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
+                <div class="attachment-card-body">
+                  <span class="attachment-card-title">{{ att.title }}</span>
+                  <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -407,6 +438,35 @@
         @select="handleAutocompleteSelect"
         @close="closeAutocomplete"
       />
+
+    <!-- Attachment Overlay Panel -->
+    <div v-if="activeAttachment" class="attachment-overlay" @click.self="activeAttachment = null">
+      <div class="attachment-panel">
+        <div class="attachment-panel-header">
+          <div class="attachment-panel-title">
+            <ion-icon :icon="documentTextOutline" class="attachment-panel-icon" />
+            <span>{{ activeAttachment.title }}</span>
+          </div>
+          <div class="attachment-panel-actions">
+            <ion-button
+              v-if="selectedProjectId"
+              fill="clear"
+              size="small"
+              class="attachment-panel-save"
+              :disabled="isSavingAttachment"
+              @click="handleSaveAttachment"
+            >
+              <ion-icon slot="start" :icon="saveOutline" />
+              Save
+            </ion-button>
+            <ion-button fill="clear" size="small" class="attachment-panel-close" @click="activeAttachment = null">
+              <ion-icon slot="icon-only" :icon="closeOutline" />
+            </ion-button>
+          </div>
+        </div>
+        <div class="attachment-panel-body markdown-content" v-html="renderMarkdown(activeAttachment.content)"></div>
+      </div>
+    </div>
     </template>
   </div>
 </template>
@@ -441,8 +501,9 @@ import {
   closeCircle,
   listOutline,
   playOutline,
+  saveOutline,
 } from 'ionicons/icons';
-import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, WorkingContext, ToolResult, ProjectFile } from '@/types';
+import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, ToolAttachment, WorkingContext, ToolResult, ProjectFile } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
   getOrCreateSession,
@@ -458,6 +519,7 @@ import {
   getAllProjects,
   getAllFilesForAutocomplete,
   ensureFileSystemPermission,
+  createFile,
   // Planner-Executor-Checker flow
   createExecutionPlan,
   runPlannerFlow,
@@ -577,6 +639,8 @@ const currentRunningToolId = computed(() => {
   return running?.id || null;
 });
 const pendingToolExecutions = ref<ToolExecutionRecord[]>([]); // Tool executions to attach to the next assistant message
+const pendingAttachments = ref<ToolAttachment[]>([]); // Attachments from tool execution to persist with the message
+const activeAttachment = ref<ToolAttachment | null>(null); // Currently viewed attachment in the overlay
 
 // Chat history state
 const showHistoryDropdown = ref(false);
@@ -629,6 +693,44 @@ function handleToggleSelection(event: CustomEvent<string>) {
   expandedSelectionIds.value = new Set(expandedSelectionIds.value);
 }
 
+// Close attachment overlay on Escape key
+function handleEscapeKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' && activeAttachment.value) {
+    activeAttachment.value = null;
+  }
+}
+
+// Save the active attachment as a markdown file in the current project root
+const isSavingAttachment = ref(false);
+async function handleSaveAttachment() {
+  if (!activeAttachment.value || !selectedProjectId.value || isSavingAttachment.value) return;
+
+  isSavingAttachment.value = true;
+  try {
+    // Derive a filename from the attachment title
+    const baseName = activeAttachment.value.title
+      .replace(/[^a-zA-Z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+    const fileName = `${baseName}.md`;
+
+    const file = await createFile(
+      selectedProjectId.value,
+      fileName,
+      activeAttachment.value.content,
+      'md',
+    );
+
+    emit('file-created', selectedProjectId.value, file.id, file.name);
+    activeAttachment.value = null;
+  } catch (error) {
+    // Silently handle — the file may already exist or project is invalid
+  } finally {
+    isSavingAttachment.value = false;
+  }
+}
+
 onMounted(async () => {
   if (props.initialProjectId) {
     selectedScope.value = props.initialProjectId;
@@ -638,10 +740,12 @@ onMounted(async () => {
   
   // Listen for selection toggle events from rendered HTML
   window.addEventListener('toggle-selection', handleToggleSelection as EventListener);
+  window.addEventListener('keydown', handleEscapeKey);
 });
 
 onUnmounted(() => {
   window.removeEventListener('toggle-selection', handleToggleSelection as EventListener);
+  window.removeEventListener('keydown', handleEscapeKey);
 });
 
 watch(() => props.initialProjectId, async (newId) => {
@@ -689,6 +793,8 @@ async function handleNewChat() {
   currentToolStreamingContent.value = '';
   pendingFinalAnswer.value = '';
   pendingToolExecutions.value = [];
+  pendingAttachments.value = [];
+  activeAttachment.value = null;
   executionSteps.value = [];
   formattedToolOutputs.value = [];
   isToolLogExpanded.value = true;
@@ -783,7 +889,8 @@ async function sendMessage(text?: string) {
 
   // Commit any pending final answer from previous query to messages
   if (pendingFinalAnswer.value) {
-    const prevAnswer = await addMessage(sessionId.value, 'assistant', pendingFinalAnswer.value);
+    const attachmentsToSave = pendingAttachments.value.length > 0 ? [...pendingAttachments.value] : undefined;
+    const prevAnswer = await addMessage(sessionId.value, 'assistant', pendingFinalAnswer.value, undefined, attachmentsToSave);
     // Attach tool executions to the message for persistence
     if (pendingToolExecutions.value.length > 0) {
       prevAnswer.toolExecutions = [...pendingToolExecutions.value];
@@ -791,6 +898,7 @@ async function sendMessage(text?: string) {
     messages.value = [...messages.value, prevAnswer];
     pendingFinalAnswer.value = '';
     pendingToolExecutions.value = [];
+    pendingAttachments.value = [];
     toolLogs.value = [];
   }
 
@@ -1045,6 +1153,11 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
       pendingFinalAnswer.value = result.response;
       // Capture tool executions for persistence with the message
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    }
+
+    // Capture attachments from tool results (e.g. summaries)
+    if (result.attachments && result.attachments.length > 0) {
+      pendingAttachments.value = [...result.attachments];
     }
 
     // Handle file creations
@@ -1663,6 +1776,11 @@ async function handleExecutePlan() {
       pendingFinalAnswer.value = result.response;
       // Capture tool executions for persistence with the message
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    }
+
+    // Capture attachments from tool results (e.g. summaries)
+    if (result.attachments && result.attachments.length > 0) {
+      pendingAttachments.value = [...result.attachments];
     }
 
     // Handle file creations
@@ -4076,5 +4194,179 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 
 .selection-code .hljs-built_in {
   color: #82aaff;
+}
+
+/* ============================================
+   Attachment Cards
+   ============================================ */
+
+.attachment-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 12px;
+}
+
+.attachment-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-subtle);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.attachment-card:hover {
+  background: var(--hn-bg-elevated);
+  border-color: var(--hn-purple);
+}
+
+.attachment-card-icon {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+  color: var(--hn-purple);
+  margin-top: 1px;
+}
+
+.attachment-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.attachment-card-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--hn-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-card-preview {
+  font-size: 0.72rem;
+  color: var(--hn-text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ============================================
+   Attachment Overlay Panel
+   ============================================ */
+
+.attachment-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlayFadeIn 0.15s ease;
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.attachment-panel {
+  width: 70%;
+  max-width: 800px;
+  height: 80%;
+  max-height: 80vh;
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  animation: panelSlideIn 0.2s ease;
+}
+
+@keyframes panelSlideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.attachment-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hn-border-subtle);
+  flex-shrink: 0;
+}
+
+.attachment-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--hn-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-panel-icon {
+  font-size: 1.1rem;
+  color: var(--hn-purple);
+  flex-shrink: 0;
+}
+
+.attachment-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.attachment-panel-save {
+  --color: var(--hn-green, #4caf50);
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.attachment-panel-save:hover {
+  --color: var(--hn-green-bright, #66bb6a);
+}
+
+.attachment-panel-close {
+  --color: var(--hn-text-muted);
+  flex-shrink: 0;
+}
+
+.attachment-panel-close:hover {
+  --color: var(--hn-text-primary);
+}
+
+.attachment-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--hn-text-primary);
 }
 </style>
