@@ -287,6 +287,13 @@ async function createSchema(): Promise<void> {
   } catch {
     // Column may already exist, ignore error
   }
+
+  // Migration: Add attachments column to chat_messages for tool attachments (e.g. summaries)
+  try {
+    await connection.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS attachments TEXT`);
+  } catch {
+    // Column may already exist, ignore error
+  }
 }
 
 /**
@@ -981,6 +988,8 @@ export interface DBChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
   createdAt: Date;
+  /** JSON-serialized ToolAttachment[] for persisting tool attachments */
+  attachments?: string;
 }
 
 /**
@@ -1128,10 +1137,13 @@ export async function pruneOldChatSessions(projectId: string | null, keepCount: 
 export async function createChatMessage(message: DBChatMessage): Promise<void> {
   const conn = getConnection();
   const escapedContent = message.content.replace(/'/g, "''");
+  const attachmentsValue = message.attachments
+    ? `'${message.attachments.replace(/'/g, "''")}'`
+    : 'NULL';
   
   await conn.query(`
-    INSERT INTO chat_messages (id, session_id, role, content, created_at)
-    VALUES ('${message.id}', '${message.sessionId}', '${message.role}', '${escapedContent}', '${message.createdAt.toISOString()}')
+    INSERT INTO chat_messages (id, session_id, role, content, created_at, attachments)
+    VALUES ('${message.id}', '${message.sessionId}', '${message.role}', '${escapedContent}', '${message.createdAt.toISOString()}', ${attachmentsValue})
   `);
   await flushDatabase();
 }
@@ -1154,6 +1166,7 @@ export async function getChatMessages(sessionId: string): Promise<DBChatMessage[
     role: row.role as 'system' | 'user' | 'assistant',
     content: row.content as string,
     createdAt: new Date(row.created_at as string),
+    attachments: row.attachments as string | undefined,
   }));
 }
 

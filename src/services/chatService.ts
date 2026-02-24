@@ -9,6 +9,7 @@ import type {
   ContextWindowConfig,
   ManagedContext,
   SearchResult,
+  ToolAttachment,
   WorkingContext,
 } from '../types';
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
@@ -498,12 +499,7 @@ export async function getChatSession(sessionId: string): Promise<ChatSession | n
   
   // Load messages
   const dbMessages = await dbGetMessages(sessionId);
-  const messages: ChatMessage[] = dbMessages.map(m => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    timestamp: m.createdAt,
-  }));
+  const messages: ChatMessage[] = dbMessages.map(dbMessageToChatMessage);
   
   const session = dbSessionToSession(dbSession, messages);
   activeSessions.set(session.id, session);
@@ -548,12 +544,7 @@ export async function getOrCreateSession(projectId?: string): Promise<ChatSessio
     // Load the most recent session
     const dbSession = existingSessions[0];
     const dbMessages = await dbGetMessages(dbSession.id);
-    const messages: ChatMessage[] = dbMessages.map(m => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      timestamp: m.createdAt,
-    }));
+    const messages: ChatMessage[] = dbMessages.map(dbMessageToChatMessage);
     
     const session = dbSessionToSession(dbSession, messages);
     activeSessions.set(session.id, session);
@@ -565,13 +556,35 @@ export async function getOrCreateSession(projectId?: string): Promise<ChatSessio
 }
 
 /**
+ * Convert a DB message row to a ChatMessage, parsing attachments JSON
+ */
+function dbMessageToChatMessage(m: DBChatMessage): ChatMessage {
+  let attachments: ToolAttachment[] | undefined;
+  if (m.attachments) {
+    try {
+      attachments = JSON.parse(m.attachments);
+    } catch {
+      // Ignore malformed JSON
+    }
+  }
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.createdAt,
+    attachments,
+  };
+}
+
+/**
  * Add a message to a chat session (persisted to database)
  */
 export async function addMessage(
   sessionId: string,
   role: ChatMessage['role'],
   content: string,
-  contextChunks?: SearchResult[]
+  contextChunks?: SearchResult[],
+  attachments?: ToolAttachment[],
 ): Promise<ChatMessage> {
   const session = activeSessions.get(sessionId);
   if (!session) {
@@ -585,6 +598,7 @@ export async function addMessage(
     content,
     timestamp: now,
     contextChunks,
+    attachments: attachments && attachments.length > 0 ? attachments : undefined,
   };
 
   // Add to in-memory session
@@ -598,6 +612,7 @@ export async function addMessage(
     role,
     content,
     createdAt: now,
+    attachments: attachments && attachments.length > 0 ? JSON.stringify(attachments) : undefined,
   };
   await dbCreateMessage(dbMessage);
   
