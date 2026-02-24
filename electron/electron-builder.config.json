@@ -9,6 +9,13 @@
     "capacitor.config.*",
     "app/**/*"
   ],
+  "asarUnpack": [
+    "**/*.{node,dll,dylib,so}",
+    "node_modules/@node-llama-cpp/**",
+    "node_modules/@img/**",
+    "node_modules/sharp/**",
+    "node_modules/onnxruntime-node/**"
+  ],
   "publish": {
     "provider": "github"
   },
@@ -23,6 +30,17 @@
   },
   "mac": {
     "category": "public.app-category.productivity",
-    "target": "dmg"
+    "target": "dmg",
+    "icon": "resources/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "resources/entitlements.mac.plist",
+    "entitlementsInherit": "resources/entitlements.mac.plist",
+    "notarize": true
+  },
+  "linux": {
+    "target": "AppImage",
+    "icon": "assets/appIcon.png",
+    "category": "Office"
   }
 }
