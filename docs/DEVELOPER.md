@@ -85,7 +85,7 @@ Handles tool execution with Planner → Executor → Checker architecture.
 |------|---------|
 | `read` | Read file content |
 | `search` | Semantic search |
-| `summarize` | Summarize documents |
+| `summarize` | Summarize documents (returns attachment) |
 | `write` | Create files (AI pipeline for MD, direct for PDF/DOCX) |
 | `updateFile` | Update existing files using chain-of-thought analysis and unified diff |
 | `webResearch` | Search the web for information |
@@ -130,6 +130,16 @@ This architecture ensures:
 - Final responses show only the LLM interpretation, not raw tool outputs (tool results visible in collapsible log)
 - LLM interpretation is capped at 500 tokens with low temperature for concise output
 - For multiple file updates, the verbose preview text is replaced with a simple summary
+
+**Tool Attachments:**
+- Tools can return an `attachment` field in their `ToolResult` for rich content that should be displayed separately from the chat response
+- The `summarize` tool produces attachments of type `'summary'`
+- When attachments are present, `formatToolOutputsForDisplay` replaces the full content with a placeholder `[Attachment: ...]` so the interpretation LLM doesn't compress the content
+- Attachments render as clickable cards below the assistant message in the chat
+- Clicking a card opens a fixed overlay panel showing the full content rendered as markdown
+- Attachments are persisted to the `chat_messages` table as a JSON `attachments` column and survive session reloads
+- To make a new tool produce attachments: return `attachment: { id, type, title, content, metadata? }` in the `ToolResult`
+- Type: `ToolAttachment { id: string, type: 'summary', title: string, content: string, metadata?: { fileName?, fileId?, ... } }`
 
 **Working Context (Global Mode):**
 - In global mode, the chat tracks recently created projects and files as "working context"
@@ -445,19 +455,46 @@ All clickable links (`<a href>`) and `window.open()` calls to external URLs (htt
 
 ### Building for Distribution
 
-**macOS:**
+**Local builds:**
+
 ```bash
+# macOS (must run on Mac for Metal support)
 npm run build && npx cap sync @capacitor-community/electron
 cd electron && npm run electron:make -- --mac
-```
 
-**Windows:**
-```bash
+# Windows
 npm run build && npx cap sync @capacitor-community/electron
 cd electron && npm run electron:make -- --win
+
+# Linux
+npm run build && npx cap sync @capacitor-community/electron
+cd electron && npm run electron:make -- --linux
 ```
 
-Use GitHub Actions for cross-platform builds (see `.github/workflows/build-windows.yml`).
+**GitHub Actions (CI/CD):**
+
+Each platform has a dedicated workflow triggered by version tags (`v*`) or manual dispatch:
+
+| Workflow | Runner | Output | GPU Backend |
+|----------|--------|--------|-------------|
+| `.github/workflows/build-windows.yml` | `windows-latest` | NSIS `.exe` installer | CUDA / Vulkan |
+| `.github/workflows/build-macos.yml` | `macos-14` (ARM64) | `.dmg` | Metal |
+| `.github/workflows/build-linux.yml` | `ubuntu-latest` | `.AppImage` | Vulkan |
+
+The macOS workflow uses `macos-14` (Apple Silicon) so `npm ci` installs `@node-llama-cpp/mac-arm64-metal` with Metal GPU support.
+
+**Required GitHub Secrets:**
+
+| Secret | Used By | Description |
+|--------|---------|-------------|
+| `GH_TOKEN` | All platforms | GitHub token for publishing to Releases |
+| `CSC_LINK` | macOS | Base64-encoded Developer ID Application `.p12` certificate |
+| `CSC_KEY_PASSWORD` | macOS | Password for the `.p12` certificate |
+| `APPLE_ID` | macOS | Apple ID email for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | macOS | App-specific password (generate at appleid.apple.com) |
+| `APPLE_TEAM_ID` | macOS | Apple Developer Team ID |
+
+Configure these in the repository: Settings > Secrets and variables > Actions.
 
 ---
 
@@ -552,7 +589,7 @@ src/
 | `files` | File records with content, paths, hashes |
 | `chunks` | Document chunks for semantic search |
 | `chat_sessions` | Chat session metadata |
-| `chat_messages` | Chat messages |
+| `chat_messages` | Chat messages (includes `attachments` JSON column for tool attachments) |
 | `file_versions` | Version history (diff-based) |
 | `web_search_cache` | Web search result cache |
 | `web_search_chunks` | Web search content chunks |
