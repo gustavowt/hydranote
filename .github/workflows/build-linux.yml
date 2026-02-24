@@ -1,0 +1,68 @@
+name: Build Linux
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build web app
+        run: npm run build
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
+
+      - name: Sync to Electron
+        run: npx cap sync @capacitor-community/electron
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: npm ci
+
+      - name: Build Electron app
+        working-directory: electron
+        run: npm run build
+
+      - name: Build Linux AppImage (no publish)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        working-directory: electron
+        run: npx electron-builder build -c ./electron-builder.config.json --linux --publish never
+
+      - name: Build Linux AppImage (publish to GitHub)
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npx electron-builder build -c ./electron-builder.config.json --linux --publish always
+
+      - name: Upload Linux AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HydraNote-Linux-AppImage
+          path: electron/dist/*.AppImage
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload unpacked app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HydraNote-Linux-Unpacked
+          path: electron/dist/linux-unpacked
+          retention-days: 7
+          if-no-files-found: warn
