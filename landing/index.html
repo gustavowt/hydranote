@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HydraNote — AI-Powered Document Intelligence</title>
+  <meta name="description" content="Organize projects, ingest documents, chat with your files using multiple AI providers, and create rich Markdown notes — all from a single workspace." />
+  <meta property="og:title" content="HydraNote — AI-Powered Document Intelligence" />
+  <meta property="og:description" content="Organize projects, ingest documents, chat with your files using multiple AI providers, and create rich Markdown notes." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://gustavowt.github.io/hydranote/" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-deepest: #12171d;
+      --bg-deep: #181f28;
+      --bg-surface: #1e2732;
+      --bg-elevated: #262f3c;
+      --bg-hover: #2e3947;
+
+      --border-subtle: #1e2833;
+      --border-default: #2a3544;
+      --border-strong: #3a4860;
+
+      --text-primary: #e8eef5;
+      --text-secondary: #9aa5b5;
+      --text-muted: #6b7685;
+
+      --purple: #9171d0;
+      --purple-light: #a688e0;
+      --purple-dark: #7a5cb8;
+      --purple-muted: rgba(145, 113, 208, 0.15);
+      --purple-glow: rgba(145, 113, 208, 0.3);
+
+      --teal: #3eb8a0;
+      --teal-light: #52c9b3;
+      --teal-dark: #2d9a85;
+      --teal-muted: rgba(62, 184, 160, 0.15);
+
+      --green: #3fb950;
+      --green-light: #56d364;
+      --green-muted: rgba(63, 185, 80, 0.15);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg-deepest);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    a { color: var(--purple-light); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--teal-light); }
+
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ===== NAV ===== */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(18, 23, 29, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.15rem;
+      color: var(--text-primary);
+    }
+
+    .nav-brand img { height: 30px; width: auto; }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text-primary); }
+
+    .nav-cta {
+      background: var(--purple);
+      color: #fff !important;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.875rem;
+      transition: background 0.2s, transform 0.2s;
+    }
+
+    .nav-cta:hover {
+      background: var(--purple-light);
+      color: #fff !important;
+      transform: translateY(-1px);
+    }
+
+    .nav-toggle {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+
+    /* ===== HERO ===== */
+    .hero {
+      padding: 160px 0 100px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 800px;
+      background: radial-gradient(circle, var(--purple-glow) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-logo {
+      width: 100px;
+      height: 100px;
+      margin-bottom: 32px;
+      position: relative;
+      animation: float 6s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .hero h1 {
+      font-size: 3.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .hero h1 .gradient-text {
+      background: linear-gradient(135deg, var(--purple-light), var(--teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 1.2rem;
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 1rem;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+    }
+
+    .btn:hover { transform: translateY(-2px); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple), var(--purple-dark));
+      color: #fff;
+      box-shadow: 0 4px 24px var(--purple-glow);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, var(--purple-light), var(--purple));
+      color: #fff;
+      box-shadow: 0 6px 32px var(--purple-glow);
+    }
+
+    .btn-secondary {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--text-muted);
+    }
+
+    .btn svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    /* ===== SCREENSHOT ===== */
+    .screenshot-section {
+      padding: 0 0 80px;
+      position: relative;
+    }
+
+    .screenshot-wrapper {
+      max-width: 960px;
+      margin: 0 auto;
+      border-radius: 12px;
+      border: 1px solid var(--border-default);
+      overflow: hidden;
+      background: var(--bg-surface);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+    }
+
+    .screenshot-placeholder {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      background:
+        linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-elevated) 100%);
+    }
+
+    .screenshot-placeholder svg {
+      width: 48px;
+      height: 48px;
+      opacity: 0.4;
+    }
+
+    /* ===== FEATURES ===== */
+    .features {
+      padding: 100px 0;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+
+    .section-label {
+      display: inline-block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--teal);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 2.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      padding: 32px 28px;
+      transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      font-size: 1.3rem;
+    }
+
+    .feature-icon.purple { background: var(--purple-muted); color: var(--purple-light); }
+    .feature-icon.teal   { background: var(--teal-muted);   color: var(--teal-light);   }
+    .feature-icon.green  { background: var(--green-muted);  color: var(--green-light);  }
+
+    .feature-card h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }
+
+    /* ===== PROVIDERS ===== */
+    .providers {
+      padding: 80px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .providers-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 40px;
+      margin-top: 48px;
+    }
+
+    .provider-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 24px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    .provider-badge:hover {
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+    }
+
+    .provider-badge svg { width: 22px; height: 22px; }
+
+    /* ===== DOWNLOAD ===== */
+    .download {
+      padding: 100px 0;
+      border-top: 1px solid var(--border-subtle);
+      text-align: center;
+    }
+
+    .download-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      margin-top: 48px;
+      max-width: 840px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .download-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      padding: 36px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      transition: border-color 0.3s, transform 0.3s;
+    }
+
+    .download-card:hover {
+      border-color: var(--purple);
+      transform: translateY(-4px);
+    }
+
+    .download-card svg {
+      width: 40px;
+      height: 40px;
+      color: var(--text-secondary);
+    }
+
+    .download-card h4 {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .download-card .dl-detail {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .download-card .btn {
+      width: 100%;
+      justify-content: center;
+      padding: 12px 20px;
+      font-size: 0.9rem;
+    }
+
+    .download-note {
+      margin-top: 32px;
+      font-size: 0.88rem;
+      color: var(--text-muted);
+    }
+
+    .download-note a { color: var(--purple-light); }
+
+    /* ===== OPEN SOURCE ===== */
+    .open-source {
+      padding: 80px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .oss-card {
+      background: linear-gradient(135deg, var(--bg-surface), var(--bg-elevated));
+      border: 1px solid var(--border-default);
+      border-radius: 16px;
+      padding: 56px;
+      display: flex;
+      align-items: center;
+      gap: 48px;
+    }
+
+    .oss-content { flex: 1; }
+
+    .oss-content h3 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .oss-content p {
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      line-height: 1.7;
+      max-width: 500px;
+    }
+
+    .oss-stats {
+      display: flex;
+      gap: 24px;
+    }
+
+    .oss-stat {
+      background: var(--bg-deepest);
+      border: 1px solid var(--border-default);
+      border-radius: 10px;
+      padding: 20px 28px;
+      text-align: center;
+    }
+
+    .oss-stat .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--purple-light);
+    }
+
+    .oss-stat .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ===== FOOTER ===== */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    .footer-brand img { height: 22px; }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .footer-links a:hover { color: var(--text-secondary); }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 900px) {
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .download-cards { grid-template-columns: repeat(2, 1fr); }
+      .oss-card { flex-direction: column; text-align: center; padding: 40px 28px; }
+      .oss-content p { max-width: none; }
+      .oss-stats { justify-content: center; }
+    }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 2.25rem; }
+      .hero-sub { font-size: 1.05rem; }
+      .hero { padding: 130px 0 60px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .download-cards { grid-template-columns: 1fr; max-width: 340px; }
+      .section-title { font-size: 1.75rem; }
+      .nav-links { display: none; }
+      .nav-links.open {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 64px;
+        left: 0;
+        right: 0;
+        background: var(--bg-deep);
+        border-bottom: 1px solid var(--border-default);
+        padding: 20px 24px;
+        gap: 16px;
+      }
+      .nav-toggle { display: block; }
+      .footer-inner { flex-direction: column; gap: 16px; text-align: center; }
+      .oss-stats { flex-direction: column; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== NAV ===== -->
+<nav>
+  <div class="container nav-inner">
+    <a href="#" class="nav-brand">
+      <img src="hydranote-logo.png" alt="HydraNote" />
+      <span>HydraNote</span>
+    </a>
+    <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Toggle menu">&#9776;</button>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#download">Download</a></li>
+      <li><a href="https://github.com/gustavowt/hydranote" target="_blank">GitHub</a></li>
+      <li><a href="#download" class="nav-cta">Get Started</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="container">
+    <img src="hydranote-logo.png" alt="HydraNote Logo" class="hero-logo" />
+    <h1>
+      Your AI-Powered<br />
+      <span class="gradient-text">Document Workspace</span>
+    </h1>
+    <p class="hero-sub">
+      Organize projects, ingest documents, chat with your files using multiple AI providers,
+      and create rich Markdown notes — all from a single workspace.
+    </p>
+    <div class="hero-actions">
+      <a href="#download" class="btn btn-primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </a>
+      <a href="https://github.com/gustavowt/hydranote" target="_blank" class="btn btn-secondary">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SCREENSHOT ===== -->
+<section class="screenshot-section">
+  <div class="container">
+    <div class="screenshot-wrapper">
+      <!-- Replace this placeholder with an actual screenshot -->
+      <div class="screenshot-placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>App screenshot — replace with <code>screenshot.png</code></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FEATURES ===== -->
+<section class="features" id="features">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-label">Features</span>
+      <h2 class="section-title">Everything you need in one workspace</h2>
+      <p class="section-desc">A complete toolkit for managing, understanding, and creating documents with AI assistance.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon purple">&#x1f4ac;</div>
+        <h3>Multi-Provider AI Chat</h3>
+        <p>Connect to OpenAI, Anthropic, Google Gemini, Ollama, or run GGUF models locally. Switch providers freely.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon teal">&#x1f50d;</div>
+        <h3>Semantic Search</h3>
+        <p>Vector embeddings index your documents for meaning-based retrieval across entire projects.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">&#x1f4c4;</div>
+        <h3>Document Ingestion</h3>
+        <p>Import PDF, DOCX, TXT, Markdown, and images with OCR. All content is chunked and searchable.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon purple">&#x270f;&#xfe0f;</div>
+        <h3>Markdown Editor</h3>
+        <p>Full editor with edit, split, and preview modes. Mermaid diagrams, syntax highlighting, and export.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon teal">&#x1f6e0;&#xfe0f;</div>
+        <h3>AI Tool Execution</h3>
+        <p>The LLM can read, search, summarize, write, update files, and research the web on your behalf.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon teal">&#x1f4ca;</div>
+        <h3>Version History</h3>
+        <p>Track every file change with diff-based version storage. Restore any previous version.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">&#x1f310;</div>
+        <h3>Web Research</h3>
+        <p>AI-powered web search via SearXNG, Brave, or DuckDuckGo. Results are cached and semantically indexed.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon purple">&#x1f50c;</div>
+        <h3>MCP Server</h3>
+        <p>Expose your workspace to external LLM tools like Claude Desktop via a local MCP server.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PROVIDERS ===== -->
+<section class="providers">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-label">Integrations</span>
+      <h2 class="section-title">Works with your favorite AI</h2>
+      <p class="section-desc">LLM and embedding providers are configured independently — mix and match as needed.</p>
+    </div>
+    <div class="providers-row">
+      <div class="provider-badge">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        OpenAI
+      </div>
+      <div class="provider-badge">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        Anthropic
+      </div>
+      <div class="provider-badge">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        Google Gemini
+      </div>
+      <div class="provider-badge">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        Ollama
+      </div>
+      <div class="provider-badge">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        Hugging Face
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DOWNLOAD ===== -->
+<section class="download" id="download">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-label">Download</span>
+      <h2 class="section-title">Get HydraNote for your platform</h2>
+      <p class="section-desc">Native desktop app with GPU-accelerated local models, file system sync, and MCP server.</p>
+    </div>
+    <div class="download-cards">
+      <!-- macOS -->
+      <div class="download-card">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+        <h4>macOS</h4>
+        <span class="dl-detail">.dmg &middot; Apple Silicon</span>
+        <a href="https://github.com/gustavowt/hydranote/releases/latest" target="_blank" class="btn btn-primary">Download</a>
+      </div>
+      <!-- Windows -->
+      <div class="download-card">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+        <h4>Windows</h4>
+        <span class="dl-detail">.exe installer &middot; x64</span>
+        <a href="https://github.com/gustavowt/hydranote/releases/latest" target="_blank" class="btn btn-primary">Download</a>
+      </div>
+      <!-- Linux -->
+      <div class="download-card">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 2c-1.82 0-3.28 1.47-3.28 3.28 0 .68.21 1.31.56 1.84-.8.55-1.5 1.25-2.03 2.07-.53.82-.88 1.74-1.01 2.73-.43.06-.85.18-1.24.37-.78.38-1.38.97-1.72 1.71-.34.73-.43 1.55-.27 2.34.16.79.56 1.5 1.14 2.04l.38.35c-.28.9-.14 1.85.37 2.65.52.81 1.33 1.35 2.26 1.5.39.06.78.05 1.16-.03.37.64.92 1.15 1.59 1.46.67.31 1.42.4 2.15.25.73-.15 1.38-.53 1.87-1.08.49.55 1.14.93 1.87 1.08.73.15 1.48.06 2.15-.25.67-.31 1.22-.82 1.59-1.46.38.08.77.09 1.16.03.93-.15 1.74-.69 2.26-1.5.51-.8.65-1.75.37-2.65l.38-.35c.58-.54.98-1.25 1.14-2.04.16-.79.07-1.61-.27-2.34-.34-.74-.94-1.33-1.72-1.71-.39-.19-.81-.31-1.24-.37-.13-.99-.48-1.91-1.01-2.73-.53-.82-1.23-1.52-2.03-2.07.35-.53.56-1.16.56-1.84C15.78 3.47 14.32 2 12.5 2z"/></svg>
+        <h4>Linux</h4>
+        <span class="dl-detail">.AppImage &middot; x64</span>
+        <a href="https://github.com/gustavowt/hydranote/releases/latest" target="_blank" class="btn btn-primary">Download</a>
+      </div>
+    </div>
+    <p class="download-note">
+      Or browse <a href="https://github.com/gustavowt/hydranote/releases" target="_blank">all releases</a> for previous versions and checksums.
+    </p>
+  </div>
+</section>
+
+<!-- ===== OPEN SOURCE ===== -->
+<section class="open-source">
+  <div class="container">
+    <div class="oss-card">
+      <div class="oss-content">
+        <h3>Free &amp; Open Source</h3>
+        <p>
+          HydraNote is MIT-licensed. Contribute features, report bugs, or fork it for your own workflow.
+          Built with Vue, Ionic, DuckDB, and a lot of AI.
+        </p>
+        <div class="hero-actions">
+          <a href="https://github.com/gustavowt/hydranote" target="_blank" class="btn btn-secondary">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            Star on GitHub
+          </a>
+          <a href="https://github.com/gustavowt/hydranote/blob/main/CONTRIBUTING.md" target="_blank" class="btn btn-secondary">
+            Contributing Guide
+          </a>
+        </div>
+      </div>
+      <div class="oss-stats">
+        <div class="oss-stat">
+          <div class="stat-value">MIT</div>
+          <div class="stat-label">License</div>
+        </div>
+        <div class="oss-stat">
+          <div class="stat-value">3</div>
+          <div class="stat-label">Platforms</div>
+        </div>
+        <div class="oss-stat">
+          <div class="stat-value">5+</div>
+          <div class="stat-label">AI Providers</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <img src="hydranote-logo.png" alt="HydraNote" />
+      <span>HydraNote</span>
+    </div>
+    <ul class="footer-links">
+      <li><a href="https://github.com/gustavowt/hydranote" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/gustavowt/hydranote/releases" target="_blank">Releases</a></li>
+      <li><a href="https://github.com/gustavowt/hydranote/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a></li>
+      <li><a href="https://github.com/gustavowt/hydranote/blob/main/LICENSE" target="_blank">License</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>
