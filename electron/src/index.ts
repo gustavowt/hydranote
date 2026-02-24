@@ -61,7 +61,12 @@ if (electronIsDev) {
   // Initialize our app, build windows, and load content.
   await myCapacitorApp.init();
   // Check for updates if we are in a packaged app.
-  autoUpdater.checkForUpdatesAndNotify();
+  // Skip in dev mode or unpacked builds where app-update.yml doesn't exist.
+  if (!electronIsDev) {
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.warn('[AutoUpdater] Update check skipped:', err.message);
+    });
+  }
   
   // Start MCP server if enabled
   const mcpSettings = loadMCPSettings();

@@ -260,10 +260,9 @@ export function setupContentSecurityPolicy(customScheme: string): void {
       'https://cdn.jsdelivr.net',
     ].join(' ');
 
-    // DuckDB WASM requires loading worker scripts from jsdelivr CDN
-    const scriptSrc = electronIsDev
-      ? `'self' ${customScheme}://* 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net`
-      : `'self' ${customScheme}://* 'unsafe-inline' blob: https://cdn.jsdelivr.net`;
+    // DuckDB WASM requires 'wasm-unsafe-eval' to compile WebAssembly modules.
+    // 'unsafe-eval' is also needed as a fallback for browsers/runtimes that don't support 'wasm-unsafe-eval'.
+    const scriptSrc = `'self' ${customScheme}://* 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net`;
 
     const csp = [
       `default-src 'self' ${customScheme}://* data: blob:`,
