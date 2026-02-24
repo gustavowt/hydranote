@@ -8,6 +8,7 @@ import type {
   ToolName,
   ToolCall,
   ToolResult,
+  ToolAttachment,
   ReadToolParams,
   SearchToolParams,
   SummarizeToolParams,
@@ -566,6 +567,13 @@ export async function executeSummarizeTool(
       success: true,
       tool: "summarize",
       data: summary,
+      attachment: {
+        id: crypto.randomUUID(),
+        type: 'summary',
+        title: `Summary of ${file.name}`,
+        content: summary,
+        metadata: { fileName: file.name, fileId: file.id },
+      },
       metadata: {
         fileName: file.name,
         fileId: file.id,
@@ -3490,6 +3498,8 @@ export interface PlannerFlowResult {
   formattedToolOutputs: string[];
   /** Whether the flow completed successfully */
   success: boolean;
+  /** Attachments produced by tools (e.g. summaries) */
+  attachments?: ToolAttachment[];
 }
 
 /**
@@ -3537,6 +3547,11 @@ function formatToolOutputsForDisplay(
       const step = plan.steps.find((s) => s.id === cs.stepId);
       const icon = getToolIcon(cs.tool);
       const title = step?.description || cs.tool;
+      // For steps with attachments, exclude the full content from the LLM interpretation input
+      // The attachment will be rendered separately in the UI
+      if (cs.result.attachment) {
+        return `### ${icon} ${title}\n\n[Attachment: ${cs.result.attachment.title}]`;
+      }
       return `### ${icon} ${title}\n\n${cs.result.data}`;
     });
 }
@@ -3561,7 +3576,8 @@ CRITICAL RULES:
 - DO NOT ask for confirmation if tools already completed successfully
 - Just confirm what was done and any key results
 - Respond in the same language as the user's query
-- For file operations: just say what files were affected, don't show content`;
+- For file operations: just say what files were affected, don't show content
+- If tool results include attachments (shown as [Attachment: ...]), those are displayed separately to the user. Do NOT summarize or repeat their content. Just acknowledge they were generated.`;
 
   const userPrompt = `User's request: ${originalQuery}
 
@@ -3596,6 +3612,64 @@ Provide a brief confirmation of what was accomplished.`;
     });
     return response.content;
   }
+}
+
+/**
+ * Collect all attachments from tool results.
+ * When multiple summary attachments exist, consolidate them into a single
+ * attachment so the user sees one cohesive result instead of many cards.
+ */
+function collectAttachments(toolResults: ToolResult[]): ToolAttachment[] {
+  const raw = toolResults
+    .filter((r) => r.success && r.attachment)
+    .map((r) => r.attachment!);
+
+  if (raw.length === 0) return [];
+
+  // Separate summary attachments from other types
+  const summaries = raw.filter((a) => a.type === 'summary');
+  const others = raw.filter((a) => a.type !== 'summary');
+
+  if (summaries.length <= 1) {
+    // Single summary (or none) — nothing to consolidate
+    return raw;
+  }
+
+  // Deduplicate by fileId (same file summarized multiple times → keep last)
+  const uniqueByFile = new Map<string, ToolAttachment>();
+  for (const s of summaries) {
+    const key = s.metadata?.fileId || s.title;
+    uniqueByFile.set(key, s);
+  }
+  const deduped = Array.from(uniqueByFile.values());
+
+  if (deduped.length === 1) {
+    // After dedup only one file remains
+    return [...deduped, ...others];
+  }
+
+  // Consolidate multiple file summaries into a single attachment
+  const fileNames = deduped
+    .map((s) => s.metadata?.fileName || s.title.replace('Summary of ', ''))
+    .join(', ');
+  const consolidatedContent = deduped
+    .map((s) => {
+      const name = s.metadata?.fileName || s.title.replace('Summary of ', '');
+      return `## ${name}\n\n${s.content}`;
+    })
+    .join('\n\n---\n\n');
+
+  const consolidated: ToolAttachment = {
+    id: crypto.randomUUID(),
+    type: 'summary',
+    title: `Summary of ${deduped.length} files`,
+    content: consolidatedContent,
+    metadata: {
+      fileName: fileNames,
+    },
+  };
+
+  return [consolidated, ...others];
 }
 
 /**
@@ -3728,7 +3802,7 @@ export async function runPlannerFlow(
       }
     }
 
-    // Collect all tool results
+    // Collect all tool results and attachments
     allToolResults = [
       ...allToolResults,
       ...executionResult.completedSteps.map((cs) => cs.result),
@@ -3764,6 +3838,7 @@ export async function runPlannerFlow(
         );
       }
 
+      const attachments = collectAttachments(allToolResults);
       return {
         state,
         response: interpretation,
@@ -3771,6 +3846,7 @@ export async function runPlannerFlow(
         toolLogs: allToolLogs,
         formattedToolOutputs: formattedOutputs,
         success: true,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
     }
 
@@ -3793,6 +3869,7 @@ export async function runPlannerFlow(
         response += `\n\n⚠️ Some tasks could not be completed:\n${completionCheck.missingTasks.map((t) => `- ${t}`).join("\n")}`;
       }
 
+      const attachments = collectAttachments(allToolResults);
       return {
         state,
         response,
@@ -3800,6 +3877,7 @@ export async function runPlannerFlow(
         toolLogs: allToolLogs,
         formattedToolOutputs: formattedOutputs,
         success: false,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
     }
 
@@ -3827,6 +3905,7 @@ export async function runPlannerFlow(
     if (currentPlan.needsClarification) {
       state.phase = "complete";
       state.error = currentPlan.clarificationQuestion;
+      const attachments = collectAttachments(allToolResults);
       return {
         state,
         response: currentPlan.clarificationQuestion || "I need more information to continue.",
@@ -3834,6 +3913,7 @@ export async function runPlannerFlow(
         toolLogs: allToolLogs,
         formattedToolOutputs: [],
         success: false,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
     }
   }
@@ -3843,6 +3923,7 @@ export async function runPlannerFlow(
   const formattedOutputs = state.executionResult
     ? formatToolOutputsForDisplay(state.executionResult.completedSteps, currentPlan)
     : [];
+  const finalAttachments = collectAttachments(allToolResults);
     
   return {
     state,
@@ -3851,5 +3932,6 @@ export async function runPlannerFlow(
     toolLogs: allToolLogs,
     formattedToolOutputs: formattedOutputs,
     success: state.executionResult?.allSuccessful ?? false,
+    attachments: finalAttachments.length > 0 ? finalAttachments : undefined,
   };
 }
