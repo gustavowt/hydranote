@@ -30,3 +30,6 @@ npm-debug.log*
 /platforms
 /plugins
 /www
+
+# Landing page assets (copied from public/ at deploy time)
+landing/*.png

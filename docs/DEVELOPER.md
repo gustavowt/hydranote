@@ -517,6 +517,27 @@ App URL: `http://localhost:5173`
 
 ---
 
+### GitHub Pages (Landing Page)
+
+A static landing/marketing page is deployed to [gustavowt.github.io/hydranote](https://gustavowt.github.io/hydranote/) via GitHub Pages.
+
+**Files:**
+- `landing/index.html` — Self-contained landing page (HTML + inline CSS)
+- `.github/workflows/deploy-pages.yml` — Deploys `landing/` on push to `main`
+
+**How it works:**
+- The workflow copies `public/hydranote-logo.png` and `public/favicon.png` into `landing/` at build time
+- Deploys via `actions/deploy-pages@v4` using the GitHub Pages environment
+- Only triggers on changes to `landing/**` or the workflow file itself
+
+**Setup (one-time):**
+1. Go to repository Settings → Pages
+2. Under "Build and deployment", set Source to **GitHub Actions**
+
+**Adding screenshots:** Place images in `landing/` and reference them in `index.html`. The screenshot placeholder in the hero section should be replaced with an actual `<img>` tag.
+
+---
+
 ### Open Source Community Files
 
 For public contribution workflows, this repository includes:
