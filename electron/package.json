@@ -33,6 +33,7 @@
     "node-llama-cpp": "^3.15.0"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "electron": "^26.2.2",
     "electron-builder": "~23.6.0",
     "electron-rebuild": "^3.2.9",
