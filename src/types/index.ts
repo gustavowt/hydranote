@@ -274,6 +274,8 @@ export interface ChatMessage {
   contextChunks?: SearchResult[];
   /** Tool executions associated with this message (for assistant messages) */
   toolExecutions?: ToolExecutionRecord[];
+  /** Attachments produced by tools (e.g. summaries) - persisted to DB */
+  attachments?: ToolAttachment[];
 }
 
 /**
@@ -521,6 +523,22 @@ export interface ToolCall {
 }
 
 /**
+ * Attachment produced by a tool (e.g. summary, analysis)
+ * Rendered as a clickable card in the chat, opening in an overlay panel.
+ */
+export interface ToolAttachment {
+  id: string;
+  type: 'summary'; // extensible later: 'analysis', 'report', etc.
+  title: string;
+  content: string;
+  metadata?: {
+    fileName?: string;
+    fileId?: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
  * Result from executing a tool
  */
 export interface ToolResult {
@@ -530,6 +548,8 @@ export interface ToolResult {
   error?: string;
   /** Whether this tool made persisting changes (files/projects created, updated, deleted) */
   persistedChanges?: boolean;
+  /** Optional attachment for rich content that should be displayed separately (e.g. summaries) */
+  attachment?: ToolAttachment;
   metadata?: {
     fileName?: string;
     fileId?: string;
@@ -1765,6 +1785,8 @@ export interface EnhancedPlannerFlowResult {
   formattedToolOutputs: string[];
   /** Whether the flow completed successfully */
   success: boolean;
+  /** Attachments produced by tools (e.g. summaries) */
+  attachments?: ToolAttachment[];
 }
 
 // ============================================
