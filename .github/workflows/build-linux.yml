@@ -42,12 +42,15 @@ jobs:
       - name: Build Linux AppImage (no publish)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         working-directory: electron
+        env:
+          USE_HARD_LINKS: false
         run: npx electron-builder build -c ./electron-builder.config.json --linux --publish never
 
       - name: Build Linux AppImage (publish to GitHub)
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: electron
         env:
+          USE_HARD_LINKS: false
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder build -c ./electron-builder.config.json --linux --publish always
 
