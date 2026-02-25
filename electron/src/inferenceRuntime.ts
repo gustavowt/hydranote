@@ -13,9 +13,11 @@ import { getModelManager } from './modelManager';
 
 // Dynamic import helper for ESM modules from CommonJS context.
 // node-llama-cpp v3 is ESM-only, requires special handling.
-// In packaged Electron apps the bare specifier 'node-llama-cpp' can't be
-// resolved by import() inside a new Function (no module-scope context),
-// so we fall back to an explicit file URL pointing at the asar-unpacked copy.
+// In packaged Electron apps the bare specifier 'node-llama-cpp' fails with
+// new Function (no module-scope context), so we fall back to importing via
+// an explicit file:// URL resolved from app.getAppPath().
+// asar is disabled for this app because Electron v26's ESM loader cannot read
+// from asar archives, and node-llama-cpp's entire dependency tree is ESM.
 async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
   const dynamicImport = new Function('modulePath', 'return import(modulePath)') as 
     (modulePath: string) => Promise<typeof import('node-llama-cpp')>;
@@ -23,11 +25,8 @@ async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
   try {
     return await dynamicImport('node-llama-cpp');
   } catch {
-    // app.getAppPath() returns e.g. /path/to/HydraNote.app/Contents/Resources/app.asar
-    // The asarUnpack'd modules live at the sibling app.asar.unpacked directory
     const appRoot = app.getAppPath();
-    const unpackedRoot = appRoot.replace('app.asar', 'app.asar.unpacked');
-    const entryPoint = path.join(unpackedRoot, 'node_modules', 'node-llama-cpp', 'dist', 'index.js');
+    const entryPoint = path.join(appRoot, 'node_modules', 'node-llama-cpp', 'dist', 'index.js');
     return dynamicImport(pathToFileURL(entryPoint).href);
   }
 }

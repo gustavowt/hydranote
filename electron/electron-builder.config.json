@@ -9,14 +9,7 @@
     "capacitor.config.*",
     "app/**/*"
   ],
-  "asarUnpack": [
-    "**/*.{node,dll,dylib,so}",
-    "node_modules/node-llama-cpp/**",
-    "node_modules/@node-llama-cpp/**",
-    "node_modules/@img/**",
-    "node_modules/sharp/**",
-    "node_modules/onnxruntime-node/**"
-  ],
+  "asar": false,
   "publish": {
     "provider": "github"
   },
