@@ -6,15 +6,28 @@
  * making it easier to swap out or support multiple backends in the future.
  */
 
+import path from 'path';
+import { pathToFileURL } from 'url';
 import { BrowserWindow } from 'electron';
 import { getModelManager } from './modelManager';
 
 // Dynamic import helper for ESM modules from CommonJS context
-// node-llama-cpp v3 is ESM-only, requires special handling
+// node-llama-cpp v3 is ESM-only, requires special handling.
+// In packaged Electron apps the bare specifier 'node-llama-cpp' can't be
+// resolved by import() inside a new Function (no module-scope context),
+// so we fall back to an explicit file URL pointing at the asar-unpacked copy.
 async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
   const dynamicImport = new Function('modulePath', 'return import(modulePath)') as 
     (modulePath: string) => Promise<typeof import('node-llama-cpp')>;
-  return dynamicImport('node-llama-cpp');
+
+  try {
+    return await dynamicImport('node-llama-cpp');
+  } catch {
+    const appRoot = path.join(__dirname, '..');
+    const unpackedRoot = appRoot.replace('app.asar', 'app.asar.unpacked');
+    const entryPoint = path.join(unpackedRoot, 'node_modules', 'node-llama-cpp', 'dist', 'index.js');
+    return dynamicImport(pathToFileURL(entryPoint).href);
+  }
 }
 
 /**
