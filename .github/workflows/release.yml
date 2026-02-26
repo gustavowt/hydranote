@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       bump_type:
-        description: 'Version bump type'
+        description: 'Version bump type (rebuild = re-release current version)'
         required: true
         type: choice
         options:
           - patch
           - minor
           - major
+          - rebuild
 
 permissions:
   contents: write
@@ -39,36 +40,40 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Bump version
+      - name: Resolve version
         id: bump
         run: |
           CURRENT=$(node -p "require('./electron/package.json').version")
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-          case "${{ inputs.bump_type }}" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
+          if [ "${{ inputs.bump_type }}" = "rebuild" ]; then
+            NEW_VERSION="${CURRENT}"
+            echo "Rebuilding current version ${NEW_VERSION}"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            case "${{ inputs.bump_type }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+            esac
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Bumping ${CURRENT} → ${NEW_VERSION}"
 
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            node -e "
+              const fs = require('fs');
+              for (const file of ['./package.json', './electron/package.json']) {
+                const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+                pkg.version = '${NEW_VERSION}';
+                fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+              }
+            "
+          fi
+
           TAG="v${NEW_VERSION}"
-
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Bumping ${CURRENT} → ${NEW_VERSION} (${TAG})"
-
-          # Update both package.json files
-          node -e "
-            const fs = require('fs');
-            for (const file of ['./package.json', './electron/package.json']) {
-              const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
-              pkg.version = '${NEW_VERSION}';
-              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
-            }
-          "
 
       - name: Commit and tag
+        if: ${{ inputs.bump_type != 'rebuild' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -76,6 +81,15 @@ jobs:
           git commit -m "release: ${{ steps.bump.outputs.tag }}"
           git tag "${{ steps.bump.outputs.tag }}"
           git push origin HEAD --tags
+
+      - name: Delete existing release (rebuild)
+        if: ${{ inputs.bump_type == 'rebuild' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          gh release delete "${{ steps.bump.outputs.tag }}" --yes --cleanup-tag || true
+          git tag "${{ steps.bump.outputs.tag }}"
+          git push origin "${{ steps.bump.outputs.tag }}" --force
 
   # ──────────────────────────────────────────────
   # 2. Build all platforms (parallel)
