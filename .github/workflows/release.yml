@@ -131,6 +131,12 @@ jobs:
       - name: Pull latest (include release commit)
         run: git pull origin main
 
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
+
       - name: Fetch actual asset URLs from release
         id: assets
         env:
