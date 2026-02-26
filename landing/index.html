@@ -268,14 +268,17 @@
     }
 
     .carousel-track {
-      display: flex;
+      white-space: nowrap;
+      font-size: 0;
       transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
-      align-items: flex-start;
     }
 
     .carousel-slide {
-      flex: 0 0 100%;
+      display: inline-block;
       width: 100%;
+      vertical-align: top;
+      white-space: normal;
+      font-size: 1rem;
       position: relative;
     }
 
