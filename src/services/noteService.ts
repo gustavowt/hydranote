@@ -51,6 +51,7 @@ import {
 } from "./projectService";
 import { updateProjectStatus } from "./database";
 import { flushDatabase } from "./database";
+import { createFormatVersion } from "./versionService";
 
 // ============================================
 // Prompt Templates
@@ -498,6 +499,9 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
       formattedContent,
     );
 
+    // Store original (pre-formatting) content in version history for rollback
+    await createFormatVersion(file.id, rawNoteText);
+
     await indexNote(file);
 
     // Update project status to indexed
@@ -592,6 +596,9 @@ export async function addNoteWithTitle(
       targetDirectory,
       formattedContent,
     );
+
+    // Store original (pre-formatting) content in version history for rollback
+    await createFormatVersion(file.id, rawNoteText);
 
     await indexNote(file);
 
@@ -1110,6 +1117,10 @@ export async function globalAddNote(
       targetDirectory,
       formattedContent,
     );
+
+    // Store original (pre-formatting) content in version history for rollback
+    await createFormatVersion(file.id, rawNoteText);
+
     steps = updateStep(
       steps,
       "save",
