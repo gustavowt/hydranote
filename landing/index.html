@@ -257,29 +257,31 @@
       margin: 0 auto;
       border-radius: 12px;
       border: 1px solid var(--border-default);
-      overflow: hidden;
       background: var(--bg-surface);
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-      position: relative;
+      overflow: hidden;
     }
 
     .carousel {
       position: relative;
-      width: 100%;
+      overflow: hidden;
     }
 
     .carousel-track {
       display: flex;
       transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+      align-items: flex-start;
     }
 
     .carousel-slide {
-      min-width: 100%;
+      flex: 0 0 100%;
+      width: 100%;
       position: relative;
     }
 
     .carousel-slide img {
       width: 100%;
+      height: auto;
       display: block;
     }
 
@@ -288,8 +290,8 @@
       bottom: 0;
       left: 0;
       right: 0;
-      padding: 12px 20px;
-      background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+      padding: 16px 20px;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
       font-size: 0.85rem;
       font-weight: 500;
       color: var(--text-primary);
