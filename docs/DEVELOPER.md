@@ -473,7 +473,7 @@ cd electron && npm run electron:make -- --linux
 
 **GitHub Actions (CI/CD):**
 
-Each platform has a dedicated workflow triggered by version tags (`v*`) or manual dispatch:
+Each platform has a dedicated workflow triggered by version tags (`v*`), manual dispatch, or the release workflow:
 
 | Workflow | Runner | Output | GPU Backend |
 |----------|--------|--------|-------------|
@@ -483,11 +483,23 @@ Each platform has a dedicated workflow triggered by version tags (`v*`) or manua
 
 The macOS workflow uses `macos-14` (Apple Silicon) so `npm ci` installs `@node-llama-cpp/mac-arm64-metal` with Metal GPU support.
 
+**Release Workflow (`.github/workflows/release.yml`):**
+
+The unified release workflow automates the full release pipeline. Trigger it manually from the Actions tab with a version bump type:
+
+1. **Prepare** — Bumps version in `package.json` and `electron/package.json`, commits, creates a `vX.Y.Z` tag, and pushes
+2. **Build** — Calls all 3 platform build workflows in parallel (via `workflow_call`), which publish artifacts to GitHub Releases
+3. **Update Pages** — Rewrites the landing page download links to point to the new release assets, commits to `main` (auto-triggers `deploy-pages.yml`)
+
+```
+Actions tab → Release → Run workflow → choose patch / minor / major
+```
+
 **Required GitHub Secrets:**
 
 | Secret | Used By | Description |
 |--------|---------|-------------|
-| `GH_TOKEN` | All platforms | GitHub token for publishing to Releases |
+| `GH_TOKEN` | All platforms + release | GitHub token for publishing to Releases and pushing tags |
 | `CSC_LINK` | macOS | Base64-encoded Developer ID Application `.p12` certificate |
 | `CSC_KEY_PASSWORD` | macOS | Password for the `.p12` certificate |
 | `APPLE_ID` | macOS | Apple ID email for notarization |

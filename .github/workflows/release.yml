@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # 1. Bump version, commit, tag, and push
+  # ──────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # GITHUB_TOKEN ensures the tag push does NOT trigger the build
+          # workflows' `push: tags: v*` (avoids duplicate builds).
+          token: ${{ github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT=$(node -p "require('./electron/package.json').version")
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "${{ inputs.bump_type }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          TAG="v${NEW_VERSION}"
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Bumping ${CURRENT} → ${NEW_VERSION} (${TAG})"
+
+          # Update both package.json files
+          node -e "
+            const fs = require('fs');
+            for (const file of ['./package.json', './electron/package.json']) {
+              const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+              pkg.version = '${NEW_VERSION}';
+              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+            }
+          "
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json electron/package.json
+          git commit -m "release: ${{ steps.bump.outputs.tag }}"
+          git tag "${{ steps.bump.outputs.tag }}"
+          git push origin HEAD --tags
+
+  # ──────────────────────────────────────────────
+  # 2. Build all platforms (parallel)
+  # ──────────────────────────────────────────────
+  build-windows:
+    needs: prepare
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version_tag: ${{ needs.prepare.outputs.tag }}
+    secrets: inherit
+
+  build-macos:
+    needs: prepare
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      version_tag: ${{ needs.prepare.outputs.tag }}
+    secrets: inherit
+
+  build-linux:
+    needs: prepare
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version_tag: ${{ needs.prepare.outputs.tag }}
+    secrets: inherit
+
+  # ──────────────────────────────────────────────
+  # 3. Update landing page download links
+  # ──────────────────────────────────────────────
+  update-pages:
+    needs: [prepare, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Pull latest (include release commit)
+        run: git pull origin main
+
+      - name: Update download links
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REPO: gustavowt/hydranote
+        run: |
+          MACOS_URL="https://github.com/${REPO}/releases/download/${TAG}/HydraNote-${VERSION}-arm64.dmg"
+          WINDOWS_URL="https://github.com/${REPO}/releases/download/${TAG}/HydraNote%20Setup%20${VERSION}.exe"
+          LINUX_URL="https://github.com/${REPO}/releases/download/${TAG}/HydraNote-${VERSION}.AppImage"
+
+          sed -i "/<!-- RELEASE_LINK:macos -->/{ n; s|href=\"[^\"]*\"|href=\"${MACOS_URL}\"|; }" landing/index.html
+
+          sed -i "/<!-- RELEASE_LINK:windows -->/{ n; s|href=\"[^\"]*\"|href=\"${WINDOWS_URL}\"|; }" landing/index.html
+
+          sed -i "/<!-- RELEASE_LINK:linux -->/{ n; s|href=\"[^\"]*\"|href=\"${LINUX_URL}\"|; }" landing/index.html
+
+          echo "Updated landing page links to ${TAG}:"
+          echo "  macOS:   ${MACOS_URL}"
+          echo "  Windows: ${WINDOWS_URL}"
+          echo "  Linux:   ${LINUX_URL}"
+
+      - name: Commit and push landing page
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add landing/index.html
+          if git diff --cached --quiet; then
+            echo "No landing page changes to commit"
+          else
+            git commit -m "docs: update download links to ${{ needs.prepare.outputs.tag }}"
+            git push origin main
+          fi
