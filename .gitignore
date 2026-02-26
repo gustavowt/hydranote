@@ -31,5 +31,6 @@ npm-debug.log*
 /plugins
 /www
 
-# Landing page assets (copied from public/ at deploy time)
-landing/*.png
+# Landing page assets copied from public/ at deploy time
+landing/hydranote-logo.png
+landing/favicon.png

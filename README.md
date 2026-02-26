@@ -25,8 +25,23 @@
 ---
 
 <p align="center">
-  <img src="assets/hydranote-screenshot.png" alt="HydraNote Workspace" width="900" />
+  <img src="landing/screenshot-workspace.png" alt="HydraNote Workspace — Markdown editor with AI formatting" width="900" />
 </p>
+
+<details>
+<summary><strong>More Screenshots</strong></summary>
+
+<br />
+
+| AI Providers | AI Instructions |
+|:---:|:---:|
+| <img src="landing/screenshot-ai-providers.png" alt="AI Providers" width="440" /> | <img src="landing/screenshot-ai-instructions.png" alt="AI Instructions" width="440" /> |
+
+| Web Research | MCP Server |
+|:---:|:---:|
+| <img src="landing/screenshot-web-research.png" alt="Web Research" width="440" /> | <img src="landing/screenshot-mcp-server.png" alt="MCP Server" width="440" /> |
+
+</details>
 
 ---
 
