@@ -137,40 +137,19 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release edit "$TAG" --draft=false
 
-      - name: Fetch actual asset URLs from release
-        id: assets
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
-          echo "Fetching release assets for ${TAG}..."
-          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].url')
-
-          MACOS_URL=$(echo "$ASSETS" | grep -i '\.dmg$' | head -1)
-          WINDOWS_URL=$(echo "$ASSETS" | grep -i '\.exe$' | grep -iv 'blockmap' | head -1)
-          LINUX_URL=$(echo "$ASSETS" | grep -i '\.AppImage$' | head -1)
-
-          if [ -z "$MACOS_URL" ] || [ -z "$WINDOWS_URL" ] || [ -z "$LINUX_URL" ]; then
-            echo "::warning::Could not find all platform assets. Found:"
-            echo "  macOS:   ${MACOS_URL:-MISSING}"
-            echo "  Windows: ${WINDOWS_URL:-MISSING}"
-            echo "  Linux:   ${LINUX_URL:-MISSING}"
-          fi
-
-          echo "macos_url=${MACOS_URL}" >> "$GITHUB_OUTPUT"
-          echo "windows_url=${WINDOWS_URL}" >> "$GITHUB_OUTPUT"
-          echo "linux_url=${LINUX_URL}" >> "$GITHUB_OUTPUT"
-
       - name: Update download links
         env:
-          MACOS_URL: ${{ steps.assets.outputs.macos_url }}
-          WINDOWS_URL: ${{ steps.assets.outputs.windows_url }}
-          LINUX_URL: ${{ steps.assets.outputs.linux_url }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          [ -n "$MACOS_URL" ] && sed -i "/<!-- RELEASE_LINK:macos -->/{ n; s|href=\"[^\"]*\"|href=\"${MACOS_URL}\"|; }" landing/index.html
-          [ -n "$WINDOWS_URL" ] && sed -i "/<!-- RELEASE_LINK:windows -->/{ n; s|href=\"[^\"]*\"|href=\"${WINDOWS_URL}\"|; }" landing/index.html
-          [ -n "$LINUX_URL" ] && sed -i "/<!-- RELEASE_LINK:linux -->/{ n; s|href=\"[^\"]*\"|href=\"${LINUX_URL}\"|; }" landing/index.html
+          BASE="https://github.com/gustavowt/hydranote/releases/download/${TAG}"
+          MACOS_URL="${BASE}/HydraNote-${VERSION}-arm64.dmg"
+          WINDOWS_URL="${BASE}/HydraNote-Setup-${VERSION}.exe"
+          LINUX_URL="${BASE}/HydraNote-${VERSION}.AppImage"
+
+          sed -i "/<!-- RELEASE_LINK:macos -->/{ n; s|href=\"[^\"]*\"|href=\"${MACOS_URL}\"|; }" landing/index.html
+          sed -i "/<!-- RELEASE_LINK:windows -->/{ n; s|href=\"[^\"]*\"|href=\"${WINDOWS_URL}\"|; }" landing/index.html
+          sed -i "/<!-- RELEASE_LINK:linux -->/{ n; s|href=\"[^\"]*\"|href=\"${LINUX_URL}\"|; }" landing/index.html
 
           echo "Updated landing page links to ${TAG}:"
           echo "  macOS:   ${MACOS_URL}"
