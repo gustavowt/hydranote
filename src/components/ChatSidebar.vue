@@ -873,7 +873,9 @@ async function sendMessage(text?: string) {
   if (!messageText || !sessionReady.value) return;
 
   if (!isConfigured()) {
-    // Could emit an event to show settings
+    const configMessage = await addMessage(sessionId.value, 'assistant', '⚠️ No AI provider configured. Please go to Settings and configure an AI provider (set API key or select a local model).');
+    messages.value = [...messages.value, configMessage];
+    await scrollToBottom();
     return;
   }
 

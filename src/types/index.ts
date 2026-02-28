@@ -462,6 +462,9 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
     directoryRotationInstructions: '',
     defaultDirectory: 'notes',
     autoGenerateTitle: true,
+    autoFormat: true,
+    autoProjectRouting: true,
+    autoDirectoryRouting: true,
   },
 };
 
@@ -680,6 +683,12 @@ export interface NoteSettings {
   defaultDirectory: string;
   /** Whether to auto-generate note titles */
   autoGenerateTitle: boolean;
+  /** Whether AI auto-formats note content on save */
+  autoFormat: boolean;
+  /** Whether AI auto-selects the target project on save */
+  autoProjectRouting: boolean;
+  /** Whether AI auto-selects the target directory on save */
+  autoDirectoryRouting: boolean;
 }
 
 /**
@@ -691,6 +700,9 @@ export const DEFAULT_NOTE_SETTINGS: NoteSettings = {
   directoryRotationInstructions: '',
   defaultDirectory: 'notes',
   autoGenerateTitle: true,
+  autoFormat: true,
+  autoProjectRouting: true,
+  autoDirectoryRouting: true,
 };
 
 /**

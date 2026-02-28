@@ -223,6 +223,39 @@
                     <span class="slider"></span>
                   </label>
                 </div>
+
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Auto-format Notes</label>
+                    <span class="toggle-description">AI formats and structures note content on save</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="settings.noteSettings.autoFormat" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Auto Project Routing</label>
+                    <span class="toggle-description">AI selects the target project when saving notes</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="settings.noteSettings.autoProjectRouting" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <div class="field-group toggle-field">
+                  <div class="toggle-info">
+                    <label>Auto Directory Routing</label>
+                    <span class="toggle-description">AI selects the target directory when saving notes</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="settings.noteSettings.autoDirectoryRouting" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -1637,7 +1670,8 @@ async function selectLocalModel(model: LocalModel) {
       ...settings.value.huggingfaceLocal,
       modelId: model.id,
     };
-    
+    saveSettings(settings.value);
+
     // Load the model into runtime
     loadingModel.value = true;
     runtimeStatus.value = {

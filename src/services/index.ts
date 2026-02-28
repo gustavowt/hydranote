@@ -4,7 +4,7 @@
  */
 
 // Database
-export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles } from './database';
+export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles, updateProjectStatus } from './database';
 export type { FuzzySearchResult } from './database';
 
 // Project Service
@@ -81,6 +81,9 @@ export {
   saveNoteSettings,
   getNoteFormatInstructions,
   getDefaultNoteDirectory,
+  isAutoFormatEnabled,
+  isAutoProjectRoutingEnabled,
+  isAutoDirectoryRoutingEnabled,
 } from './llmService';
 
 // Tool Service

@@ -129,6 +129,30 @@ export function getDefaultNoteDirectory(): string {
   return noteSettings.defaultDirectory || 'notes';
 }
 
+/**
+ * Check if auto-formatting is enabled for note saves
+ */
+export function isAutoFormatEnabled(): boolean {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.autoFormat !== false;
+}
+
+/**
+ * Check if AI project routing is enabled for note saves
+ */
+export function isAutoProjectRoutingEnabled(): boolean {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.autoProjectRouting !== false;
+}
+
+/**
+ * Check if AI directory routing is enabled for note saves
+ */
+export function isAutoDirectoryRoutingEnabled(): boolean {
+  const noteSettings = loadNoteSettings();
+  return noteSettings.autoDirectoryRouting !== false;
+}
+
 // ============================================
 // OpenAI API
 // ============================================

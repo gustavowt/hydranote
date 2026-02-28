@@ -159,15 +159,7 @@
     <ion-modal :is-open="showFormatModal" @didDismiss="showFormatModal = false">
       <ion-header>
         <ion-toolbar>
-          <ion-buttons slot="start">
-            <ion-button @click="showFormatModal = false">Cancel</ion-button>
-          </ion-buttons>
           <ion-title>AI Formatting</ion-title>
-          <ion-buttons slot="end">
-            <ion-button :strong="true" @click="handleRunFormatting" :disabled="formatting">
-              {{ formatting ? 'Formatting...' : 'Format' }}
-            </ion-button>
-          </ion-buttons>
         </ion-toolbar>
       </ion-header>
       <ion-content class="ion-padding format-modal-content">
@@ -185,15 +177,30 @@
           Your default formatting settings from Settings will also be applied.
         </p>
       </ion-content>
+      <ion-footer class="modal-footer">
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button fill="clear" @click="showFormatModal = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-buttons slot="end">
+            <ion-button
+              fill="solid"
+              :strong="true"
+              @click="handleRunFormatting"
+              :disabled="formatting"
+              class="modal-confirm-btn"
+            >
+              {{ formatting ? 'Formatting...' : 'Format' }}
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-footer>
     </ion-modal>
 
     <!-- Version History Modal -->
     <ion-modal :is-open="showVersionHistoryModal" @didDismiss="showVersionHistoryModal = false">
       <ion-header>
         <ion-toolbar>
-          <ion-buttons slot="start">
-            <ion-button @click="showVersionHistoryModal = false">Close</ion-button>
-          </ion-buttons>
           <ion-title>Version History</ion-title>
         </ion-toolbar>
       </ion-header>
@@ -237,6 +244,155 @@
           </ion-item>
         </ion-list>
       </ion-content>
+      <ion-footer class="modal-footer">
+        <ion-toolbar>
+          <ion-buttons slot="end">
+            <ion-button fill="clear" @click="showVersionHistoryModal = false">Close</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-footer>
+    </ion-modal>
+
+    <!-- Manual / Hybrid Save Modal -->
+    <ion-modal :is-open="showManualSaveModal" @didDismiss="handleSaveModalDismiss">
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>Save Note</ion-title>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding manual-save-modal-content">
+        <p v-if="!hybridMode" class="manual-save-description">
+          No AI provider configured. Choose where to save your note manually.
+        </p>
+        <p v-else class="manual-save-description">
+          AI has pre-filled some fields. Complete the remaining fields and save.
+        </p>
+
+        <!-- Project Selection -->
+        <div class="manual-save-field">
+          <ion-label class="manual-save-label">
+            Project
+            <span v-if="hybridProjectLocked" class="ai-badge">AI</span>
+          </ion-label>
+          <div class="manual-save-project-select">
+            <ion-select
+              v-if="!manualSaveCreatingNewProject"
+              v-model="manualSaveProjectId"
+              placeholder="Select a project"
+              interface="popover"
+              class="manual-save-select"
+              :class="{ 'field-locked': hybridProjectLocked }"
+              :disabled="hybridProjectLocked"
+              @ionChange="handleManualProjectChange"
+            >
+              <ion-select-option
+                v-for="project in availableProjects"
+                :key="project.id"
+                :value="project.id"
+              >
+                {{ project.name }}
+              </ion-select-option>
+            </ion-select>
+            <ion-input
+              v-else
+              v-model="manualSaveNewProjectName"
+              placeholder="New project name"
+              class="manual-save-input"
+            />
+            <ion-button
+              v-if="!hybridProjectLocked"
+              fill="clear"
+              size="small"
+              @click="toggleNewProject"
+              class="manual-save-toggle-btn"
+            >
+              <ion-icon :icon="manualSaveCreatingNewProject ? closeOutline : addOutline" slot="icon-only" />
+            </ion-button>
+          </div>
+        </div>
+
+        <!-- Directory Selection -->
+        <div class="manual-save-field">
+          <ion-label class="manual-save-label">
+            Directory
+            <span v-if="hybridDirectoryLocked" class="ai-badge">AI</span>
+          </ion-label>
+          <div class="manual-save-project-select">
+            <ion-select
+              v-if="!manualSaveCreatingNewDirectory"
+              v-model="manualSaveDirectory"
+              placeholder="Root (no directory)"
+              interface="popover"
+              class="manual-save-select"
+              :class="{ 'field-locked': hybridDirectoryLocked }"
+              :disabled="hybridDirectoryLocked"
+            >
+              <ion-select-option value="">Root (no directory)</ion-select-option>
+              <ion-select-option
+                v-for="dir in availableDirectories"
+                :key="dir"
+                :value="dir"
+              >
+                {{ dir }}
+              </ion-select-option>
+            </ion-select>
+            <ion-input
+              v-else
+              v-model="manualSaveNewDirectoryName"
+              placeholder="New directory name"
+              class="manual-save-input"
+            />
+            <ion-button
+              v-if="!hybridDirectoryLocked"
+              fill="clear"
+              size="small"
+              @click="toggleNewDirectory"
+              class="manual-save-toggle-btn"
+            >
+              <ion-icon :icon="manualSaveCreatingNewDirectory ? closeOutline : addOutline" slot="icon-only" />
+            </ion-button>
+          </div>
+        </div>
+
+        <!-- File Name -->
+        <div class="manual-save-field">
+          <ion-label class="manual-save-label">File Name</ion-label>
+          <ion-input
+            v-model="manualSaveFileName"
+            placeholder="note.md"
+            class="manual-save-input"
+          />
+        </div>
+
+        <p v-if="!hybridMode" class="manual-save-hint">
+          <ion-icon :icon="informationCircleOutline" />
+          The note will be saved as-is without AI formatting. You can run AI formatting later from the editor menu.
+        </p>
+        <p v-else-if="hybridFormattedContent && hybridFormattedContent !== content" class="manual-save-hint hybrid-hint">
+          <ion-icon :icon="sparklesOutline" />
+          Note content has been formatted by AI. Original will be saved in version history.
+        </p>
+      </ion-content>
+      <ion-footer class="modal-footer">
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button fill="clear" @click="showManualSaveModal = false" :disabled="manualSaving">
+              Cancel
+            </ion-button>
+          </ion-buttons>
+          <ion-buttons slot="end">
+            <ion-button
+              fill="solid"
+              :strong="true"
+              @click="handleManualSave"
+              :disabled="manualSaving || !canManualSave"
+              class="modal-confirm-btn"
+            >
+              {{ manualSaving ? 'Saving...' : 'Save' }}
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-footer>
     </ion-modal>
 
     <!-- Editor Content -->
@@ -267,7 +423,7 @@
       <div v-if="saving && isNewNote" class="saving-overlay">
         <div class="saving-content">
           <IonSpinner name="crescent" />
-          <h3>Saving Note</h3>
+          <h3>{{ hybridRunningAI ? 'Processing Note' : 'Saving Note' }}</h3>
           <div class="execution-steps" v-if="executionSteps.length > 0">
             <div 
               v-for="step in executionSteps" 
@@ -362,10 +518,15 @@ import {
   IonLabel,
   IonModal,
   IonHeader,
+  IonFooter,
   IonToolbar,
   IonTitle,
   IonButtons,
   IonTextarea,
+  IonInput,
+  IonSelect,
+  IonSelectOption,
+  IonNote,
   toastController,
 } from '@ionic/vue';
 import {
@@ -396,12 +557,17 @@ import {
   chatbubbleOutline,
   readerOutline,
   downloadOutline,
+  addOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
 import { 
   globalAddNote, 
   formatNote, 
+  generateNoteTitle,
+  titleToSlug,
+  decideTargetProject,
+  decideNoteDirectoryWithDirs,
   getNoteFormatInstructions, 
   createFormatVersion,
   getVersionHistory,
@@ -409,6 +575,18 @@ import {
   createRestoreVersion,
   exportToFile,
   getFileNameWithoutExtension as getBaseName,
+  isConfigured,
+  isAutoFormatEnabled,
+  isAutoProjectRoutingEnabled,
+  isAutoDirectoryRoutingEnabled,
+  getAllProjects,
+  createProject,
+  getProjectDirectories,
+  persistNote,
+  indexNote,
+  generateUniqueFileName,
+  updateProjectStatus,
+  flushDatabase,
 } from '@/services';
 import type { DocumentFormat } from '@/types';
 
@@ -555,6 +733,26 @@ const totalVersions = ref(0);
 const currentVersionIndex = ref(0); // 0 means viewing current/latest
 const navigatingVersion = ref(false);
 const cachedVersions = ref<Map<number, string>>(new Map()); // Cache for version content
+
+// Manual/hybrid save state
+const showManualSaveModal = ref(false);
+const manualSaveProjectId = ref<string | null>(null);
+const manualSaveNewProjectName = ref('');
+const manualSaveDirectory = ref('');
+const manualSaveNewDirectoryName = ref('');
+const manualSaveFileName = ref('');
+const manualSaveCreatingNewProject = ref(false);
+const manualSaveCreatingNewDirectory = ref(false);
+const availableProjects = ref<Project[]>([]);
+const availableDirectories = ref<string[]>([]);
+const manualSaving = ref(false);
+
+// Hybrid save mode: tracks which fields were AI-decided (shown as disabled)
+const hybridMode = ref(false);
+const hybridProjectLocked = ref(false);
+const hybridDirectoryLocked = ref(false);
+const hybridFormattedContent = ref<string | null>(null);
+const hybridRunningAI = ref(false);
 
 // Text selection state (for Send to Chat feature)
 const selectionText = ref('');
@@ -866,6 +1064,26 @@ async function handleSave() {
 }
 
 async function saveNewNote() {
+  if (!isConfigured()) {
+    await openManualSaveModal();
+    return;
+  }
+
+  const autoFormat = isAutoFormatEnabled();
+  const autoProject = isAutoProjectRoutingEnabled();
+  const autoDirectory = isAutoDirectoryRoutingEnabled();
+
+  // If all AI features are enabled → fully automatic flow
+  if (autoFormat && autoProject && autoDirectory) {
+    await saveNewNoteAutomatic();
+    return;
+  }
+
+  // Hybrid flow: run AI for enabled features, then show modal for the rest
+  await saveNewNoteHybrid(autoFormat, autoProject, autoDirectory);
+}
+
+async function saveNewNoteAutomatic() {
   saving.value = true;
   executionSteps.value = [];
 
@@ -876,7 +1094,6 @@ async function saveNewNote() {
   try {
     let result = await globalAddNote({ rawNoteText: content.value }, onProgress);
 
-    // Auto-confirm new project if needed
     if (result.pendingConfirmation) {
       const toast = await toastController.create({
         message: `Creating project "${result.pendingConfirmation.proposedProjectName}"...`,
@@ -886,7 +1103,6 @@ async function saveNewNote() {
       });
       await toast.present();
 
-      // Auto-confirm the new project
       result = await globalAddNote(
         {
           rawNoteText: content.value,
@@ -908,7 +1124,6 @@ async function saveNewNote() {
       });
       await toast.present();
 
-      // Clear editor and emit event
       content.value = '';
       originalContent.value = '';
       emit('note-saved', result);
@@ -932,6 +1147,343 @@ async function saveNewNote() {
   } finally {
     saving.value = false;
     executionSteps.value = [];
+  }
+}
+
+async function saveNewNoteHybrid(autoFormat: boolean, autoProject: boolean, autoDirectory: boolean) {
+  hybridMode.value = true;
+  hybridProjectLocked.value = false;
+  hybridDirectoryLocked.value = false;
+  hybridFormattedContent.value = null;
+  hybridRunningAI.value = true;
+  saving.value = true;
+  executionSteps.value = [];
+
+  try {
+    // Phase 1: Run AI for all enabled features in parallel
+    const aiPromises: Promise<void>[] = [];
+    let aiTitle = '';
+    let aiProjectId: string | null = null;
+    let aiProjectName = '';
+    let aiDirectory = '';
+    let formattedText = content.value;
+    let newProjectCreated = false;
+
+    // Build parallel AI tasks
+    const titlePromise = generateNoteTitle(content.value).then(t => { aiTitle = t; });
+    aiPromises.push(titlePromise);
+
+    if (autoFormat) {
+      const formatPromise = formatNote(content.value).then(f => { formattedText = f; });
+      aiPromises.push(formatPromise);
+
+      executionSteps.value = [
+        { id: 'format', status: 'running', label: 'Formatting note' },
+        ...executionSteps.value.filter(s => s.id !== 'format'),
+      ];
+    }
+
+    if (autoProject) {
+      const projectPromise = decideTargetProject(content.value).then(async decision => {
+        if (decision.action === 'create_project') {
+          const newProject = await createProject(
+            decision.proposedProjectName || 'New Project',
+            decision.proposedProjectDescription,
+          );
+          aiProjectId = newProject.id;
+          aiProjectName = newProject.name;
+          newProjectCreated = true;
+        } else if (decision.targetProjectId) {
+          aiProjectId = decision.targetProjectId;
+          const projects = await getAllProjects();
+          const found = projects.find(p => p.id === decision.targetProjectId);
+          aiProjectName = found?.name || '';
+        }
+      });
+      aiPromises.push(projectPromise);
+
+      executionSteps.value = [
+        ...executionSteps.value,
+        { id: 'project', status: 'running', label: 'Deciding project' },
+      ];
+    }
+
+    await Promise.all(aiPromises);
+
+    // Phase 1b: If project was AI-decided and directory routing is enabled, run directory routing
+    if (autoDirectory && aiProjectId) {
+      executionSteps.value = executionSteps.value.map(s =>
+        s.id === 'project' ? { ...s, status: 'completed' as const, detail: aiProjectName } : s
+      );
+      executionSteps.value = [
+        ...executionSteps.value,
+        { id: 'directory', status: 'running', label: 'Choosing directory' },
+      ];
+
+      const existingDirs = await getProjectDirectories(aiProjectId);
+      const dirDecision = await decideNoteDirectoryWithDirs(aiProjectId, aiTitle, existingDirs);
+      aiDirectory = dirDecision.targetDirectory;
+
+      executionSteps.value = executionSteps.value.map(s =>
+        s.id === 'directory' ? { ...s, status: 'completed' as const, detail: aiDirectory } : s
+      );
+    }
+
+    // Mark completed steps
+    executionSteps.value = executionSteps.value.map(s =>
+      s.status === 'running' ? { ...s, status: 'completed' as const } : s
+    );
+
+    hybridFormattedContent.value = formattedText;
+    hybridRunningAI.value = false;
+    saving.value = false;
+
+    // Phase 2: Load data for the modal
+    availableProjects.value = await getAllProjects();
+
+    // Pre-fill modal fields with AI results
+    const slug = titleToSlug(aiTitle);
+    manualSaveFileName.value = slug ? `${slug}.md` : getDefaultFileName();
+
+    if (autoProject && aiProjectId) {
+      manualSaveProjectId.value = aiProjectId;
+      hybridProjectLocked.value = true;
+      manualSaveCreatingNewProject.value = false;
+      // Load directories for the AI-selected project
+      try {
+        availableDirectories.value = await getProjectDirectories(aiProjectId);
+      } catch { availableDirectories.value = []; }
+    } else {
+      manualSaveProjectId.value = null;
+      hybridProjectLocked.value = false;
+      manualSaveCreatingNewProject.value = false;
+      availableDirectories.value = [];
+    }
+
+    if (autoDirectory && aiDirectory) {
+      manualSaveDirectory.value = aiDirectory;
+      hybridDirectoryLocked.value = true;
+      manualSaveCreatingNewDirectory.value = false;
+    } else {
+      manualSaveDirectory.value = '';
+      hybridDirectoryLocked.value = false;
+      manualSaveCreatingNewDirectory.value = false;
+    }
+
+    manualSaveNewProjectName.value = '';
+    manualSaveNewDirectoryName.value = '';
+
+    // Open the modal
+    showManualSaveModal.value = true;
+    executionSteps.value = [];
+
+  } catch (error) {
+    hybridRunningAI.value = false;
+    saving.value = false;
+    executionSteps.value = [];
+    const toast = await toastController.create({
+      message: 'An error occurred while processing',
+      duration: 3000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  }
+}
+
+// ============================================
+// Manual Save (no AI provider)
+// ============================================
+
+function getDefaultFileName(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `note-${yyyy}-${mm}-${dd}.md`;
+}
+
+async function openManualSaveModal() {
+  // Reset hybrid state — this is a fully manual save
+  hybridMode.value = false;
+  hybridProjectLocked.value = false;
+  hybridDirectoryLocked.value = false;
+  hybridFormattedContent.value = null;
+  hybridRunningAI.value = false;
+
+  manualSaveProjectId.value = null;
+  manualSaveNewProjectName.value = '';
+  manualSaveDirectory.value = '';
+  manualSaveNewDirectoryName.value = '';
+  manualSaveFileName.value = getDefaultFileName();
+  manualSaveCreatingNewProject.value = false;
+  manualSaveCreatingNewDirectory.value = false;
+  availableDirectories.value = [];
+
+  try {
+    availableProjects.value = await getAllProjects();
+  } catch {
+    availableProjects.value = [];
+  }
+
+  showManualSaveModal.value = true;
+}
+
+function handleSaveModalDismiss() {
+  showManualSaveModal.value = false;
+  hybridMode.value = false;
+  hybridProjectLocked.value = false;
+  hybridDirectoryLocked.value = false;
+  hybridFormattedContent.value = null;
+}
+
+function toggleNewProject() {
+  manualSaveCreatingNewProject.value = !manualSaveCreatingNewProject.value;
+  if (manualSaveCreatingNewProject.value) {
+    manualSaveProjectId.value = null;
+    manualSaveNewProjectName.value = '';
+    availableDirectories.value = [];
+    manualSaveDirectory.value = '';
+    manualSaveCreatingNewDirectory.value = false;
+    manualSaveNewDirectoryName.value = '';
+  } else {
+    manualSaveNewProjectName.value = '';
+  }
+}
+
+function toggleNewDirectory() {
+  manualSaveCreatingNewDirectory.value = !manualSaveCreatingNewDirectory.value;
+  if (manualSaveCreatingNewDirectory.value) {
+    manualSaveDirectory.value = '';
+    manualSaveNewDirectoryName.value = '';
+  } else {
+    manualSaveNewDirectoryName.value = '';
+  }
+}
+
+async function handleManualProjectChange() {
+  manualSaveDirectory.value = '';
+  hybridDirectoryLocked.value = false;
+  if (!manualSaveProjectId.value) {
+    availableDirectories.value = [];
+    return;
+  }
+  try {
+    const dirs = await getProjectDirectories(manualSaveProjectId.value);
+    availableDirectories.value = dirs;
+
+    // If in hybrid mode and directory routing is enabled, auto-decide directory
+    if (hybridMode.value && isAutoDirectoryRoutingEnabled() && manualSaveFileName.value) {
+      const title = manualSaveFileName.value.replace(/\.md$/, '');
+      const dirDecision = await decideNoteDirectoryWithDirs(
+        manualSaveProjectId.value,
+        title,
+        dirs,
+      );
+      manualSaveDirectory.value = dirDecision.targetDirectory;
+      hybridDirectoryLocked.value = true;
+    }
+  } catch {
+    availableDirectories.value = [];
+  }
+}
+
+const canManualSave = computed(() => {
+  const hasProject = manualSaveCreatingNewProject.value
+    ? manualSaveNewProjectName.value.trim().length > 0
+    : !!manualSaveProjectId.value;
+  const hasFileName = manualSaveFileName.value.trim().length > 0;
+  return hasProject && hasFileName;
+});
+
+async function handleManualSave() {
+  if (!canManualSave.value) return;
+
+  manualSaving.value = true;
+
+  try {
+    let projectId: string;
+    let projectName: string;
+    let newProjectCreated = false;
+
+    if (manualSaveCreatingNewProject.value) {
+      const newProject = await createProject(
+        manualSaveNewProjectName.value.trim(),
+      );
+      projectId = newProject.id;
+      projectName = newProject.name;
+      newProjectCreated = true;
+    } else {
+      projectId = manualSaveProjectId.value!;
+      const project = availableProjects.value.find(p => p.id === projectId);
+      projectName = project?.name || '';
+    }
+
+    let fileName = manualSaveFileName.value.trim();
+    if (!fileName.endsWith('.md')) {
+      fileName += '.md';
+    }
+
+    const slug = fileName.replace(/\.md$/, '');
+    const directory = manualSaveCreatingNewDirectory.value
+      ? manualSaveNewDirectoryName.value.trim()
+      : manualSaveDirectory.value;
+    const uniqueFileName = await generateUniqueFileName(projectId, slug, directory);
+
+    // In hybrid mode, use AI-formatted content; otherwise use raw content
+    const noteContent = (hybridMode.value && hybridFormattedContent.value)
+      ? hybridFormattedContent.value
+      : content.value;
+
+    const file = await persistNote(
+      projectId,
+      uniqueFileName,
+      directory,
+      noteContent,
+    );
+
+    // Store original (pre-formatting) content in version history if formatted
+    if (hybridMode.value && hybridFormattedContent.value && hybridFormattedContent.value !== content.value) {
+      await createFormatVersion(file.id, content.value);
+    }
+
+    await indexNote(file);
+    await updateProjectStatus(projectId, 'indexed');
+    await flushDatabase();
+
+    showManualSaveModal.value = false;
+
+    const toast = await toastController.create({
+      message: `Note saved to "${projectName}"`,
+      duration: 3000,
+      position: 'top',
+      color: 'success',
+    });
+    await toast.present();
+
+    content.value = '';
+    originalContent.value = '';
+    hybridMode.value = false;
+    hybridFormattedContent.value = null;
+    emit('note-saved', {
+      success: true,
+      projectId,
+      projectName,
+      newProjectCreated,
+      filePath: file.name,
+      title: slug,
+      fileId: file.id,
+    });
+  } catch (error) {
+    const toast = await toastController.create({
+      message: error instanceof Error ? error.message : 'Failed to save note',
+      duration: 3000,
+      position: 'top',
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    manualSaving.value = false;
   }
 }
 
@@ -2293,6 +2845,143 @@ ion-modal ion-content.version-history-content {
 
 .version-list ion-button[fill="outline"]:hover {
   --background: rgba(var(--hn-teal-rgb), 0.1);
+}
+
+/* Manual Save Modal */
+ion-modal ion-content.manual-save-modal-content {
+  --background: var(--hn-bg-deep);
+}
+
+.manual-save-description {
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.manual-save-field {
+  margin-bottom: 18px;
+}
+
+.manual-save-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--hn-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.manual-save-project-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.manual-save-project-select .manual-save-select,
+.manual-save-project-select .manual-save-input {
+  flex: 1;
+}
+
+.manual-save-select {
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
+  --border-radius: 8px;
+  --padding-start: 12px;
+  --padding-end: 12px;
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+}
+
+.manual-save-input {
+  --background: var(--hn-bg-surface);
+  --color: var(--hn-text-primary);
+  --placeholder-color: var(--hn-text-muted);
+  --border-radius: 8px;
+  --padding-start: 12px;
+  --padding-end: 12px;
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+}
+
+.manual-save-input:focus-within {
+  border-color: var(--hn-teal);
+}
+
+.manual-save-toggle-btn {
+  --color: var(--hn-text-secondary);
+  flex-shrink: 0;
+}
+
+.manual-save-toggle-btn:hover {
+  --color: var(--hn-teal);
+}
+
+.manual-save-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--hn-text-muted);
+  font-size: 0.8rem;
+  padding: 10px 12px;
+  background: var(--hn-bg-surface);
+  border-radius: 6px;
+  border: 1px solid var(--hn-border-subtle);
+  margin-top: 24px;
+}
+
+.manual-save-hint ion-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  color: var(--hn-teal);
+  margin-top: 1px;
+}
+
+.manual-save-hint.hybrid-hint {
+  border-color: var(--hn-purple);
+}
+
+.manual-save-hint.hybrid-hint ion-icon {
+  color: var(--hn-purple);
+}
+
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--hn-purple);
+  background: rgba(168, 85, 247, 0.15);
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.field-locked {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.modal-footer ion-toolbar {
+  --background: var(--hn-bg-surface);
+  --border-color: var(--hn-border-default);
+  padding: 4px 8px;
+}
+
+.modal-confirm-btn {
+  --background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  --color: #ffffff;
+  --border-radius: 8px;
+  --padding-start: 20px;
+  --padding-end: 20px;
+}
+
+.modal-confirm-btn:disabled {
+  opacity: 0.5;
 }
 </style>
 
