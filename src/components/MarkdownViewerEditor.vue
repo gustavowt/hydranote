@@ -2,23 +2,7 @@
   <ion-modal :is-open="isOpen" @didDismiss="handleClose" class="markdown-modal">
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start">
-          <ion-button @click="handleClose">
-            <ion-icon slot="icon-only" :icon="closeOutline" />
-          </ion-button>
-        </ion-buttons>
         <ion-title>{{ fileName }}</ion-title>
-        <ion-buttons slot="end">
-          <ion-button v-if="!isEditing" @click="toggleEdit" :disabled="!canEdit">
-            <ion-icon slot="icon-only" :icon="createOutline" />
-          </ion-button>
-          <ion-button v-else @click="saveChanges" :disabled="!hasChanges">
-            <ion-icon slot="icon-only" :icon="saveOutline" />
-          </ion-button>
-          <ion-button @click="downloadFile">
-            <ion-icon slot="icon-only" :icon="downloadOutline" />
-          </ion-button>
-        </ion-buttons>
       </ion-toolbar>
       <ion-toolbar v-if="canEdit" class="mode-toggle">
         <ion-segment v-model="viewMode" @ionChange="handleModeChange">
@@ -81,6 +65,41 @@
         <div class="split-preview markdown-view" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent"></div>
       </div>
     </ion-content>
+    <ion-footer class="modal-footer">
+      <ion-toolbar>
+        <ion-buttons slot="start">
+          <ion-button fill="clear" @click="handleClose">
+            <ion-icon slot="start" :icon="closeOutline" />
+            Close
+          </ion-button>
+        </ion-buttons>
+        <ion-buttons slot="end">
+          <ion-button fill="clear" @click="downloadFile">
+            <ion-icon slot="icon-only" :icon="downloadOutline" />
+          </ion-button>
+          <ion-button
+            v-if="!isEditing"
+            fill="solid"
+            @click="toggleEdit"
+            :disabled="!canEdit"
+            class="modal-confirm-btn"
+          >
+            <ion-icon slot="start" :icon="createOutline" />
+            Edit
+          </ion-button>
+          <ion-button
+            v-else
+            fill="solid"
+            @click="saveChanges"
+            :disabled="!hasChanges"
+            class="modal-confirm-btn"
+          >
+            <ion-icon slot="start" :icon="saveOutline" />
+            Save
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-footer>
   </ion-modal>
 </template>
 
@@ -94,6 +113,7 @@ import mermaid from 'mermaid';
 import {
   IonModal,
   IonHeader,
+  IonFooter,
   IonToolbar,
   IonTitle,
   IonContent,
@@ -602,6 +622,24 @@ function downloadFile() {
   width: 50%;
   overflow-y: auto;
   overflow-x: auto;
+}
+
+.modal-footer ion-toolbar {
+  --background: var(--hn-bg-surface);
+  --border-color: var(--hn-border-default);
+  padding: 4px 8px;
+}
+
+.modal-confirm-btn {
+  --background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  --color: #ffffff;
+  --border-radius: 8px;
+  --padding-start: 16px;
+  --padding-end: 16px;
+}
+
+.modal-confirm-btn:disabled {
+  opacity: 0.5;
 }
 </style>
 

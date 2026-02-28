@@ -122,15 +122,7 @@
     <ion-modal :is-open="showCreateProjectModal" @didDismiss="showCreateProjectModal = false">
       <ion-header>
         <ion-toolbar>
-          <ion-buttons slot="start">
-            <ion-button @click="showCreateProjectModal = false">Cancel</ion-button>
-          </ion-buttons>
           <ion-title>New Project</ion-title>
-          <ion-buttons slot="end">
-            <ion-button :strong="true" @click="handleCreateProject" :disabled="!newProject.name.trim()">
-              Create
-            </ion-button>
-          </ion-buttons>
         </ion-toolbar>
       </ion-header>
       <ion-content class="ion-padding">
@@ -155,6 +147,24 @@
           </ion-item>
         </ion-list>
       </ion-content>
+      <ion-footer class="modal-footer">
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button fill="clear" @click="showCreateProjectModal = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-buttons slot="end">
+            <ion-button
+              fill="solid"
+              :strong="true"
+              @click="handleCreateProject"
+              :disabled="!newProject.name.trim()"
+              class="modal-confirm-btn"
+            >
+              Create
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-footer>
     </ion-modal>
 
   </ion-page>
@@ -166,6 +176,7 @@ import { useRouter } from 'vue-router';
 import {
   IonPage,
   IonHeader,
+  IonFooter,
   IonToolbar,
   IonTitle,
   IonContent,
@@ -907,6 +918,24 @@ ion-modal ion-button {
 
 ion-modal ion-button[strong] {
   --color: var(--hn-green);
+}
+
+.modal-footer ion-toolbar {
+  --background: var(--hn-bg-surface);
+  --border-color: var(--hn-border-default);
+  padding: 4px 8px;
+}
+
+.modal-confirm-btn {
+  --background: linear-gradient(135deg, var(--hn-green) 0%, var(--hn-teal) 100%);
+  --color: #ffffff;
+  --border-radius: 8px;
+  --padding-start: 20px;
+  --padding-end: 20px;
+}
+
+.modal-confirm-btn:disabled {
+  opacity: 0.5;
 }
 </style>
 
