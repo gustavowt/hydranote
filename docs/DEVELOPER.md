@@ -267,6 +267,22 @@ Full markdown editor with edit/split/preview modes, Mermaid diagram support, inl
 - AI Formatting via 3-dots menu
 - Export as PDF/DOCX/Markdown
 - Version history restore
+- Smart editing predictions via `useMarkdownShortcuts` composable (see below)
+
+**Smart Editing (`src/composables/useMarkdownShortcuts.ts`):**
+Composable that attaches to the textarea(s) and provides markdown-aware keyboard behavior:
+- **List continuation (Enter)**: Auto-inserts the next list marker for unordered (`-`, `*`, `+`), ordered (`1.`, `2.`), and checkbox (`- [ ]`) lists. Preserves indentation level. Empty marker + Enter removes the marker and exits the list.
+- **Blockquote continuation (Enter)**: Auto-inserts `> ` prefix on new lines inside blockquotes. Empty blockquote + Enter exits the blockquote.
+- **Fenced code block auto-close (Enter)**: Typing ` ``` ` or `~~~` (with optional language) and pressing Enter inserts a closing fence and positions cursor inside the block.
+- **Horizontal rule (Enter)**: Pressing Enter after `---`, `***`, or `___` adds a blank line after the rule for easy continuation.
+- **Tab / Shift+Tab indentation**: Indents/outdents single lines or multi-line selections by 2 spaces. Prevents default focus-switch behavior.
+- **Auto-pairing**: Pairs `*`, `` ` ``, `~`, `[`, `(` with their closing counterpart. Wraps selected text when typing an opener. Skips pairing for symmetric chars (`*`, `~`, `` ` ``) at line start or after whitespace to avoid interfering with list markers.
+- **Checkbox toggle (Alt+X)**: Toggles `- [ ]` / `- [x]` on the current line.
+- **Move line (Alt+Up / Alt+Down)**: Swaps the current line or multi-line selection with the line above or below.
+- **Duplicate line (Cmd/Ctrl+Shift+D)**: Duplicates the current line or selection below the cursor.
+- **Delete line (Cmd/Ctrl+Shift+Backspace)**: Deletes the entire current line.
+- **Formatting shortcuts**: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link), Cmd/Ctrl+Shift+K (inline code). Toggles wrap/unwrap on selected text or inserts placeholder at cursor.
+- **Shortcuts catalog (Cmd/Ctrl+/)**: Opens a modal listing all available keyboard shortcuts, organized by category. Also accessible via a keyboard icon in the editor header next to the filename. The catalog data (`SHORTCUTS_CATALOG`) and category labels (`SHORTCUT_CATEGORIES`) are exported from the composable as a single source of truth.
 
 ### ChatSidebar (`ChatSidebar.vue`)
 AI chat panel with project context, `@file:` autocomplete, `@selection:` references from editor.
@@ -583,6 +599,8 @@ src/
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
 │       └── StorageSettings.vue
+├── composables/
+│   └── useMarkdownShortcuts.ts      # Smart editing for markdown textareas
 ├── icons/                           # SVG icon components for providers
 ├── services/
 │   ├── chatService.ts               # Chat session management

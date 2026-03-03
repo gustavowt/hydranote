@@ -37,6 +37,13 @@
             {{ displayFileName }}
           </span>
           <span v-if="hasChanges" class="unsaved-indicator">•</span>
+          <button
+            class="shortcuts-hint-btn"
+            @click="showShortcutsModal = true"
+            title="Keyboard shortcuts"
+          >
+            <ion-icon :icon="keypadOutline" />
+          </button>
         </template>
       </div>
       <div class="header-actions">
@@ -395,6 +402,42 @@
       </ion-footer>
     </ion-modal>
 
+    <!-- Keyboard Shortcuts Modal -->
+    <ion-modal :is-open="showShortcutsModal" @didDismiss="showShortcutsModal = false">
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>Keyboard Shortcuts</ion-title>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding shortcuts-modal-content">
+        <div v-for="cat in shortcutCategories" :key="cat.key" class="shortcuts-group">
+          <h3 class="shortcuts-group-title">{{ cat.label }}</h3>
+          <div
+            v-for="entry in shortcutsByCategory[cat.key]"
+            :key="entry.keys"
+            class="shortcut-row"
+          >
+            <span class="shortcut-description">{{ entry.description }}</span>
+            <span class="shortcut-keys">
+              <template v-if="entry.keys.includes(',')">
+                <kbd>{{ entry.keys }}</kbd>
+              </template>
+              <template v-else>
+                <kbd v-for="(part, i) in entry.keys.split('+')" :key="i">{{ part.trim() }}</kbd>
+              </template>
+            </span>
+          </div>
+        </div>
+      </ion-content>
+      <ion-footer class="modal-footer">
+        <ion-toolbar>
+          <ion-buttons slot="end">
+            <ion-button fill="clear" @click="showShortcutsModal = false">Close</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-footer>
+    </ion-modal>
+
     <!-- Editor Content -->
     <div class="editor-content" ref="editorContentRef">
       <!-- Floating Send to Chat Button -->
@@ -558,9 +601,12 @@ import {
   readerOutline,
   downloadOutline,
   addOutline,
+  keypadOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
+import { useMarkdownShortcuts, SHORTCUTS_CATALOG, SHORTCUT_CATEGORIES } from '@/composables/useMarkdownShortcuts';
+import type { ShortcutEntry } from '@/composables/useMarkdownShortcuts';
 import { 
   globalAddNote, 
   formatNote, 
@@ -673,6 +719,23 @@ const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
+
+// Keyboard shortcuts catalog
+const showShortcutsModal = ref(false);
+const toggleShortcutsModal = () => { showShortcutsModal.value = !showShortcutsModal.value; };
+
+const shortcutCategories = (Object.keys(SHORTCUT_CATEGORIES) as Array<ShortcutEntry['category']>).map(key => ({
+  key,
+  label: SHORTCUT_CATEGORIES[key],
+}));
+const shortcutsByCategory = shortcutCategories.reduce((acc, cat) => {
+  acc[cat.key] = SHORTCUTS_CATALOG.filter(e => e.category === cat.key);
+  return acc;
+}, {} as Record<ShortcutEntry['category'], ShortcutEntry[]>);
+
+const onShortcutContentChange = (val: string) => emit('content-change', val);
+useMarkdownShortcuts({ textareaRef: editorRef, content, onContentChange: onShortcutContentChange, onToggleShortcuts: toggleShortcutsModal });
+useMarkdownShortcuts({ textareaRef: splitEditorRef, content, onContentChange: onShortcutContentChange, onToggleShortcuts: toggleShortcutsModal });
 
 // Split resizer state
 const splitLeftWidth = ref(50); // percentage
@@ -1022,13 +1085,23 @@ function handleDocumentSelectionChange() {
   }
 }
 
+// Global Cmd/Ctrl+/ listener for shortcuts modal (works in all view modes)
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+    e.preventDefault();
+    toggleShortcutsModal();
+  }
+}
+
 // Setup and cleanup selection listeners
 onMounted(() => {
   document.addEventListener('selectionchange', handleDocumentSelectionChange);
+  document.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onUnmounted(() => {
   document.removeEventListener('selectionchange', handleDocumentSelectionChange);
+  document.removeEventListener('keydown', handleGlobalKeydown);
   if (selectionHideTimeout) {
     clearTimeout(selectionHideTimeout);
   }
@@ -1970,6 +2043,31 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges });
   color: var(--hn-warning);
   line-height: 1;
   flex-shrink: 0;
+}
+
+.shortcuts-hint-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--hn-text-muted);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.shortcuts-hint-btn:hover {
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-hover);
+}
+
+.shortcuts-hint-btn ion-icon {
+  font-size: 14px;
 }
 
 .header-actions {
@@ -2982,6 +3080,68 @@ ion-modal ion-content.manual-save-modal-content {
 
 .modal-confirm-btn:disabled {
   opacity: 0.5;
+}
+
+/* Keyboard Shortcuts Modal */
+ion-modal ion-content.shortcuts-modal-content {
+  --background: var(--hn-bg-deep);
+}
+
+.shortcuts-group {
+  margin-bottom: 20px;
+}
+
+.shortcuts-group-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--hn-text-muted);
+  margin: 0 0 8px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hn-border-subtle);
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 4px;
+  border-radius: 6px;
+  gap: 12px;
+}
+
+.shortcut-row:hover {
+  background: var(--hn-bg-surface);
+}
+
+.shortcut-description {
+  font-size: 0.875rem;
+  color: var(--hn-text-primary);
+}
+
+.shortcut-keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.shortcut-keys kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--hn-text-secondary);
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 4px;
+  white-space: nowrap;
 }
 </style>
 
