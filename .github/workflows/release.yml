@@ -135,7 +135,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false
+        run: gh release edit "$TAG" --draft=false --generate-notes
 
       - name: Update download links
         env:
