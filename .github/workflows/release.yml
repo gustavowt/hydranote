@@ -131,11 +131,25 @@ jobs:
       - name: Pull latest (include release commit)
         run: git pull origin main
 
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+            -f tag_name="$TAG" \
+            --jq '.body')
+          EOF_MARKER=$(openssl rand -hex 16)
+          echo "body<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false --generate-notes
+        run: gh release edit "$TAG" --draft=false --notes "${{ steps.notes.outputs.body }}"
 
       - name: Update download links
         env:
