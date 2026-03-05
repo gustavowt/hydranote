@@ -434,6 +434,19 @@ Users can download any GGUF model from Hugging Face by entering:
 
 The system validates that the repository contains compatible GGUF files before allowing download.
 
+**Linux AppImage Known Limitations:**
+
+`node-llama-cpp` validates its native binaries at startup by spawning a child process via Electron's `utilityProcess.fork()`. Inside an AppImage (FUSE-mounted squashfs), this fork/test mechanism can fail with `NoBinaryFoundError`, preventing local AI features from working.
+
+Mitigations applied in the codebase:
+- `--no-sandbox` and `--disable-gpu-sandbox` flags are set automatically on Linux (`electron/src/index.ts`) to improve child-process reliability.
+- `formatNoBinaryError()` in `inferenceRuntime.ts` surfaces actionable suggestions to users when the binary test fails.
+
+If a user still encounters the issue, recommend:
+1. `APPIMAGE_EXTRACT_AND_RUN=1 ./HydraNote-*.AppImage` — bypasses FUSE mount by extracting first.
+2. `./HydraNote-*.AppImage --appimage-extract` then run the extracted binary directly.
+3. Ensure the system has glibc >= 2.31, and for GPU: `libvulkan1` (Vulkan) or NVIDIA CUDA drivers.
+
 ---
 
 ## Electron IPC Handlers

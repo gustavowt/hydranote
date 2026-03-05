@@ -32,6 +32,32 @@ async function importNodeLlamaCpp(): Promise<typeof import('node-llama-cpp')> {
 }
 
 /**
+ * Produce a user-actionable error message when node-llama-cpp cannot find
+ * a working native binary (common inside Linux AppImages).
+ */
+function formatNoBinaryError(error: unknown): string {
+  const name = error instanceof Error ? error.constructor.name : '';
+  if (name === 'NoBinaryFoundError' || (error instanceof Error && error.message.includes('NoBinaryFound'))) {
+    if (process.platform === 'linux' && process.env.APPIMAGE) {
+      return (
+        'Local AI is unavailable: the native binary could not load inside this AppImage. ' +
+        'Try running the app with:  APPIMAGE_EXTRACT_AND_RUN=1 ./HydraNote-*.AppImage  ' +
+        'or extract the AppImage (--appimage-extract) and run the extracted binary directly.'
+      );
+    }
+    if (process.platform === 'linux') {
+      return (
+        'Local AI is unavailable: no compatible native binary was found. ' +
+        'Ensure your system has glibc >= 2.31 and, for GPU acceleration, ' +
+        'the Vulkan loader (libvulkan1) or NVIDIA CUDA drivers installed.'
+      );
+    }
+    return 'Local AI is unavailable: no compatible native binary was found for this platform.';
+  }
+  return error instanceof Error ? error.message : 'Failed to initialise local AI runtime.';
+}
+
+/**
  * Get a human-readable description of the GPU backend
  */
 function getGpuBackendDescription(backend: unknown): string {
@@ -93,6 +119,7 @@ export interface HardwareInfo {
   backend: 'cuda' | 'metal' | 'vulkan' | 'cpu' | 'unknown';
   supportedBackends: string[];
   deviceName?: string;
+  error?: string;
 }
 
 // ============================================
@@ -226,7 +253,7 @@ export class InferenceRuntime {
       console.log(`[InferenceRuntime] Model loaded: ${model.name}`);
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load model';
+      const errorMessage = formatNoBinaryError(error);
       console.error('[InferenceRuntime] Failed to load model:', error);
 
       this.updateStatus({
@@ -235,7 +262,7 @@ export class InferenceRuntime {
         error: errorMessage,
       });
 
-      throw error;
+      throw new Error(errorMessage);
     }
   }
 
@@ -505,6 +532,7 @@ export class InferenceRuntime {
       return {
         backend: 'unknown',
         supportedBackends: [],
+        error: formatNoBinaryError(error),
       };
     }
   }

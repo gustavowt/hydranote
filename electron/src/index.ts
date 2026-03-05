@@ -22,6 +22,15 @@ import { getModelManager, HFModelRef } from './modelManager';
 import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
 import { getEmbeddingRuntime, isEmbeddingRuntimeAvailable } from './embeddingRuntime';
 
+// Linux AppImage workaround: the Chromium sandbox can prevent child processes
+// (e.g. node-llama-cpp binary tests via utilityProcess.fork) from running
+// inside the FUSE-mounted squashfs. Disabling the sandbox on Linux restores
+// normal child-process behaviour.
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+}
+
 // Graceful handling of unhandled errors.
 unhandled();
 
