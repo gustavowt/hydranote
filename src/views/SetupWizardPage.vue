@@ -457,7 +457,7 @@ async function handleSelectDirectory() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 900px;
+  max-width: clamp(900px, 60vw, 1200px);
   margin: 0 auto;
   padding: 40px 24px;
   overflow: hidden;
@@ -908,7 +908,7 @@ async function handleSelectDirectory() {
   transform: none;
 }
 
-/* Responsive */
+/* Responsive - Small screens */
 @media (max-width: 640px) {
   .wizard-container {
     padding: 24px 16px;
@@ -953,6 +953,214 @@ async function handleSelectDirectory() {
 
   .btn {
     flex: 1;
+  }
+}
+
+/* Responsive - Large screens */
+@media (min-width: 1400px) {
+  .wizard-container {
+    padding: 56px 40px;
+  }
+
+  .stepper {
+    margin-bottom: 40px;
+  }
+
+  .step-circle {
+    width: 52px;
+    height: 52px;
+    font-size: 1.15rem;
+  }
+
+  .step-connector {
+    top: 26px;
+    left: calc(50% + 32px);
+    width: calc(100% - 64px);
+  }
+
+  .step-label {
+    font-size: 0.95rem;
+  }
+
+  .step-icon {
+    font-size: 76px;
+  }
+
+  .app-logo {
+    width: 120px;
+    height: 120px;
+  }
+
+  .step-title {
+    font-size: 2.4rem;
+  }
+
+  .step-description {
+    font-size: 1.2rem;
+    max-width: 700px;
+  }
+
+  .features-grid {
+    gap: 20px;
+    margin: 32px 0;
+  }
+
+  .feature-card {
+    padding: 32px;
+  }
+
+  .feature-icon {
+    width: 56px;
+    height: 56px;
+  }
+
+  .feature-icon ion-icon {
+    font-size: 28px;
+  }
+
+  .feature-card h3 {
+    font-size: 1.1rem;
+  }
+
+  .feature-card p {
+    font-size: 0.9rem;
+  }
+
+  .config-section {
+    padding: 32px;
+  }
+
+  .field-group input,
+  .field-group textarea {
+    padding: 14px 18px;
+    font-size: 1rem;
+  }
+
+  .btn {
+    padding: 16px 28px;
+    font-size: 1rem;
+  }
+
+  .completion-message {
+    padding: 24px;
+  }
+}
+
+/* Responsive - Extra-large / 4K screens */
+@media (min-width: 1800px) {
+  .wizard-container {
+    max-width: 1300px;
+    padding: 64px 48px;
+  }
+
+  .stepper {
+    margin-bottom: 48px;
+  }
+
+  .step-circle {
+    width: 58px;
+    height: 58px;
+    font-size: 1.25rem;
+  }
+
+  .step-connector {
+    top: 29px;
+    left: calc(50% + 36px);
+    width: calc(100% - 72px);
+  }
+
+  .step-indicator {
+    max-width: 200px;
+  }
+
+  .step-label {
+    font-size: 1rem;
+    margin-top: 12px;
+  }
+
+  .step-icon {
+    font-size: 88px;
+  }
+
+  .app-logo {
+    width: 140px;
+    height: 140px;
+  }
+
+  .step-title {
+    font-size: 2.75rem;
+    margin-bottom: 16px;
+  }
+
+  .step-description {
+    font-size: 1.3rem;
+    max-width: 780px;
+    margin-bottom: 40px;
+  }
+
+  .features-grid {
+    gap: 24px;
+    margin: 40px 0;
+  }
+
+  .feature-card {
+    padding: 36px;
+    border-radius: 16px;
+  }
+
+  .feature-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+  }
+
+  .feature-icon ion-icon {
+    font-size: 32px;
+  }
+
+  .feature-card h3 {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+  }
+
+  .feature-card p {
+    font-size: 0.95rem;
+  }
+
+  .config-section {
+    padding: 36px;
+    border-radius: 16px;
+  }
+
+  .field-group label {
+    font-size: 1rem;
+  }
+
+  .field-group input,
+  .field-group textarea {
+    padding: 16px 20px;
+    font-size: 1.05rem;
+    border-radius: 10px;
+  }
+
+  .btn {
+    padding: 18px 32px;
+    font-size: 1.05rem;
+    border-radius: 12px;
+  }
+
+  .completion-message {
+    padding: 28px;
+    border-radius: 16px;
+  }
+
+  .completion-message ion-icon {
+    font-size: 3rem;
+  }
+
+  .wizard-navigation {
+    padding-top: 28px;
   }
 }
 </style>
