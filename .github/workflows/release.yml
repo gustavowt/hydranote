@@ -127,9 +127,10 @@ jobs:
         with:
           ref: main
           token: ${{ secrets.GH_TOKEN }}
+          fetch-depth: 0
 
       - name: Pull latest (include release commit)
-        run: git pull origin main
+        run: git pull origin main --tags
 
       - name: Generate release notes
         id: notes
@@ -137,9 +138,43 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+          PR_NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="$TAG" \
             --jq '.body')
+
+          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            GIT_LOG=$(git log "$PREV_TAG..$TAG" --pretty=format:"- %s" --no-merges)
+          else
+            GIT_LOG=$(git log "$TAG" --pretty=format:"- %s" --no-merges | head -50)
+          fi
+
+          PROMPT=$(printf 'Write a polished, user-friendly GitHub release description in markdown for HydraNote version %s.\nHydraNote is a desktop note-taking app with markdown editing and local AI features.\n\nOrganize the summary into sections like **What'\''s New**, **Improvements**, and **Bug Fixes** (only include sections that apply). Focus on what matters to users, not implementation details. Use concise bullet points. Do not wrap the output in code fences.\n\nGit commits:\n%s\n\nPull requests:\n%s' "$TAG" "$GIT_LOG" "$PR_NOTES")
+
+          RESPONSE=$(curl -s -X POST \
+            "https://models.github.ai/inference/chat/completions" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg model "openai/gpt-4.1-mini" \
+              --arg prompt "$PROMPT" \
+              '{
+                model: $model,
+                messages: [
+                  { role: "system", content: "You write concise, professional GitHub release notes in markdown." },
+                  { role: "user", content: $prompt }
+                ],
+                temperature: 0.3
+              }')")
+
+          NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+
+          if [ -z "$NOTES" ] || [ "$NOTES" = "null" ]; then
+            echo "::warning::AI generation failed, falling back to auto-generated notes"
+            NOTES="$PR_NOTES"
+          fi
+
           EOF_MARKER=$(openssl rand -hex 16)
           echo "body<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
           echo "$NOTES" >> "$GITHUB_OUTPUT"
