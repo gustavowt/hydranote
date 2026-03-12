@@ -404,18 +404,29 @@ export async function deleteProject(projectId: string): Promise<void> {
 
 export async function createFile(file: ProjectFile): Promise<void> {
   const conn = getConnection();
-  const escapedContent = file.content ? file.content.replace(/'/g, "''") : '';
-  const escapedHtmlContent = file.htmlContent ? file.htmlContent.replace(/'/g, "''") : null;
-  
-  // Store binary data as base64 TEXT (simpler and avoids BLOB conversion issues)
-  const binaryDataBase64Value = file.binaryData ? `'${file.binaryData}'` : 'NULL';
-  const htmlContentValue = escapedHtmlContent ? `'${escapedHtmlContent}'` : 'NULL';
-  const systemFilePathValue = file.systemFilePath ? `'${file.systemFilePath.replace(/'/g, "''")}'` : 'NULL';
-  
-  await conn.query(`
+
+  // Use prepared statement to safely handle large binary data and special characters
+  const stmt = await conn.prepare(`
     INSERT INTO files (id, project_id, name, type, size, status, content, binary_data_base64, html_content, system_file_path, created_at, updated_at)
-    VALUES ('${file.id}', '${file.projectId}', '${file.name}', '${file.type}', ${file.size}, '${file.status}', '${escapedContent}', ${binaryDataBase64Value}, ${htmlContentValue}, ${systemFilePathValue}, '${file.createdAt.toISOString()}', '${file.updatedAt.toISOString()}')
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
   `);
+
+  await stmt.query(
+    file.id,
+    file.projectId,
+    file.name,
+    file.type,
+    file.size,
+    file.status,
+    file.content || '',
+    file.binaryData || null,
+    file.htmlContent || null,
+    file.systemFilePath || null,
+    file.createdAt.toISOString(),
+    file.updatedAt.toISOString(),
+  );
+
+  await stmt.close();
 }
 
 export async function getFile(fileId: string): Promise<ProjectFile | null> {

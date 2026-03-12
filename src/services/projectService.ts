@@ -6,6 +6,17 @@
 
 import type { Project, ProjectFile, Chunk, Embedding, ChunkingConfig, SearchResult, SupportedFileType, FileTreeNode, ProjectFileTree } from '../types';
 
+// In-memory cache for image binary data to avoid storing large blobs in DuckDB WASM
+// (DuckDB WASM has limited memory and crashes on large base64 strings)
+const imageBinaryCache = new Map<string, string>(); // fileId → base64
+
+/**
+ * Get cached image binary data by file ID
+ */
+export function getCachedImageBinary(fileId: string): string | undefined {
+  return imageBinaryCache.get(fileId);
+}
+
 /**
  * Convert Uint8Array to base64 string efficiently (avoids stack overflow for large files)
  */
@@ -53,6 +64,7 @@ import {
   syncProjectCreate,
   syncProjectDelete,
 } from './syncService';
+import { writeBinaryFile as writeBinaryFileToFS } from './fileSystemService';
 import {
   createInitialVersion,
   createUpdateVersion,
@@ -284,12 +296,13 @@ export async function ingestDocument(
  */
 async function updateFileBinaryData(fileId: string, binaryData: string): Promise<void> {
   const conn = getConnection();
-  const escaped = binaryData.replace(/'/g, "''");
-  await conn.query(`
+  const stmt = await conn.prepare(`
     UPDATE files 
-    SET binary_data = '${escaped}', updated_at = CURRENT_TIMESTAMP
-    WHERE id = '${fileId}'
+    SET binary_data_base64 = $1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
   `);
+  await stmt.query(binaryData, fileId);
+  await stmt.close();
 }
 
 /**
@@ -335,16 +348,21 @@ export async function get_project_files(projectId: string): Promise<ProjectFile[
   `);
   
   return result.toArray().map((row: Record<string, unknown>) => {
+    const fileId = row.id as string;
+
     // binary_data_base64 is stored as TEXT, get it directly
     // Fall back to old binary_data column for backward compatibility
     let binaryData: string | undefined = row.binary_data_base64 as string | undefined;
     if (!binaryData && row.binary_data) {
-      // Legacy: convert from BLOB if new column is empty
       binaryData = uint8ArrayToBase64(new Uint8Array(row.binary_data as ArrayBuffer));
     }
-    
+    // Check in-memory cache for images not stored in DB
+    if (!binaryData) {
+      binaryData = imageBinaryCache.get(fileId);
+    }
+
     return {
-      id: row.id as string,
+      id: fileId,
       projectId: row.project_id as string,
       name: row.name as string,
       type: row.type as ProjectFile['type'],
@@ -479,7 +497,7 @@ export async function createFile(
   projectId: string,
   filePath: string,
   content: string,
-  fileType: 'md' | 'txt' | 'pdf' | 'docx' = 'md',
+  fileType: SupportedFileType = 'md',
   binaryData?: Uint8Array,
   htmlContent?: string,
   systemFilePath?: string,
@@ -495,13 +513,22 @@ export async function createFile(
   const now = new Date();
   const fileId = crypto.randomUUID();
   const size = binaryData ? binaryData.length : new Blob([content]).size;
-  
-  // Convert binary data to base64 for storage
+  const imageTypes: SupportedFileType[] = ['png', 'jpg', 'jpeg', 'webp'];
+  const isImage = imageTypes.includes(fileType);
+
+  // Convert binary data to base64
   let binaryDataBase64: string | undefined;
   if (binaryData) {
     binaryDataBase64 = uint8ArrayToBase64(binaryData);
   }
-  
+
+  // For images: store binary in memory cache only (not in DuckDB — causes WASM OOM)
+  // DuckDB record stores metadata only; filesystem gets the actual file
+  const dbBinaryData = isImage ? undefined : binaryDataBase64;
+  if (isImage && binaryDataBase64) {
+    imageBinaryCache.set(fileId, binaryDataBase64);
+  }
+
   // Create file record
   const projectFile: ProjectFile = {
     id: fileId,
@@ -511,24 +538,29 @@ export async function createFile(
     size,
     status: 'indexed',
     content,
-    binaryData: binaryDataBase64,
+    binaryData: isImage ? binaryDataBase64 : dbBinaryData,
     htmlContent,
     systemFilePath,
     createdAt: now,
     updatedAt: now,
   };
-  
-  await dbCreateFile(projectFile);
+
+  // DB record: skip binary data for images to avoid WASM memory crash
+  const dbFile: ProjectFile = { ...projectFile, binaryData: dbBinaryData };
+  await dbCreateFile(dbFile);
   await flushDatabase();
-  
+
   // Create initial version for version history
   await createInitialVersion(fileId, content);
-  
-  // Sync to file system (for text-based files)
-  if (fileType === 'md' || fileType === 'txt') {
+
+  // Sync to file system
+  if (isImage && binaryData) {
+    await writeBinaryFileToFS(project.name, filePath, binaryData);
+  } else if (fileType === 'md' || fileType === 'txt') {
     await syncFileToFileSystem(project.name, filePath, content);
   }
-  
+
+  // Return the full projectFile (with binaryData for immediate use in the session)
   return projectFile;
 }
 
@@ -1228,20 +1260,37 @@ export async function findFileGlobal(
   pathOrName: string
 ): Promise<{ file: ProjectFile; projectId: string; projectName: string } | null> {
   await ensureInitialized();
-  
+
   const projects = await dbGetAllProjects();
-  
+
   for (const project of projects) {
-    const file = await findFileByPath(project.id, pathOrName);
+    // Try the path as-is first
+    let file = await findFileByPath(project.id, pathOrName);
     if (file) {
-      return {
-        file,
-        projectId: project.id,
-        projectName: project.name,
-      };
+      return { file, projectId: project.id, projectName: project.name };
+    }
+
+    // In global mode, autocomplete produces "ProjectName/path/to/file.md"
+    // Strip the project name prefix and try again
+    const prefix = project.name + '/';
+    if (pathOrName.startsWith(prefix)) {
+      const stripped = pathOrName.substring(prefix.length);
+      file = await findFileByPath(project.id, stripped);
+      if (file) {
+        return { file, projectId: project.id, projectName: project.name };
+      }
+    }
+
+    // Also try case-insensitive prefix match
+    if (pathOrName.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const stripped = pathOrName.substring(prefix.length);
+      file = await findFileByPath(project.id, stripped);
+      if (file) {
+        return { file, projectId: project.id, projectName: project.name };
+      }
     }
   }
-  
+
   return null;
 }
 

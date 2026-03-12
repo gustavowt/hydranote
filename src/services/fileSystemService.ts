@@ -435,6 +435,60 @@ export async function writeFile(
 }
 
 /**
+ * Write a binary file to the file system (for images, etc.)
+ */
+export async function writeBinaryFile(
+  projectName: string,
+  filePath: string,
+  data: Uint8Array
+): Promise<{ success: boolean; error?: string }> {
+  const settings = loadFileSystemSettings();
+  if (!settings.enabled) {
+    return { success: false, error: 'File system sync is not enabled' };
+  }
+
+  const electronAPI = getElectronAPI();
+  if (electronAPI) {
+    const safeName = sanitizePathComponent(projectName);
+    const dirParts = filePath.split('/').filter(p => p.length > 0);
+    if (dirParts.length > 1) {
+      const dirPath = dirParts.slice(0, -1).join('/');
+      const fullDirPath = `${settings.rootPath}/${safeName}/${dirPath}`.replace(/\/+/g, '/');
+      await electronAPI.fs.createDirectory(fullDirPath);
+    }
+    const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
+    return electronAPI.fs.writeFile(fullPath, Array.from(data) as unknown as string);
+  }
+
+  const projectDir = await getProjectDirectory(projectName);
+  if (!projectDir) {
+    return { success: false, error: 'Could not access project directory' };
+  }
+
+  try {
+    const parts = filePath.split('/').filter(p => p.length > 0);
+    const fileName = parts.pop()!;
+
+    let parentHandle = projectDir;
+    if (parts.length > 0) {
+      parentHandle = await getOrCreateDirectory(projectDir, parts.join('/'));
+    }
+
+    const fileHandle = await parentHandle.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(new Blob([data.buffer as ArrayBuffer]));
+    await writable.close();
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to write binary file'
+    };
+  }
+}
+
+/**
  * Read a file from the file system
  */
 export async function readFile(
