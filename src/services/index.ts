@@ -84,6 +84,10 @@ export {
   isAutoFormatEnabled,
   isAutoProjectRoutingEnabled,
   isAutoDirectoryRoutingEnabled,
+  loadImageGenerationSettings,
+  saveImageGenerationSettings,
+  getImageGenerationInstructions,
+  isImageGenerationConfigured as isImageGenConfiguredFromLLM,
 } from './llmService';
 
 // Tool Service
@@ -250,6 +254,7 @@ export {
   ensureFileSystemPermission,
   disconnectRootDirectory,
   writeFile as fsWriteFile,
+  writeBinaryFile as fsWriteBinaryFile,
   readFile as fsReadFile,
   deleteFile as fsDeleteFile,
   createDirectory as fsCreateDirectory,
@@ -358,3 +363,11 @@ export {
 } from './localModelService';
 
 export type { CustomModelValidationResult } from './localModelService';
+
+// Image Generation Service
+export {
+  generateImage,
+  isImageGenerationConfigured,
+} from './imageGenerationService';
+
+export type { ImageGenerationResult, ImageGenerationOptions } from './imageGenerationService';

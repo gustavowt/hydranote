@@ -10,11 +10,12 @@ import type {
   LLMCompletionResponse,
   LLMStreamCallback,
   NoteSettings,
+  ImageGenerationSettings,
   AnthropicConfig,
   GoogleConfig,
   HuggingFaceLocalConfig,
 } from '../types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS } from '../types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS, DEFAULT_IMAGE_GENERATION_SETTINGS } from '../types';
 import { isLocalModelsAvailable, runInference, getRuntimeStatus, loadModel } from './localModelService';
 
 const STORAGE_KEY = 'hydranote_llm_settings';
@@ -32,13 +33,25 @@ export function loadSettings(): LLMSettings {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      // Deep merge to ensure noteSettings is properly initialized
+      // Deep merge to ensure nested settings are properly initialized
       return {
         ...DEFAULT_LLM_SETTINGS,
         ...parsed,
         noteSettings: {
           ...DEFAULT_NOTE_SETTINGS,
           ...(parsed.noteSettings || {}),
+        },
+        imageGeneration: {
+          ...DEFAULT_IMAGE_GENERATION_SETTINGS,
+          ...(parsed.imageGeneration || {}),
+          openai: {
+            ...DEFAULT_IMAGE_GENERATION_SETTINGS.openai,
+            ...(parsed.imageGeneration?.openai || {}),
+          },
+          google: {
+            ...DEFAULT_IMAGE_GENERATION_SETTINGS.google,
+            ...(parsed.imageGeneration?.google || {}),
+          },
         },
       };
     }
@@ -151,6 +164,51 @@ export function isAutoProjectRoutingEnabled(): boolean {
 export function isAutoDirectoryRoutingEnabled(): boolean {
   const noteSettings = loadNoteSettings();
   return noteSettings.autoDirectoryRouting !== false;
+}
+
+// ============================================
+// Image Generation Settings Management
+// ============================================
+
+/**
+ * Load image generation settings from stored settings
+ */
+export function loadImageGenerationSettings(): ImageGenerationSettings {
+  const settings = loadSettings();
+  return settings.imageGeneration || { ...DEFAULT_IMAGE_GENERATION_SETTINGS };
+}
+
+/**
+ * Save image generation settings to storage
+ */
+export function saveImageGenerationSettings(imageGenSettings: ImageGenerationSettings): void {
+  const settings = loadSettings();
+  settings.imageGeneration = imageGenSettings;
+  saveSettings(settings);
+}
+
+/**
+ * Get image generation global instructions for use in prompts
+ */
+export function getImageGenerationInstructions(): string {
+  const imgSettings = loadImageGenerationSettings();
+  return imgSettings.globalInstructions || '';
+}
+
+/**
+ * Check if image generation is configured (provider has an API key set)
+ */
+export function isImageGenerationConfigured(): boolean {
+  const settings = loadSettings();
+  const imgSettings = settings.imageGeneration || DEFAULT_IMAGE_GENERATION_SETTINGS;
+  switch (imgSettings.provider) {
+    case 'openai':
+      return !!settings.openai.apiKey;
+    case 'google':
+      return !!settings.google.apiKey;
+    default:
+      return false;
+  }
 }
 
 // ============================================

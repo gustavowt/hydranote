@@ -314,7 +314,7 @@ export interface WorkingContext {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch' | 'generateImage';
 
 /**
  * Tool definition for system prompt
@@ -417,6 +417,35 @@ export interface HuggingFaceLocalConfig {
 }
 
 /**
+ * Image generation provider type
+ */
+export type ImageGenProvider = 'openai' | 'google';
+
+/**
+ * Image generation settings
+ */
+export interface ImageGenerationSettings {
+  provider: ImageGenProvider;
+  openai: { model: string };
+  google: { model: string };
+  /** Global instructions prepended to all image generation prompts */
+  globalInstructions: string;
+  /** Default directory for saving generated images within a project */
+  defaultImageDirectory: string;
+}
+
+/**
+ * Default image generation settings
+ */
+export const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
+  provider: 'openai',
+  openai: { model: 'gpt-image-1' },
+  google: { model: 'gemini-3.1-flash-image-preview' },
+  globalInstructions: '',
+  defaultImageDirectory: 'images',
+};
+
+/**
  * Complete LLM settings
  */
 export interface LLMSettings {
@@ -428,6 +457,8 @@ export interface LLMSettings {
   huggingfaceLocal: HuggingFaceLocalConfig;
   /** Note formatting settings (Phase 9) */
   noteSettings: NoteSettings;
+  /** Image generation settings */
+  imageGeneration: ImageGenerationSettings;
 }
 
 /**
@@ -466,6 +497,7 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
     autoProjectRouting: true,
     autoDirectoryRouting: true,
   },
+  imageGeneration: { ...DEFAULT_IMAGE_GENERATION_SETTINGS },
 };
 
 /**
@@ -531,12 +563,17 @@ export interface ToolCall {
  */
 export interface ToolAttachment {
   id: string;
-  type: 'summary'; // extensible later: 'analysis', 'report', etc.
+  type: 'summary' | 'image';
   title: string;
   content: string;
+  /** Base64-encoded image data (for type: 'image') */
+  imageData?: string;
+  /** MIME type of the image (for type: 'image') */
+  imageMimeType?: string;
   metadata?: {
     fileName?: string;
     fileId?: string;
+    projectId?: string;
     [key: string]: unknown;
   };
 }
@@ -1684,6 +1721,8 @@ export interface ExecutePlanOptions {
   maxReplanAttempts?: number;
   /** Callback for tool child progress updates (e.g., web research page fetches) */
   onToolChildUpdate?: (stepId: string, child: ToolExecutionChild) => void;
+  /** Recent image attachments from previous conversation turns (for cross-plan context) */
+  recentImageAttachments?: ToolAttachment[];
 }
 
 /**
