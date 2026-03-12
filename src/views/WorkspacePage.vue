@@ -115,6 +115,7 @@
         @file-created="handleFileCreatedFromChat"
         @projects-changed="handleProjectsChanged"
         @collapse-change="(v: boolean) => rightCollapsed = v"
+        @insert-image="handleInsertImage"
       />
     </div>
 
@@ -206,6 +207,8 @@ import {
   renameFile,
   onSyncEvent,
   base64ToArrayBuffer,
+  createFile,
+  loadImageGenerationSettings,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
@@ -467,6 +470,55 @@ async function handleFileCreatedFromChat(projectId: string, fileId: string, _fil
   
   // Reveal the file in the sidebar (expand parents + scroll into view)
   await projectsTreeRef.value?.revealFile(projectId, fileId);
+}
+
+// Handle image insertion from chat — saves image as a project file, then inserts the relative path
+async function handleInsertImage(payload: { fileName?: string; fileId?: string; projectId?: string; altText: string; imageData?: string; imageMimeType?: string }) {
+  if (!markdownEditorRef.value) return;
+
+  // If the image already has a project file path, use it directly
+  if (payload.fileName) {
+    const imageMarkdown = `![${payload.altText}](${payload.fileName})`;
+    markdownEditorRef.value.insertAtCursor(imageMarkdown);
+    return;
+  }
+
+  // Need base64 data to save
+  if (!payload.imageData) return;
+
+  // Determine the target project — prefer the current file's project, then the payload's
+  const targetProjectId = currentFile.value?.projectId || payload.projectId;
+  if (!targetProjectId) return;
+
+  const imgSettings = loadImageGenerationSettings();
+  const dir = imgSettings.defaultImageDirectory || 'images';
+  const ext = (payload.imageMimeType || 'image/png').split('/')[1] || 'png';
+  const timestamp = Date.now();
+  const filePath = `${dir}/generated-${timestamp}.${ext}`;
+
+  try {
+    const binaryStr = atob(payload.imageData);
+    const binaryData = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      binaryData[i] = binaryStr.charCodeAt(i);
+    }
+
+    await createFile(
+      targetProjectId,
+      filePath,
+      `[Generated image: ${payload.altText}]`,
+      ext as 'png' | 'jpg' | 'webp',
+      binaryData,
+    );
+
+    const imageMarkdown = `![${payload.altText}](${filePath})`;
+    markdownEditorRef.value.insertAtCursor(imageMarkdown);
+  } catch {
+    // Fallback: insert data URL if saving fails
+    const dataUrl = `data:${payload.imageMimeType || 'image/png'};base64,${payload.imageData}`;
+    const imageMarkdown = `![${payload.altText}](${dataUrl})`;
+    markdownEditorRef.value.insertAtCursor(imageMarkdown);
+  }
 }
 
 // New Note handler

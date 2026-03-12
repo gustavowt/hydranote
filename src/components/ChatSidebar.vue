@@ -148,18 +148,34 @@
 
             <!-- Persisted attachments for this message -->
             <div v-if="message.attachments && message.attachments.length > 0" class="attachment-cards">
-              <div
-                v-for="att in message.attachments"
-                :key="att.id"
-                class="attachment-card"
-                @click="activeAttachment = att"
-              >
-                <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
-                <div class="attachment-card-body">
-                  <span class="attachment-card-title">{{ att.title }}</span>
-                  <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+              <template v-for="att in message.attachments" :key="att.id">
+                <!-- Image attachment -->
+                <div v-if="att.type === 'image' && att.imageData" class="image-attachment">
+                  <img
+                    :src="`data:${att.imageMimeType || 'image/png'};base64,${att.imageData}`"
+                    :alt="att.title"
+                    class="generated-image"
+                  />
+                  <div class="image-attachment-actions">
+                    <button
+                      v-if="currentFile && currentFile.type === 'md'"
+                      class="image-insert-btn"
+                      @click.stop="handleInsertImage(att)"
+                    >
+                      <ion-icon :icon="addCircleOutline" />
+                      <span>Insert into Editor</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+                <!-- Text attachment (summary, etc.) -->
+                <div v-else class="attachment-card" @click="activeAttachment = att">
+                  <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
+                  <div class="attachment-card-body">
+                    <span class="attachment-card-title">{{ att.title }}</span>
+                    <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -269,18 +285,32 @@
             </div>
             <!-- Pending attachments (not yet persisted) -->
             <div v-if="pendingAttachments.length > 0" class="attachment-cards">
-              <div
-                v-for="att in pendingAttachments"
-                :key="att.id"
-                class="attachment-card"
-                @click="activeAttachment = att"
-              >
-                <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
-                <div class="attachment-card-body">
-                  <span class="attachment-card-title">{{ att.title }}</span>
-                  <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+              <template v-for="att in pendingAttachments" :key="att.id">
+                <div v-if="att.type === 'image' && att.imageData" class="image-attachment">
+                  <img
+                    :src="`data:${att.imageMimeType || 'image/png'};base64,${att.imageData}`"
+                    :alt="att.title"
+                    class="generated-image"
+                  />
+                  <div class="image-attachment-actions">
+                    <button
+                      v-if="currentFile && currentFile.type === 'md'"
+                      class="image-insert-btn"
+                      @click.stop="handleInsertImage(att)"
+                    >
+                      <ion-icon :icon="addCircleOutline" />
+                      <span>Insert into Editor</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+                <div v-else class="attachment-card" @click="activeAttachment = att">
+                  <ion-icon :icon="documentTextOutline" class="attachment-card-icon" />
+                  <div class="attachment-card-body">
+                    <span class="attachment-card-title">{{ att.title }}</span>
+                    <span class="attachment-card-preview">{{ att.content.substring(0, 100) }}{{ att.content.length > 100 ? '...' : '' }}</span>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -531,7 +561,7 @@ import {
   startNewSession,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
-import { folderOutline, addOutline, timeOutline, chevronDownOutline, chevronUpOutline } from 'ionicons/icons';
+import { folderOutline, addOutline, addCircleOutline, timeOutline, chevronDownOutline, chevronUpOutline } from 'ionicons/icons';
 
 // Special value for "All Projects" scope
 const ALL_PROJECTS_SCOPE = '__all__';
@@ -551,6 +581,7 @@ const emit = defineEmits<{
   (e: 'file-updated', fileId: string, fileName: string): void;
   (e: 'file-created', projectId: string, fileId: string, fileName: string): void;
   (e: 'projects-changed'): void;
+  (e: 'insert-image', payload: { fileName?: string; fileId?: string; projectId?: string; altText: string; imageData?: string; imageMimeType?: string }): void;
 }>();
 
 // Configure marked with highlight.js
@@ -729,6 +760,18 @@ async function handleSaveAttachment() {
   } finally {
     isSavingAttachment.value = false;
   }
+}
+
+function handleInsertImage(att: ToolAttachment) {
+  if (!att.metadata?.fileName && !att.imageData) return;
+  emit('insert-image', {
+    fileName: att.metadata?.fileName as string | undefined,
+    fileId: att.metadata?.fileId as string | undefined,
+    projectId: att.metadata?.projectId as string | undefined,
+    altText: att.title || 'Generated image',
+    imageData: att.imageData,
+    imageMimeType: att.imageMimeType,
+  });
 }
 
 onMounted(async () => {
@@ -930,21 +973,52 @@ async function sendMessage(text?: string) {
       projectFileNames = files.map(f => f.name);
     }
 
-    // Build conversation context with user messages only for better context retention
-    // Filter last 12 user messages (excluding current), with 500 chars each
-    const userMessages = messages.value
+    // Build conversation context including both user and assistant messages
+    // User messages get more space; assistant messages are kept brief (planner only needs outcomes)
+    const recentMessages = messages.value
       .slice(0, -1) // Exclude current message
-      .filter(m => m.role === 'user')
-      .slice(-12); // Last 12 user messages
-    
-    const conversationContext = userMessages
+      .slice(-12); // Last 12 messages (6 turns)
+
+    const conversationContext = recentMessages
       .map(m => {
-        const truncatedContent = m.content.length > 500 
-          ? m.content.substring(0, 500) + '...' 
+        const isUser = m.role === 'user';
+        const maxLen = isUser ? 400 : 150;
+        let text = m.content.length > maxLen
+          ? m.content.substring(0, maxLen) + '...'
           : m.content;
-        return `User: ${truncatedContent}`;
+
+        // Surface tool attachments so the planner knows about generated artifacts
+        if (m.attachments && m.attachments.length > 0) {
+          for (const att of m.attachments) {
+            if (att.type === 'image') {
+              const fileName = att.metadata?.fileName || 'unsaved';
+              const fileId = att.metadata?.fileId || '';
+              const projId = att.metadata?.projectId || '';
+              text += `\n[Generated image available: "${att.title}" — file: ${fileName}, fileId: ${fileId}, projectId: ${projId}]`;
+            }
+          }
+        }
+
+        return `${isUser ? 'User' : 'Assistant'}: ${text}`;
       })
       .join('\n');
+
+    // Also surface pending (not-yet-persisted) image attachments
+    let pendingImageContext = '';
+    if (pendingAttachments.value.length > 0) {
+      for (const att of pendingAttachments.value) {
+        if (att.type === 'image') {
+          const fileName = att.metadata?.fileName || 'unsaved';
+          const fileId = att.metadata?.fileId || '';
+          const projId = att.metadata?.projectId || '';
+          pendingImageContext += `\n[Recently generated image available: "${att.title}" — file: ${fileName}, fileId: ${fileId}, projectId: ${projId}]`;
+        }
+      }
+    }
+
+    const fullConversationContext = pendingImageContext
+      ? conversationContext + pendingImageContext
+      : conversationContext;
 
     // Build current file context if a file is open in the editor
     const currentFileContext = props.currentFile ? {
@@ -960,7 +1034,7 @@ async function sendMessage(text?: string) {
       messageText,
       selectedProjectId.value,
       projectFileNames,
-      conversationContext,
+      fullConversationContext,
       undefined, // replanContext
       isGlobalMode.value ? workingContext.value : undefined,
       currentFileContext,
@@ -1073,6 +1147,34 @@ async function sendMessage(text?: string) {
 }
 
 /**
+ * Collect recent image attachments from conversation messages and pending state
+ */
+function getRecentImageAttachments(): ToolAttachment[] {
+  const imageAtts: ToolAttachment[] = [];
+
+  // From previous messages (most recent first)
+  for (let i = messages.value.length - 1; i >= 0 && imageAtts.length < 3; i--) {
+    const msg = messages.value[i];
+    if (msg.attachments) {
+      for (const att of msg.attachments) {
+        if (att.type === 'image' && att.imageData) {
+          imageAtts.push(att);
+        }
+      }
+    }
+  }
+
+  // From pending attachments (current turn, not yet persisted)
+  for (const att of pendingAttachments.value) {
+    if (att.type === 'image' && att.imageData && !imageAtts.some(a => a.id === att.id)) {
+      imageAtts.push(att);
+    }
+  }
+
+  return imageAtts;
+}
+
+/**
  * Auto-execute a simple single-step plan without confirmation
  */
 async function executeAutoExecutePlan(plan: ExecutionPlan) {
@@ -1084,6 +1186,7 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
       plan,
       selectedProjectId.value,
       {
+        recentImageAttachments: getRecentImageAttachments(),
         onStepUpdate: (step, index, total) => {
           // Update plan step status
           const planStep = plan.steps.find(s => s.id === step.id);
@@ -1712,6 +1815,7 @@ async function handleExecutePlan() {
       planToExecute,
       selectedProjectId.value,
       {
+        recentImageAttachments: getRecentImageAttachments(),
         onStepUpdate: (step, index, total) => {
           currentPlanStep.value = { step, index, total };
           // Clear streaming content when a new step starts
@@ -4258,6 +4362,52 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* ============================================
+   Image Attachments
+   ============================================ */
+
+.image-attachment {
+  margin-top: 8px;
+  padding-left: 12px;
+}
+
+.generated-image {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--hn-border-subtle);
+  display: block;
+}
+
+.image-attachment-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.image-insert-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--hn-bg-surface);
+  border: 1px solid var(--hn-border-subtle);
+  color: var(--hn-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.image-insert-btn ion-icon {
+  font-size: 0.85rem;
+}
+
+.image-insert-btn:hover {
+  background: var(--hn-bg-elevated);
+  border-color: var(--hn-purple);
+  color: var(--hn-purple);
 }
 
 /* ============================================

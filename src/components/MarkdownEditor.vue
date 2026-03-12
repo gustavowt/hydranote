@@ -633,6 +633,8 @@ import {
   generateUniqueFileName,
   updateProjectStatus,
   flushDatabase,
+  findFileByPath,
+  getFile,
 } from '@/services';
 import type { DocumentFormat } from '@/types';
 
@@ -709,8 +711,35 @@ const marked = new Marked(
   })
 );
 
-// Apply mermaid renderer
+// Custom image renderer for resolving project file paths to blob URLs
+const imageBlobUrls = ref<Map<string, string>>(new Map());
+
+const imageRenderer = {
+  image(token: { href: string; title: string | null; text: string }): string | false {
+    const href = token.href;
+    if (!href) return false;
+
+    // Skip data URLs and external URLs - they already work
+    if (href.startsWith('data:') || href.startsWith('http://') || href.startsWith('https://')) {
+      return false;
+    }
+
+    // Try to resolve project-relative paths from cache
+    const resolvedUrl = imageBlobUrls.value.get(href);
+    if (resolvedUrl) {
+      const title = token.title ? ` title="${token.title}"` : '';
+      return `<img src="${resolvedUrl}" alt="${token.text || ''}"${title} style="max-width:100%;border-radius:8px;margin:1em 0;">`;
+    }
+
+    // Return a placeholder that will be replaced once the blob URL is resolved
+    const title = token.title ? ` title="${token.title}"` : '';
+    return `<img src="" alt="${token.text || ''}"${title} data-project-image="${href}" style="max-width:100%;border-radius:8px;margin:1em 0;display:none;">`;
+  }
+};
+
+// Apply renderers
 marked.use({ renderer: mermaidRenderer });
+marked.use({ renderer: imageRenderer });
 
 const content = ref('');
 const originalContent = ref('');
@@ -888,7 +917,92 @@ const renderedContent = computed(() => {
   if (!content.value.trim()) {
     return '<p class="placeholder-text">Preview will appear here...</p>';
   }
+  // Access imageBlobUrls to ensure reactivity triggers re-render when URLs resolve
+  imageBlobUrls.value;
   return marked.parse(content.value, { async: false }) as string;
+});
+
+// Normalize a relative image path against the current file's directory
+// e.g. current file "ai-news/ai-news.md" + href "../images/foo.png" → "images/foo.png"
+function normalizeImagePath(href: string): string {
+  if (!href.includes('..') && !href.startsWith('./')) return href;
+
+  const currentFilePath = props.currentFile?.name || '';
+  const currentDir = currentFilePath.includes('/')
+    ? currentFilePath.substring(0, currentFilePath.lastIndexOf('/'))
+    : '';
+
+  const parts = currentDir ? currentDir.split('/') : [];
+  for (const segment of href.split('/')) {
+    if (segment === '..') {
+      parts.pop();
+    } else if (segment !== '.') {
+      parts.push(segment);
+    }
+  }
+  return parts.join('/');
+}
+
+// Resolve project-relative image paths to blob URLs for preview rendering
+const pendingImagePaths = new Set<string>();
+watch(
+  () => content.value,
+  async (newContent) => {
+    if (!props.currentProject) return;
+
+    const imagePathRegex = /!\[.*?\]\(([^)]+)\)/g;
+    let match;
+    const pathsToResolve: string[] = [];
+
+    while ((match = imagePathRegex.exec(newContent)) !== null) {
+      const href = match[1];
+      if (href.startsWith('data:') || href.startsWith('http://') || href.startsWith('https://')) continue;
+      if (imageBlobUrls.value.has(href) || pendingImagePaths.has(href)) continue;
+      pathsToResolve.push(href);
+    }
+
+    for (const imgPath of pathsToResolve) {
+      pendingImagePaths.add(imgPath);
+      try {
+        // Normalize relative paths (e.g. ../images/foo.png) to project-root-relative
+        const resolvedPath = normalizeImagePath(imgPath);
+        const file = await findFileByPath(props.currentProject.id, resolvedPath);
+        if (!file?.binaryData && resolvedPath !== imgPath) {
+          // Fallback: try the original path as-is
+          const fallback = await findFileByPath(props.currentProject.id, imgPath);
+          if (fallback?.binaryData) {
+            const ext = imgPath.split('.').pop()?.toLowerCase() || 'png';
+            const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+            const mimeType = mimeMap[ext] || 'image/png';
+            const blobUrl = `data:${mimeType};base64,${fallback.binaryData}`;
+            const updated = new Map(imageBlobUrls.value);
+            updated.set(imgPath, blobUrl);
+            imageBlobUrls.value = updated;
+            continue;
+          }
+        }
+        if (file?.binaryData) {
+          const ext = imgPath.split('.').pop()?.toLowerCase() || 'png';
+          const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+          const mimeType = mimeMap[ext] || 'image/png';
+          const blobUrl = `data:${mimeType};base64,${file.binaryData}`;
+          const updated = new Map(imageBlobUrls.value);
+          updated.set(imgPath, blobUrl);
+          imageBlobUrls.value = updated;
+        }
+      } catch {
+        // Silently skip unresolvable paths
+      } finally {
+        pendingImagePaths.delete(imgPath);
+      }
+    }
+  },
+  { immediate: true }
+);
+
+// Clean up blob URLs when component unmounts
+onUnmounted(() => {
+  imageBlobUrls.value.clear();
 });
 
 const wordCount = computed(() => {
@@ -1985,7 +2099,42 @@ function focusEditor() {
   editor?.focus();
 }
 
-defineExpose({ setContent, clearContent, focusEditor, hasChanges });
+function insertAtCursor(text: string) {
+  // Switch to edit mode if in view-only mode so the textarea is available
+  if (viewMode.value === 'view') {
+    viewMode.value = 'edit';
+  }
+
+  nextTick(() => {
+    const editor = editorRef.value || splitEditorRef.value;
+    if (!editor) {
+      const needsNewline = content.value.length > 0 && !content.value.endsWith('\n');
+      content.value += (needsNewline ? '\n' : '') + text + '\n';
+      emit('content-change', content.value);
+      return;
+    }
+
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const before = content.value.substring(0, start);
+    const after = content.value.substring(end);
+
+    const needsNewline = before.length > 0 && !before.endsWith('\n');
+    const insertion = (needsNewline ? '\n' : '') + text + '\n';
+
+    content.value = before + insertion + after;
+    emit('content-change', content.value);
+
+    nextTick(() => {
+      const newPos = start + insertion.length;
+      editor.selectionStart = newPos;
+      editor.selectionEnd = newPos;
+      editor.focus();
+    });
+  });
+}
+
+defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor });
 </script>
 
 <style scoped>
