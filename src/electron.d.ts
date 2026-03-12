@@ -255,6 +255,7 @@ interface ElectronAPI {
     readFile: (filePath: string) => Promise<ElectronFsReadFileResult>;
     readBinaryFile: (filePath: string) => Promise<ElectronFsReadBinaryFileResult>;
     writeFile: (filePath: string, content: string) => Promise<ElectronFsResult>;
+    writeBinaryFile: (filePath: string, base64Data: string) => Promise<ElectronFsResult>;
     deleteFile: (filePath: string) => Promise<ElectronFsResult>;
     createDirectory: (dirPath: string) => Promise<ElectronFsResult>;
     deleteDirectory: (dirPath: string) => Promise<ElectronFsResult>;

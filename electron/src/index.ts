@@ -172,6 +172,22 @@ ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string)
   }
 });
 
+// Write binary file (accepts base64 string, writes raw bytes)
+ipcMain.handle('fs:writeBinaryFile', async (_event, filePath: string, base64Data: string) => {
+  try {
+    const dir = path.dirname(filePath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const buffer = Buffer.from(base64Data, 'base64');
+    await fs.promises.writeFile(filePath, buffer);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to write binary file'
+    };
+  }
+});
+
 // Delete file
 ipcMain.handle('fs:deleteFile', async (_event, filePath: string) => {
   try {

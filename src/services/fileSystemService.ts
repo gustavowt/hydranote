@@ -457,7 +457,17 @@ export async function writeBinaryFile(
       await electronAPI.fs.createDirectory(fullDirPath);
     }
     const fullPath = `${settings.rootPath}/${safeName}/${filePath}`.replace(/\/+/g, '/');
-    return electronAPI.fs.writeFile(fullPath, Array.from(data) as unknown as string);
+    // Convert Uint8Array to base64 for IPC transfer
+    const CHUNK_SIZE = 0x1000;
+    let binary = '';
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.subarray(i, Math.min(i + CHUNK_SIZE, data.length));
+      for (let j = 0; j < chunk.length; j++) {
+        binary += String.fromCharCode(chunk[j]);
+      }
+    }
+    const base64Data = btoa(binary);
+    return electronAPI.fs.writeBinaryFile(fullPath, base64Data);
   }
 
   const projectDir = await getProjectDirectory(projectName);

@@ -107,6 +107,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
     readBinaryFile: (filePath: string) => ipcRenderer.invoke('fs:readBinaryFile', filePath),
     writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
+    writeBinaryFile: (filePath: string, base64Data: string) => ipcRenderer.invoke('fs:writeBinaryFile', filePath, base64Data),
     deleteFile: (filePath: string) => ipcRenderer.invoke('fs:deleteFile', filePath),
     createDirectory: (dirPath: string) => ipcRenderer.invoke('fs:createDirectory', dirPath),
     deleteDirectory: (dirPath: string) => ipcRenderer.invoke('fs:deleteDirectory', dirPath),
