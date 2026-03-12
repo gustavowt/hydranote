@@ -29,6 +29,10 @@
             <ion-icon :icon="globeOutline" />
             <ion-label>Web Research</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="imagegen">
+            <ion-icon :icon="imageOutline" />
+            <ion-label>Image Generation</ion-label>
+          </ion-segment-button>
           <ion-segment-button value="storage">
             <ion-icon :icon="folderOutline" />
             <ion-label>Storage</ion-label>
@@ -75,6 +79,14 @@
             >
               <ion-icon :icon="globeOutline" />
               <span>Web Research</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'imagegen' }"
+              @click="activeSection = 'imagegen'"
+            >
+              <ion-icon :icon="imageOutline" />
+              <span>Image Generation</span>
             </button>
             <button 
               class="nav-item" 
@@ -198,6 +210,18 @@
                   ></textarea>
                   <span class="field-hint">
                     These instructions guide how the AI decides which directory to save notes in.
+                  </span>
+                </div>
+
+                <div class="field-group">
+                  <label>Image Generation Instructions</label>
+                  <textarea
+                    v-model="settings.imageGeneration.globalInstructions"
+                    placeholder="Global instructions for image generation (e.g., 'Use a minimalist style', 'Always include a white background')"
+                    rows="4"
+                  ></textarea>
+                  <span class="field-hint">
+                    These instructions will be included in all image generation prompts.
                   </span>
                 </div>
 
@@ -400,6 +424,100 @@
                 <span>Clear Cache</span>
               </button>
               <button class="btn btn-primary" @click="handleSaveWebSearch">
+                <ion-icon :icon="saveOutline" />
+                <span>Save Settings</span>
+              </button>
+            </div>
+          </section>
+
+          <!-- Image Generation Section -->
+          <section v-if="activeSection === 'imagegen'" class="content-section">
+            <h2 class="section-title">Image Generation</h2>
+            <p class="section-description">Configure AI image generation for use in chat.</p>
+
+            <div class="config-panel">
+              <h3 class="config-title">Provider</h3>
+              <div class="config-fields">
+                <div class="provider-cards">
+                  <button
+                    v-for="provider in imageGenProviders"
+                    :key="provider.id"
+                    class="provider-card small"
+                    :class="{ selected: settings.imageGeneration.provider === provider.id }"
+                    @click="settings.imageGeneration.provider = provider.id"
+                  >
+                    <div class="provider-icon">
+                      <component :is="provider.iconComponent" />
+                    </div>
+                    <div class="provider-info">
+                      <h3>{{ provider.name }}</h3>
+                      <p>{{ provider.description }}</p>
+                    </div>
+                    <div class="selected-indicator" v-if="settings.imageGeneration.provider === provider.id">
+                      <ion-icon :icon="checkmarkCircle" />
+                    </div>
+                  </button>
+                </div>
+
+                <!-- OpenAI Image Gen Config -->
+                <div v-if="settings.imageGeneration.provider === 'openai'" class="field-group">
+                  <label>Model</label>
+                  <select
+                    v-model="settings.imageGeneration.openai.model"
+                  >
+                    <option value="gpt-image-1">GPT Image 1</option>
+                    <option value="dall-e-3">DALL-E 3</option>
+                    <option value="dall-e-2">DALL-E 2</option>
+                  </select>
+                  <span class="field-hint">
+                    Uses API key from <strong>AI Providers &gt; OpenAI</strong>.
+                    <span v-if="!settings.openai.apiKey" class="hint-warning"> (No API key set — configure it in AI Providers)</span>
+                  </span>
+                </div>
+
+                <!-- Google Gemini Image Gen Config -->
+                <div v-if="settings.imageGeneration.provider === 'google'" class="field-group">
+                  <label>Model</label>
+                  <select
+                    v-model="settings.imageGeneration.google.model"
+                  >
+                    <optgroup label="Gemini Native (Nano Banana)">
+                      <option value="gemini-3.1-flash-image-preview">Nano Banana 2 — Gemini 3.1 Flash Image (Latest)</option>
+                      <option value="gemini-2.0-flash-preview-image-generation">Gemini 2.0 Flash Image</option>
+                    </optgroup>
+                    <optgroup label="Imagen">
+                      <option value="imagen-4.0-generate-001">Imagen 4</option>
+                      <option value="imagen-4.0-ultra-generate-001">Imagen 4 Ultra</option>
+                      <option value="imagen-4.0-fast-generate-001">Imagen 4 Fast</option>
+                      <option value="imagen-3.0-generate-002">Imagen 3</option>
+                    </optgroup>
+                  </select>
+                  <span class="field-hint">
+                    Uses API key from <strong>AI Providers &gt; Google</strong>.
+                    <span v-if="!settings.google.apiKey" class="hint-warning"> (No API key set — configure it in AI Providers)</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="config-panel">
+              <h3 class="config-title">Storage</h3>
+              <div class="config-fields">
+                <div class="field-group">
+                  <label>Default Image Directory</label>
+                  <input
+                    type="text"
+                    v-model="settings.imageGeneration.defaultImageDirectory"
+                    placeholder="images"
+                  />
+                  <span class="field-hint">Directory within each project where generated images are saved. Relative to project root.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+              <button class="btn btn-primary" @click="handleSave">
                 <ion-icon :icon="saveOutline" />
                 <span>Save Settings</span>
               </button>
@@ -715,8 +833,9 @@ import {
   copyOutline,
   downloadOutline,
   informationCircleOutline,
+  imageOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS } from '@/types';
 import { 
   OpenAiIcon, 
@@ -816,7 +935,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'storage' | 'mcp'>('providers');
+const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'storage' | 'mcp'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -864,6 +983,22 @@ const webSearchProviders: { id: WebSearchProvider; name: string; description: st
     name: 'DuckDuckGo',
     description: 'Instant Answers API, no setup required',
     iconComponent: DuckDuckGoIcon,
+  },
+];
+
+// Image generation provider configurations
+const imageGenProviders: { id: ImageGenProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    description: 'GPT Image, DALL-E 3',
+    iconComponent: OpenAiIcon,
+  },
+  {
+    id: 'google',
+    name: 'Gemini',
+    description: 'Gemini Flash, Imagen 3',
+    iconComponent: GeminiIcon,
   },
 ];
 
@@ -2143,6 +2278,10 @@ ion-content {
 
 .field-hint a:hover {
   text-decoration: underline;
+}
+
+.hint-warning {
+  color: var(--ion-color-warning, #ffc409);
 }
 
 /* Field actions container */

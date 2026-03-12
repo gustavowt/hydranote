@@ -93,6 +93,7 @@ Handles tool execution with Planner → Executor → Checker architecture.
 | `moveFile` | Rename, move within project, or move between projects |
 | `deleteFile` | Delete a file |
 | `deleteProject` | Delete a project (global mode) |
+| `generateImage` | Generate an image from a text description (returns image attachment) |
 
 **Orchestration Flow:**
 1. **Planner**: Analyze request, create ordered tool execution plan (passes file + instruction to updateFile)
@@ -139,7 +140,9 @@ This architecture ensures:
 - Clicking a card opens a fixed overlay panel showing the full content rendered as markdown
 - Attachments are persisted to the `chat_messages` table as a JSON `attachments` column and survive session reloads
 - To make a new tool produce attachments: return `attachment: { id, type, title, content, metadata? }` in the `ToolResult`
-- Type: `ToolAttachment { id: string, type: 'summary', title: string, content: string, metadata?: { fileName?, fileId?, ... } }`
+- Types: `ToolAttachment { id: string, type: 'summary' | 'image', title: string, content: string, imageData?: string, imageMimeType?: string, metadata?: { fileName?, fileId?, projectId?, ... } }`
+- The `generateImage` tool produces attachments of type `'image'` with `imageData` (base64) and `imageMimeType`
+- Image attachments render inline in chat with an "Insert into Editor" button that inserts markdown image syntax at the cursor position
 
 **Working Context (Global Mode):**
 - In global mode, the chat tracks recently created projects and files as "working context"
@@ -215,6 +218,36 @@ Web research with caching and semantic search over results.
 - Results cached in DuckDB (60 min default)
 - Pages chunked and embedded for semantic search
 - Safety limits: 30s timeout, 5s per page, max 5 chunks/page
+
+### Image Generation Service (`imageGenerationService.ts`)
+
+AI image generation supporting OpenAI and Google Gemini providers.
+
+**Supported Providers:**
+| Provider | Models | API |
+|----------|--------|-----|
+| OpenAI | `gpt-image-1`, `dall-e-3`, `dall-e-2` | `/v1/images/generations` (b64_json) |
+| Google Gemini (Nano Banana) | `gemini-3.1-flash-image-preview` (Nano Banana 2), `gemini-2.0-flash-preview-image-generation` | Native multimodal `generateContent` |
+| Google Imagen | `imagen-4.0-generate-001`, `imagen-4.0-ultra-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-3.0-generate-002` | Predict API |
+
+**Configuration:**
+- Settings stored in `LLMSettings.imageGeneration` (provider, model, globalInstructions)
+- API keys inherited from the main AI provider settings (no separate key)
+- Global instructions prepended to all prompts (configured in Settings > AI Instructions)
+- Settings UI in Settings > Image Generation
+
+**Flow:**
+1. Chat LLM calls `generateImage` tool with a prompt
+2. Service calls the configured provider API
+3. Image saved as project file in `images/` directory (DB + filesystem)
+4. Returns `ToolAttachment` with type `'image'` containing base64 data
+5. Chat displays image inline with "Insert into Editor" button
+6. Insert button emits event that calls `MarkdownEditor.insertAtCursor()` with `![alt](images/filename.png)`
+
+**Image Path Resolution:**
+- MarkdownEditor uses a custom `marked` renderer for images
+- Relative paths (e.g., `images/generated.png`) are resolved to data URLs by looking up `binary_data_base64` from the DB
+- External URLs and data URLs pass through unchanged
 
 ### Sync Service (`syncService.ts`)
 
