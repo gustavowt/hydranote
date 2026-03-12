@@ -46,7 +46,7 @@ import {
   createFile as projectCreateFile,
   indexFileForSearch,
 } from "./projectService";
-import { chatCompletion, chatCompletionStreaming } from "./llmService";
+import { chatCompletion, chatCompletionStreaming, loadImageGenerationSettings } from "./llmService";
 import { generateDocument } from "./documentGeneratorService";
 import {
   formatNote,
@@ -57,6 +57,7 @@ import {
   generateUniqueFileName,
 } from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
+import { generateImage as generateImageAPI, isImageGenerationConfigured } from "./imageGenerationService";
 
 // ============================================
 // Execution Log Types
@@ -1302,6 +1303,110 @@ export async function executeWebResearchTool(
 }
 
 // ============================================
+// GenerateImage Tool Implementation
+// ============================================
+
+/**
+ * Execute the generateImage tool
+ */
+async function executeGenerateImageTool(
+  projectId: string | undefined,
+  prompt: string,
+  size?: string,
+  onProgress?: (status: string) => void,
+): Promise<ToolResult> {
+  if (!prompt || prompt.trim().length === 0) {
+    return {
+      success: false,
+      tool: "generateImage",
+      error: "Image prompt is required.",
+    };
+  }
+
+  if (!isImageGenerationConfigured()) {
+    return {
+      success: false,
+      tool: "generateImage",
+      error: "Image generation is not configured. Please set up an image generation provider in Settings > Image Generation.",
+    };
+  }
+
+  onProgress?.("Generating image...");
+
+  const result = await generateImageAPI(prompt, { size });
+
+  if (!result.success || !result.imageBase64 || !result.mimeType) {
+    return {
+      success: false,
+      tool: "generateImage",
+      error: result.error || "Image generation failed.",
+    };
+  }
+
+  // Save as project file if we have a project context
+  let fileName: string | undefined;
+  let fileId: string | undefined;
+  let savedProjectId: string | undefined;
+
+  if (projectId) {
+    try {
+      onProgress?.("Saving image to project...");
+      const imgSettings = loadImageGenerationSettings();
+      const imageDir = imgSettings.defaultImageDirectory || 'images';
+      const ext = result.mimeType.split('/')[1] || 'png';
+      const timestamp = Date.now();
+      fileName = `${imageDir}/generated-${timestamp}.${ext}`;
+
+      const binaryStr = atob(result.imageBase64);
+      const binaryData = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        binaryData[i] = binaryStr.charCodeAt(i);
+      }
+
+      const file = await projectCreateFile(
+        projectId,
+        fileName,
+        `[Generated image: ${prompt.substring(0, 100)}]`,
+        ext as 'png' | 'jpg' | 'webp',
+        binaryData,
+      );
+      fileId = file.id;
+      savedProjectId = projectId;
+    } catch {
+      // Non-fatal: image was generated but couldn't be saved as a project file
+    }
+  }
+
+  onProgress?.("Done");
+
+  const attachment: ToolAttachment = {
+    id: crypto.randomUUID(),
+    type: 'image',
+    title: result.revisedPrompt || prompt.substring(0, 80),
+    content: result.revisedPrompt || prompt,
+    imageData: result.imageBase64,
+    imageMimeType: result.mimeType,
+    metadata: {
+      fileName,
+      fileId,
+      projectId: savedProjectId,
+    },
+  };
+
+  return {
+    success: true,
+    tool: "generateImage",
+    data: `Image generated successfully.${result.revisedPrompt ? ` Revised prompt: ${result.revisedPrompt}` : ''}${fileName ? ` Saved as ${fileName}` : ''}`,
+    attachment,
+    metadata: {
+      fileName,
+      fileId,
+      projectId: savedProjectId,
+    },
+  };
+}
+
+// ============================================
 // UpdateFile Tool Implementation
 // ============================================
 
@@ -2207,6 +2312,14 @@ async function executeToolInternal(
         onProgress,
       });
 
+    case "generateImage":
+      return executeGenerateImageTool(
+        projectId,
+        call.params.prompt || call.params.description || "",
+        call.params.size,
+        onProgress,
+      );
+
     default:
       return {
         success: false,
@@ -2360,6 +2473,8 @@ STEP 1 - PROJECT CONTEXT CHECK:
 - If NO to both (Global mode) → Go to STEP 2
 
 STEP 2 - GLOBAL MODE DECISION:
+- Is the request ONLY for project-independent tools (search, webResearch, generateImage)?
+  - YES → Proceed to STEP 3 without a project. These tools work without project context.
 - Is the user explicitly asking to "create a project" or "new project"?
   - YES → First step must be createProject, all following steps use projectId from it, proceed to STEP 3
   - NO → Set needsClarification: true and ask which project to use or if they want to create one. STOP here.
@@ -2379,6 +2494,7 @@ Determine if this plan is LOW or HIGH complexity. Default to LOW unless HIGH cri
 
 LOW complexity (auto-execute without confirmation) - USE THIS WHEN:
 - Read-only operations: read, search, summarize (ALWAYS low)
+- Image generation: generateImage (ALWAYS low, no project needed)
 - 1-2 steps with clear instructions
 - User specified the file/project names explicitly
 - File updates with @selection: reference
@@ -2396,6 +2512,7 @@ Examples:
 - "summarize document.md" → LOW (read-only, 1 step)
 - "search X and summarize results" → LOW (read-only, 2 steps)
 - "update @selection: fix typos" → LOW (clear instruction with selection)
+- "generate an image of a cat" → LOW (1 step, no project needed)
 - "create a note about cats" → HIGH (AI must generate filename)
 - "reorganize my project structure" → HIGH (ambiguous, multiple files)
 - "delete old-file.md" → HIGH (destructive)
@@ -2411,12 +2528,16 @@ Available tools:
 - deleteFile: Delete a file. Params: {file: "filename", project?: "project name"}
 - deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
 - webResearch: Search the web for information. Params: {query: "search query", maxResults?: number}
+- generateImage: Generate an image from a text description. Params: {prompt: "detailed image description", size?: "1024x1024"}
 
 User message references:
-- @file:path/to/file.md - References a specific file in the project
+- @file:path/to/file.md - References a specific file in the current project
+- @file:ProjectName/path/to/file.md - References a file in a specific project (global mode). The project name is the first path segment.
 - @project:ProjectName - References a specific project
 - @selection:filepath:startLine-endLine followed by code block - User-selected text from the editor with precise location
   Example: @selection:notes/meeting.md:15-22 followed by the selected text in a code block
+
+When you see @file:ProjectName/path, extract the project name to resolve the correct project and use just the path portion (without the project name) as the fileName param.
 
 IMPORTANT RULES:
 1. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
@@ -2432,10 +2553,20 @@ IMPORTANT RULES:
    - Do NOT create a new file when a selection reference is provided
    - Example: @selection:notes/doc.md:10-15 + "rephrase this" → updateFile with instruction="rephrase this" and selectionContext from the selection
 
+Reusing previously generated images (CRITICAL):
+- The conversation context may include "[Generated image available: ...]" or "[Recently generated image available: ...]" markers.
+- These indicate images that were ALREADY generated earlier in the conversation.
+- When the user asks to "create a file with the/that image", "save the image", "insert the image", or similar:
+  - Do NOT plan a new generateImage step. The image already exists.
+  - Instead, use "createFile" with the file details from the marker (fileName, fileId, projectId).
+  - If the user wants a markdown file referencing the image, use "write" to create a .md file with the image reference.
+- Only plan a generateImage step when the user explicitly asks for a NEW image to be generated.
+
 Context propagation (CRITICAL):
 - projectId: When createProject runs first, ALL subsequent steps MUST include "projectId" in contextNeeded
 - webResearchResults: write step needs this from webResearch step
 - searchResults: write step needs this from search step
+- generatedImageFile: when generateImage runs, subsequent write steps can reference the generated file
 
 Respond ONLY with a JSON object:
 {
@@ -2617,7 +2748,7 @@ ${currentFileContext.projectName ? `- Project: "${currentFileContext.projectName
     if (onReasoningChunk) {
       // Use streaming to capture reasoning tokens for UI display
       response = await chatCompletionStreaming(
-        { messages, temperature: 0, maxTokens: 2000 },
+        { messages, temperature: 0, maxTokens: 3000 },
         (_chunk: string, _done: boolean, type?: 'content' | 'reasoning') => {
           if (type === 'reasoning' && _chunk) {
             onReasoningChunk(_chunk);
@@ -2629,7 +2760,7 @@ ${currentFileContext.projectName ? `- Project: "${currentFileContext.projectName
       response = await chatCompletion({
         messages,
         temperature: 0,
-        maxTokens: 2000,
+        maxTokens: 3000,
       });
     }
 
@@ -2739,6 +2870,7 @@ export function getToolIcon(tool: ToolName): string {
     deleteFile: "🗑️",
     deleteProject: "🗑️",
     webResearch: "🌐",
+    generateImage: "🎨",
   };
   return icons[tool] || "⚙️";
 }
@@ -2786,6 +2918,17 @@ function extractContextFromResult(
     case "summarize":
       context.summary = result.data;
       context.summarizedFileName = result.metadata?.fileName;
+      break;
+
+    case "generateImage":
+      if (result.metadata?.fileName) {
+        context.generatedImageFile = result.metadata.fileName;
+        context.generatedImageFileId = result.metadata.fileId;
+        context.generatedImageProjectId = result.metadata.projectId;
+      }
+      if (result.attachment) {
+        context.generatedImageAttachment = result.attachment;
+      }
       break;
 
     default:
@@ -2868,6 +3011,10 @@ async function generateContentFromContext(
 
   if (accumulatedContext.summary) {
     contextParts.push(`Summary:\n${accumulatedContext.summary}`);
+  }
+
+  if (accumulatedContext.generatedImageFile) {
+    contextParts.push(`Generated Image: Include this markdown image reference in the content: ![Generated image](${accumulatedContext.generatedImageFile})`);
   }
 
   if (contextParts.length === 0) {
@@ -3120,7 +3267,7 @@ export async function executePlan(
   projectId: string | undefined,
   options: ExecutePlanOptions = {},
 ): Promise<ExecutionResult> {
-  const { onStepUpdate, onStreamChunk, stopOnFailure = false, onToolChildUpdate } = options;
+  const { onStepUpdate, onStreamChunk, stopOnFailure = false, onToolChildUpdate, recentImageAttachments } = options;
 
   const startTime = Date.now();
   const completedSteps: CompletedStep[] = [];
@@ -3128,6 +3275,17 @@ export async function executePlan(
   const accumulatedContext: Record<string, unknown> = {
     projectId,
   };
+
+  // Seed context with the most recent image attachment from previous conversation turns
+  if (recentImageAttachments && recentImageAttachments.length > 0) {
+    const latestImage = recentImageAttachments[recentImageAttachments.length - 1];
+    if (latestImage.metadata?.fileName) {
+      accumulatedContext.generatedImageFile = latestImage.metadata.fileName;
+    }
+    if (latestImage.imageData) {
+      accumulatedContext.generatedImageAttachment = latestImage;
+    }
+  }
 
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i];
@@ -3205,6 +3363,52 @@ export async function executePlan(
       // Fall back to accumulatedContext.projectId if stepProjectId is still undefined
       if (!stepProjectId && accumulatedContext.projectId && typeof accumulatedContext.projectId === "string") {
         stepProjectId = accumulatedContext.projectId;
+      }
+
+      // If this step needs a generated image that hasn't been saved yet, save it now
+      if (
+        step.contextNeeded?.includes("generatedImageFile") &&
+        !accumulatedContext.generatedImageFile &&
+        accumulatedContext.generatedImageAttachment &&
+        stepProjectId
+      ) {
+        const att = accumulatedContext.generatedImageAttachment as ToolAttachment;
+        if (att.imageData) {
+          try {
+            const imgSettings = loadImageGenerationSettings();
+            const imageDir = imgSettings.defaultImageDirectory || 'images';
+            const ext = (att.imageMimeType || 'image/png').split('/')[1] || 'png';
+            const timestamp = Date.now();
+            const imgPath = `${imageDir}/generated-${timestamp}.${ext}`;
+
+            const binaryStr = atob(att.imageData);
+            const binaryData = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              binaryData[i] = binaryStr.charCodeAt(i);
+            }
+
+            await projectCreateFile(stepProjectId, imgPath, `[Generated image]`, ext as 'png' | 'jpg' | 'webp', binaryData);
+            accumulatedContext.generatedImageFile = imgPath;
+          } catch {
+            // Non-fatal
+          }
+        }
+      }
+
+      // Inject generated image reference into write/updateFile content
+      if (
+        (step.tool === "write" || step.tool === "updateFile") &&
+        accumulatedContext.generatedImageFile
+      ) {
+        const imgPath = String(accumulatedContext.generatedImageFile);
+        const imgRef = `![Generated image](${imgPath})`;
+        if (step.tool === "write") {
+          const existing = enrichedParams.content || '';
+          enrichedParams.content = `${imgRef}\n\n${existing}`;
+        } else if (step.tool === "updateFile") {
+          const existing = enrichedParams.instruction || '';
+          enrichedParams.instruction = `${existing}\nInsert this image at the appropriate location: ${imgRef}`;
+        }
       }
 
       // Execute the tool

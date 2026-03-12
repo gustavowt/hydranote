@@ -112,6 +112,12 @@ Operations: "replace", "insert_before", "insert_after"
 {"tool": "webResearch", "params": {"query": "search query"}}
 \`\`\`
 
+**7. GENERATE IMAGE** - Generate an image from a text description
+\`\`\`tool_call
+{"tool": "generateImage", "params": {"prompt": "detailed image description", "size": "1024x1024"}}
+\`\`\`
+Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
+
 ## When to Use Tools
 
 | User Request | Tool to Use |
@@ -122,6 +128,7 @@ Operations: "replace", "insert_before", "insert_after"
 | Create, write, generate, save as file, add note | WRITE |
 | Update, edit, modify, change a file | UPDATE FILE |
 | Search web, current news, external info | WEB RESEARCH |
+| Generate, create, draw, make an image | GENERATE IMAGE |
 
 ## Response Flow
 
@@ -137,7 +144,8 @@ Operations: "replace", "insert_before", "insert_after"
 - Be concise and helpful
 - When tools execute successfully, summarize the outcome
 - If a tool fails, explain the error and suggest alternatives
-- For multi-step tasks, you can chain multiple tools across responses`;
+- For multi-step tasks, you can chain multiple tools across responses
+- **Image reuse**: If an image was already generated earlier in the conversation, do NOT generate it again. Use the existing image file path to write/create files referencing it. Only call generateImage for NEW image requests.`;
 }
 
 /**
@@ -266,6 +274,12 @@ AI generates title if not provided and decides directory for all formats. For MD
 {"tool": "webResearch", "params": {"query": "search query"}}
 \`\`\`
 
+**11. GENERATE IMAGE** - Generate an image from a text description
+\`\`\`tool_call
+{"tool": "generateImage", "params": {"prompt": "detailed image description", "size": "1024x1024"}}
+\`\`\`
+Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
+
 ## When to Use Tools
 
 | User Request | Tool to Use |
@@ -280,6 +294,7 @@ AI generates title if not provided and decides directory for all formats. For MD
 | Delete a file | DELETE FILE |
 | Delete a project | DELETE PROJECT |
 | Web search, external info | WEB RESEARCH |
+| Generate, create, draw, make an image | GENERATE IMAGE |
 
 ## Response Flow
 
@@ -296,7 +311,8 @@ AI generates title if not provided and decides directory for all formats. For MD
 - Always specify which project when discussing files across projects
 - When tools execute successfully, summarize the outcome
 - If a tool fails, explain the error and suggest alternatives
-- For multi-step tasks, you can chain multiple tools across responses`;
+- For multi-step tasks, you can chain multiple tools across responses
+- **Image reuse**: If an image was already generated earlier in the conversation, do NOT generate it again. Use the existing image file path to write/create files referencing it. Only call generateImage for NEW image requests.`;
 }
 
 /**
