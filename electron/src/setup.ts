@@ -162,8 +162,13 @@ export class ElectronCapacitorApp {
       this.TrayIcon.setContextMenu(Menu.buildFromTemplate(this.TrayMenuTemplate));
     }
 
-    // Setup the main manu bar at the top of our window.
-    Menu.setApplicationMenu(Menu.buildFromTemplate(this.AppMenuBarMenuTemplate));
+    // On macOS the menu bar is part of the OS chrome; on Windows/Linux remove it
+    // to avoid the unwanted in-window system menu.
+    if (process.platform === 'darwin') {
+      Menu.setApplicationMenu(Menu.buildFromTemplate(this.AppMenuBarMenuTemplate));
+    } else {
+      Menu.setApplicationMenu(null);
+    }
 
     // If the splashscreen is enabled, show it first while the main window loads then switch it out for the main window, or just load the main window from the start.
     if (this.CapacitorFileConfig.electron?.splashScreenEnabled) {
