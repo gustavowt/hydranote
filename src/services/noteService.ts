@@ -14,6 +14,7 @@ import type {
   ProjectRouterDecision,
   GlobalAddNoteParams,
   GlobalAddNoteResult,
+  LLMMessage,
 } from "../types";
 import {
   trackNoteCreated,
@@ -60,7 +61,7 @@ import { createFormatVersion } from "./versionService";
 /**
  * Prompt template for formatting raw note text into structured markdown
  */
-function buildFormatNotePrompt(userInstructions: string): string {
+export function buildFormatNotePrompt(userInstructions: string): string {
   const basePrompt = `You are a note formatting assistant. Your task is to improve formatting of the note without
                       changing its original format or meaning. Use Markdown syntax to structure the content clearly.
 
@@ -200,6 +201,22 @@ export async function formatNote(
     maxTokens: 4000,
   });
 
+  return response.content.trim();
+}
+
+/**
+ * Multi-turn formatting: send an accumulated conversation to the LLM.
+ * Used by FormatStudio for iterative refinement where the full message
+ * history (system + user/assistant rounds) is maintained by the caller.
+ */
+export async function formatNoteWithConversation(
+  messages: LLMMessage[],
+): Promise<string> {
+  const response = await chatCompletion({
+    messages,
+    temperature: 0.3,
+    maxTokens: 4000,
+  });
   return response.content.trim();
 }
 

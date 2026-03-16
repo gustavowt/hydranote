@@ -208,6 +208,8 @@ export type { StaleFile, ReindexProgressCallback } from './embeddingService';
 // Note Service (Phase 9 + Phase 10 + Phase 13 Optimization)
 export {
   formatNote,
+  formatNoteWithConversation,
+  buildFormatNotePrompt,
   generateNoteTitle,
   titleToSlug,
   generateUniqueFileName,

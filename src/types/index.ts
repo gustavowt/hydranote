@@ -1565,6 +1565,22 @@ export const VERSION_HISTORY_CONFIG = {
 } as const;
 
 // ============================================
+// Format Studio Types (Iterative AI Formatting)
+// ============================================
+
+/**
+ * A single version snapshot within a Format Studio session
+ */
+export interface FormatSessionVersion {
+  /** The formatted content at this version */
+  content: string;
+  /** The user instruction that produced this version */
+  instruction: string;
+  /** When this version was created */
+  createdAt: Date;
+}
+
+// ============================================
 // Execution Plan Types (Planner-Executor-Checker Flow)
 // ============================================
 
