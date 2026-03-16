@@ -681,11 +681,13 @@ src/
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
+│       ├── IntegrationsStore.vue     # Store-like integrations browser
 │       └── StorageSettings.vue
 ├── composables/
 │   └── useMarkdownShortcuts.ts      # Smart editing for markdown textareas
 ├── icons/                           # SVG icon components for providers
 ├── services/
+│   ├── integrationService.ts        # Integration settings (localStorage)
 │   ├── chatService.ts               # Chat session management
 │   ├── database.ts                  # DuckDB operations
 │   ├── documentGeneratorService.ts  # PDF/DOCX/MD generation
