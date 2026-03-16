@@ -371,3 +371,15 @@ export {
 } from './imageGenerationService';
 
 export type { ImageGenerationResult, ImageGenerationOptions } from './imageGenerationService';
+
+// Update Service (GitHub version check)
+export {
+  currentVersion,
+  latestVersion,
+  hasUpdate,
+  releaseUrl,
+  checkForUpdates,
+  dismissUpdate,
+  startUpdateChecker,
+  stopUpdateChecker,
+} from './updateService';
