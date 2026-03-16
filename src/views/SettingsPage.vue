@@ -33,6 +33,10 @@
             <ion-icon :icon="imageOutline" />
             <ion-label>Image Generation</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="integrations">
+            <ion-icon :icon="extensionPuzzleOutline" />
+            <ion-label>Integrations</ion-label>
+          </ion-segment-button>
           <ion-segment-button value="storage">
             <ion-icon :icon="folderOutline" />
             <ion-label>Storage</ion-label>
@@ -87,6 +91,14 @@
             >
               <ion-icon :icon="imageOutline" />
               <span>Image Generation</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'integrations' }"
+              @click="activeSection = 'integrations'"
+            >
+              <ion-icon :icon="extensionPuzzleOutline" />
+              <span>Integrations</span>
             </button>
             <button 
               class="nav-item" 
@@ -524,6 +536,17 @@
             </div>
           </section>
 
+          <!-- Integrations Section -->
+          <section v-if="activeSection === 'integrations'" class="content-section">
+            <h2 class="section-title">Integrations</h2>
+            <p class="section-description">Connect external services to enhance your note-taking workflow.</p>
+
+            <IntegrationsStore
+              v-model="integrationSettings"
+              @toggle="handleIntegrationToggle"
+            />
+          </section>
+
           <!-- Storage Section -->
           <section v-if="activeSection === 'storage'" class="content-section">
             <h2 class="section-title">Storage</h2>
@@ -834,9 +857,10 @@ import {
   downloadOutline,
   informationCircleOutline,
   imageOutline,
+  extensionPuzzleOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider } from '@/types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS } from '@/types';
+import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider, IntegrationSettings, IntegrationId } from '@/types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS, DEFAULT_INTEGRATION_SETTINGS } from '@/types';
 import { 
   OpenAiIcon, 
   ClaudeIcon, 
@@ -847,7 +871,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -880,6 +904,9 @@ import {
   getMCPServerStatus,
   generateMCPConfig,
   isMCPAvailable,
+  // Integrations
+  loadIntegrationSettings,
+  saveIntegrationSettings,
   // Local models
   isLocalModelsAvailable,
   getInstalledModels,
@@ -935,7 +962,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'storage' | 'mcp'>('providers');
+const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'integrations' | 'storage' | 'mcp'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
@@ -963,6 +990,9 @@ const webSearchStatus = ref<{
   details?: string;
   suggestions?: string[];
 } | null>(null);
+
+// Integrations section state
+const integrationSettings = ref<IntegrationSettings>({ ...DEFAULT_INTEGRATION_SETTINGS });
 
 // Web search provider configurations
 const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
@@ -1091,6 +1121,7 @@ onMounted(async () => {
   fsSettings.value = loadFileSystemSettings();
   webSearchSettings.value = loadWebSearchSettings();
   indexerSettings.value = loadIndexerSettings();
+  integrationSettings.value = loadIntegrationSettings();
   isFileSystemSupported.value = isFileSystemAccessSupported();
 
   // Start file watcher if enabled
@@ -1370,6 +1401,11 @@ function formatLastSyncTime(isoString: string): string {
   } else {
     return date.toLocaleDateString();
   }
+}
+
+// Integrations handler
+function handleIntegrationToggle(id: IntegrationId, enabled: boolean) {
+  saveIntegrationSettings(integrationSettings.value);
 }
 
 // Web Search handlers
