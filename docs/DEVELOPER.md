@@ -285,6 +285,22 @@ File export for downloading content as PDF, DOCX, or Markdown.
 
 Tracks events for monitoring AI behavior: `note_created`, `project_created`, `directory_created`.
 
+### Update Service (`updateService.ts`)
+
+Checks for new app releases by fetching the latest tag from the GitHub repository (`gustavowt/hydranote`). Compares the tag version against the current `package.json` version using semantic versioning. Runs on app startup and every 6 hours.
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `startUpdateChecker()` | Begin periodic checks (called on app mount) |
+| `stopUpdateChecker()` | Stop the periodic timer |
+| `checkForUpdates()` | Single check against GitHub API |
+| `dismissUpdate()` | Dismiss the banner for the current version |
+
+**Reactive State:** `hasUpdate`, `latestVersion`, `currentVersion`, `releaseUrl` (Vue refs).
+
+**UI:** `UpdateBanner.vue` — fixed bottom banner shown when a newer version exists, with a link to the GitHub release and a dismiss button. Dismissed version is remembered in `localStorage`.
+
 ---
 
 ## Components
@@ -641,6 +657,7 @@ src/
 │   ├── RichTextEditor.vue           # WYSIWYG editor for DOCX
 │   ├── ProjectsTreeSidebar.vue      # Projects/files tree
 │   ├── SearchAutocomplete.vue       # Global search bar
+│   ├── UpdateBanner.vue             # App update notification banner
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
@@ -665,6 +682,7 @@ src/
 │   ├── syncService.ts               # File system sync
 │   ├── telemetryService.ts          # Metrics tracking
 │   ├── toolService.ts               # Tool routing/execution
+│   ├── updateService.ts             # GitHub version check
 │   ├── versionService.ts            # File version history
 │   ├── webSearchService.ts          # Web research
 │   └── index.ts                     # Service exports
