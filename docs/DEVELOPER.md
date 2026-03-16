@@ -71,6 +71,8 @@ AI-powered note formatting and organization. Used internally by the `write` tool
 | Function | Description |
 |----------|-------------|
 | `formatNote(rawText, metadata?)` | Transform raw text to structured Markdown |
+| `formatNoteWithConversation(messages)` | Multi-turn formatting with accumulated conversation |
+| `buildFormatNotePrompt(instructions)` | Build the system prompt for formatting |
 | `generateNoteTitle(content)` | Generate title from content |
 | `decideNoteDirectory(projectId, title, metadata?)` | AI-decide best directory |
 | `globalAddNote(params, onProgress?)` | Dashboard flow with project routing |
@@ -313,7 +315,7 @@ Full markdown editor with edit/split/preview modes, Mermaid diagram support, inl
 
 **Features:**
 - Send selected text to chat (`@selection:file:lines` reference)
-- AI Formatting via 3-dots menu
+- AI Format Studio via 3-dots menu (iterative formatting with version navigation)
 - Export as PDF/DOCX/Markdown
 - Version history restore
 - Smart editing predictions via `useMarkdownShortcuts` composable (see below)
@@ -332,6 +334,23 @@ Composable that attaches to the textarea(s) and provides markdown-aware keyboard
 - **Delete line (Cmd/Ctrl+Shift+Backspace)**: Deletes the entire current line.
 - **Formatting shortcuts**: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link), Cmd/Ctrl+Shift+K (inline code). Toggles wrap/unwrap on selected text or inserts placeholder at cursor.
 - **Shortcuts catalog (Cmd/Ctrl+/)**: Opens a modal listing all available keyboard shortcuts, organized by category. Also accessible via a keyboard icon in the editor header next to the filename. The catalog data (`SHORTCUTS_CATALOG`) and category labels (`SHORTCUT_CATEGORIES`) are exported from the composable as a single source of truth.
+
+### FormatStudio (`FormatStudio.vue`)
+Iterative AI formatting modal. Users can format a note, preview the result as rendered markdown, request refinements via follow-up prompts, and navigate between versions before applying.
+
+**Flow:**
+1. User opens Format Studio from the editor's 3-dots menu
+2. Enters optional formatting instructions and clicks "Format"
+3. Previews the AI-formatted result as rendered markdown
+4. Can type refinement instructions and click "Refine" for additional iterations
+5. Navigates between versions (prev/next) to compare
+6. Clicks "Apply" to commit the selected version, or "Cancel" to discard
+
+**Architecture:**
+- Maintains a hidden `LLMMessage[]` conversation for multi-turn context
+- Versions are ephemeral (in-memory only, not persisted to DB)
+- Pre-format snapshot is stored via `createFormatVersion()` only when the user clicks "Apply"
+- Uses `formatNoteWithConversation()` from `noteService.ts` for LLM calls
 
 ### ChatSidebar (`ChatSidebar.vue`)
 AI chat panel with project context, `@file:` autocomplete, `@selection:` references from editor.
@@ -652,6 +671,7 @@ src/
 │   ├── ChatSidebar.vue              # AI chat with project context
 │   ├── FileReferenceAutocomplete.vue # @file: autocomplete
 │   ├── FileTreeNode.vue             # Recursive file tree node
+│   ├── FormatStudio.vue             # Iterative AI formatting modal
 │   ├── MarkdownEditor.vue           # Markdown editor
 │   ├── PDFViewer.vue                # PDF viewer
 │   ├── RichTextEditor.vue           # WYSIWYG editor for DOCX
