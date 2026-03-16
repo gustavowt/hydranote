@@ -2089,3 +2089,58 @@ export const SUGGESTED_LOCAL_MODELS: Partial<HFModelRef>[] = [
     contextLength: 2048,
   },
 ];
+
+// ============================================
+// Integrations (Settings Store)
+// ============================================
+
+export type IntegrationId = 'google_meet' | 'zoom' | 'google_calendar';
+
+export type IntegrationCategory = 'meetings' | 'calendar' | 'productivity';
+
+export interface IntegrationConfig {
+  enabled: boolean;
+  connectedAt?: string;
+}
+
+export interface IntegrationMeta {
+  id: IntegrationId;
+  name: string;
+  description: string;
+  category: IntegrationCategory;
+  learnMoreUrl?: string;
+}
+
+export interface IntegrationSettings {
+  [key: string]: IntegrationConfig;
+}
+
+export const INTEGRATION_CATALOG: IntegrationMeta[] = [
+  {
+    id: 'google_meet',
+    name: 'Google Meet',
+    description: 'Automatically capture meeting notes and action items from Google Meet calls.',
+    category: 'meetings',
+    learnMoreUrl: 'https://meet.google.com',
+  },
+  {
+    id: 'zoom',
+    name: 'Zoom',
+    description: 'Import transcripts and summaries from your Zoom meetings.',
+    category: 'meetings',
+    learnMoreUrl: 'https://zoom.us',
+  },
+  {
+    id: 'google_calendar',
+    name: 'Google Calendar',
+    description: 'Sync calendar events to create meeting-linked notes and reminders.',
+    category: 'calendar',
+    learnMoreUrl: 'https://calendar.google.com',
+  },
+];
+
+export const DEFAULT_INTEGRATION_SETTINGS: IntegrationSettings = {
+  google_meet: { enabled: false },
+  zoom: { enabled: false },
+  google_calendar: { enabled: false },
+};

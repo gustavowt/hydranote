@@ -374,6 +374,14 @@ export {
 
 export type { ImageGenerationResult, ImageGenerationOptions } from './imageGenerationService';
 
+// Integration Service
+export {
+  loadIntegrationSettings,
+  saveIntegrationSettings,
+  toggleIntegration,
+  isIntegrationEnabled,
+} from './integrationService';
+
 // Update Service (GitHub version check)
 export {
   currentVersion,
