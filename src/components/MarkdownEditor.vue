@@ -131,7 +131,7 @@
         >
           <ion-content class="actions-popover-content">
             <ion-list lines="none">
-              <ion-item button @click="handleOpenFormatModal" :detail="false">
+              <ion-item button @click="handleOpenFormatStudio" :detail="false">
                 <ion-icon :icon="sparklesOutline" slot="start" />
                 <ion-label>Run AI Formatting</ion-label>
               </ion-item>
@@ -162,47 +162,14 @@
       </div>
     </div>
 
-    <!-- AI Formatting Modal -->
-    <ion-modal :is-open="showFormatModal" @didDismiss="showFormatModal = false">
-      <ion-header>
-        <ion-toolbar>
-          <ion-title>AI Formatting</ion-title>
-        </ion-toolbar>
-      </ion-header>
-      <ion-content class="ion-padding format-modal-content">
-        <p class="format-description">
-          AI will format and improve your note's structure. Add any specific instructions below (optional):
-        </p>
-        <ion-textarea
-          v-model="formatInstructions"
-          placeholder="E.g., 'Use bullet points for lists', 'Add a summary section', 'Convert to formal tone'..."
-          :rows="5"
-          class="format-textarea"
-        />
-        <p class="format-note">
-          <ion-icon :icon="informationCircleOutline" />
-          Your default formatting settings from Settings will also be applied.
-        </p>
-      </ion-content>
-      <ion-footer class="modal-footer">
-        <ion-toolbar>
-          <ion-buttons slot="start">
-            <ion-button fill="clear" @click="showFormatModal = false">Cancel</ion-button>
-          </ion-buttons>
-          <ion-buttons slot="end">
-            <ion-button
-              fill="solid"
-              :strong="true"
-              @click="handleRunFormatting"
-              :disabled="formatting"
-              class="modal-confirm-btn"
-            >
-              {{ formatting ? 'Formatting...' : 'Format' }}
-            </ion-button>
-          </ion-buttons>
-        </ion-toolbar>
-      </ion-footer>
-    </ion-modal>
+    <!-- AI Format Studio -->
+    <FormatStudio
+      :is-open="showFormatStudio"
+      :note-content="content"
+      :current-file="currentFile"
+      @dismiss="showFormatStudio = false"
+      @apply="handleFormatApply"
+    />
 
     <!-- Version History Modal -->
     <ion-modal :is-open="showVersionHistoryModal" @didDismiss="showVersionHistoryModal = false">
@@ -565,7 +532,6 @@ import {
   IonToolbar,
   IonTitle,
   IonButtons,
-  IonTextarea,
   IonInput,
   IonSelect,
   IonSelectOption,
@@ -614,7 +580,6 @@ import {
   titleToSlug,
   decideTargetProject,
   decideNoteDirectoryWithDirs,
-  getNoteFormatInstructions, 
   createFormatVersion,
   getVersionHistory,
   getVersionContent,
@@ -637,6 +602,7 @@ import {
   getFile,
 } from '@/services';
 import type { DocumentFormat } from '@/types';
+import FormatStudio from '@/components/FormatStudio.vue';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -803,10 +769,8 @@ function stopSplitResize() {
 // Actions menu state
 const showActionsMenu = ref(false);
 
-// AI Formatting state
-const showFormatModal = ref(false);
-const formatInstructions = ref('');
-const formatting = ref(false);
+// AI Format Studio state
+const showFormatStudio = ref(false);
 
 // Rename state
 const isRenaming = ref(false);
@@ -1678,10 +1642,9 @@ async function handleManualSave() {
 // Actions Menu Handlers
 // ============================================
 
-function handleOpenFormatModal() {
+function handleOpenFormatStudio() {
   showActionsMenu.value = false;
-  formatInstructions.value = '';
-  showFormatModal.value = true;
+  showFormatStudio.value = true;
 }
 
 // ============================================
@@ -1719,70 +1682,26 @@ async function handleExport(format: DocumentFormat) {
   }
 }
 
-async function handleRunFormatting() {
-  if (!content.value.trim()) {
-    const toast = await toastController.create({
-      message: 'No content to format',
-      duration: 2000,
-      position: 'top',
-      color: 'warning',
-    });
-    await toast.present();
-    return;
+async function handleFormatApply(formattedContent: string) {
+  if (props.currentFile) {
+    await createFormatVersion(props.currentFile.id, content.value);
   }
 
-  formatting.value = true;
-  
-  try {
-    // Store pre-format version if this is an existing file
-    if (props.currentFile) {
-      await createFormatVersion(props.currentFile.id, content.value);
-    }
-    
-    // Get current settings instructions and merge with user's additional instructions
-    const settingsInstructions = getNoteFormatInstructions();
-    let combinedInstructions = settingsInstructions;
-    
-    if (formatInstructions.value.trim()) {
-      combinedInstructions = combinedInstructions 
-        ? `${settingsInstructions}\n\nAdditional instructions:\n${formatInstructions.value.trim()}`
-        : formatInstructions.value.trim();
-    }
-    
-    // Call formatNote with the combined instructions
-    const formattedContent = await formatNote(content.value, {
-      topic: combinedInstructions || undefined,
-    });
-    
-    // Update editor content
-    content.value = formattedContent;
-    
-    showFormatModal.value = false;
-    
-    // Save the file automatically after formatting
-    if (props.currentFile) {
-      emit('save', formattedContent, props.currentFile);
-      originalContent.value = formattedContent;
-    }
-    
-    const toast = await toastController.create({
-      message: 'Note formatted and saved',
-      duration: 2000,
-      position: 'top',
-      color: 'success',
-    });
-    await toast.present();
-  } catch (error) {
-    const toast = await toastController.create({
-      message: 'Failed to format note',
-      duration: 3000,
-      position: 'top',
-      color: 'danger',
-    });
-    await toast.present();
-  } finally {
-    formatting.value = false;
+  content.value = formattedContent;
+  showFormatStudio.value = false;
+
+  if (props.currentFile) {
+    emit('save', formattedContent, props.currentFile);
+    originalContent.value = formattedContent;
   }
+
+  const toast = await toastController.create({
+    message: 'Formatted version applied and saved',
+    duration: 2000,
+    position: 'top',
+    color: 'success',
+  });
+  await toast.present();
 }
 
 // ============================================
@@ -2923,53 +2842,6 @@ ion-modal ion-toolbar {
   --background: var(--hn-bg-surface);
   --color: var(--hn-text-primary);
   --border-color: var(--hn-border-default);
-}
-
-ion-modal ion-content.format-modal-content {
-  --background: var(--hn-bg-deep);
-}
-
-.format-description {
-  color: var(--hn-text-secondary);
-  font-size: 0.9rem;
-  margin-bottom: 16px;
-  line-height: 1.5;
-}
-
-.format-textarea {
-  --background: var(--hn-bg-surface);
-  --color: var(--hn-text-primary);
-  --placeholder-color: var(--hn-text-muted);
-  --border-radius: 8px;
-  --padding-start: 12px;
-  --padding-end: 12px;
-  --padding-top: 12px;
-  --padding-bottom: 12px;
-  border: 1px solid var(--hn-border-default);
-  margin-bottom: 16px;
-}
-
-.format-textarea:focus-within {
-  border-color: var(--hn-teal);
-}
-
-.format-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--hn-text-muted);
-  font-size: 0.8rem;
-  padding: 10px 12px;
-  background: var(--hn-bg-surface);
-  border-radius: 6px;
-  border: 1px solid var(--hn-border-subtle);
-}
-
-.format-note ion-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-  color: var(--hn-teal);
-  margin-top: 1px;
 }
 
 ion-modal ion-button {
