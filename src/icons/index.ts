@@ -17,3 +17,8 @@ export { default as SearxngIcon } from './SearxngIcon.vue';
 export { default as BraveIcon } from './BraveIcon.vue';
 export { default as DuckDuckGoIcon } from './DuckDuckGoIcon.vue';
 
+// Integration Icons
+export { default as GoogleMeetIcon } from './GoogleMeetIcon.vue';
+export { default as ZoomIcon } from './ZoomIcon.vue';
+export { default as GoogleCalendarIcon } from './GoogleCalendarIcon.vue';
+

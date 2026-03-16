@@ -8,3 +8,4 @@
 export { default as AIProviderSelector } from './AIProviderSelector.vue';
 export { default as IndexerProviderSelector } from './IndexerProviderSelector.vue';
 export { default as StorageSettings } from './StorageSettings.vue';
+export { default as IntegrationsStore } from './IntegrationsStore.vue';
