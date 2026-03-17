@@ -382,6 +382,35 @@ export {
   isIntegrationEnabled,
 } from './integrationService';
 
+// Zoom Service
+export {
+  loadZoomSettings,
+  saveZoomSettings,
+  getAccessToken as getZoomAccessToken,
+  testConnection as testZoomConnection,
+  listRecordings as listZoomRecordings,
+  downloadTranscript as downloadZoomTranscript,
+  filterNewMeetingsWithTranscripts,
+  getTranscriptDownloadUrl,
+} from './zoomService';
+
+// Zoom Sync Service
+export {
+  startSync as startZoomSync,
+  stopSync as stopZoomSync,
+  restartSync as restartZoomSync,
+  syncNow as zoomSyncNow,
+  onSyncEvent as onZoomSyncEvent,
+  isSyncing as isZoomSyncing,
+  isSyncRunning as isZoomSyncRunning,
+} from './zoomSyncService';
+
+// VTT Parser
+export {
+  vttToMarkdown,
+  extractSpeakers,
+} from './vttParser';
+
 // Update Service (GitHub version check)
 export {
   currentVersion,
