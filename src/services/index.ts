@@ -411,6 +411,31 @@ export {
   extractSpeakers,
 } from './vttParser';
 
+// Google Meet Service
+export {
+  loadGoogleMeetSettings,
+  saveGoogleMeetSettings,
+  getAccessToken as getGoogleMeetAccessToken,
+  testConnection as testGoogleMeetConnection,
+  listConferenceRecords,
+  listTranscripts as listGoogleMeetTranscripts,
+  downloadTranscriptDoc,
+  filterNewConferencesWithTranscripts,
+  getTranscriptDocumentId,
+  getMeetingTopic,
+} from './googleMeetService';
+
+// Google Meet Sync Service
+export {
+  startSync as startGoogleMeetSync,
+  stopSync as stopGoogleMeetSync,
+  restartSync as restartGoogleMeetSync,
+  syncNow as googleMeetSyncNow,
+  onSyncEvent as onGoogleMeetSyncEvent,
+  isSyncing as isGoogleMeetSyncing,
+  isSyncRunning as isGoogleMeetSyncRunning,
+} from './googleMeetSyncService';
+
 // Update Service (GitHub version check)
 export {
   currentVersion,

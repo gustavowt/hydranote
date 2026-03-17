@@ -2232,3 +2232,89 @@ export interface ZoomSyncEvent {
   error?: string;
   totalSynced?: number;
 }
+
+// ============================================
+// Google Meet Integration Types
+// ============================================
+
+export interface GoogleMeetCredentials {
+  serviceAccountJson: string;
+  impersonatedUserEmail: string;
+}
+
+export interface GoogleMeetSyncSettings {
+  syncIntervalMinutes: number;
+  targetProjectId?: string;
+  lastSyncTime?: string;
+  syncedConferenceNames: string[];
+}
+
+export interface GoogleMeetTokenData {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface GoogleMeetSettings {
+  credentials: GoogleMeetCredentials;
+  syncSettings: GoogleMeetSyncSettings;
+  token?: GoogleMeetTokenData;
+}
+
+export const DEFAULT_GOOGLE_MEET_SETTINGS: GoogleMeetSettings = {
+  credentials: {
+    serviceAccountJson: '',
+    impersonatedUserEmail: '',
+  },
+  syncSettings: {
+    syncIntervalMinutes: 5,
+    syncedConferenceNames: [],
+  },
+};
+
+export interface GoogleMeetConferenceRecord {
+  name: string;
+  startTime: string;
+  endTime?: string;
+  expireTime?: string;
+  space: string;
+}
+
+export interface GoogleMeetConferenceRecordsResponse {
+  conferenceRecords?: GoogleMeetConferenceRecord[];
+  nextPageToken?: string;
+}
+
+export interface GoogleMeetTranscriptDocsDestination {
+  document: string;
+  exportUri: string;
+}
+
+export interface GoogleMeetTranscript {
+  name: string;
+  state: 'STATE_UNSPECIFIED' | 'STARTED' | 'ENDED' | 'FILE_GENERATED';
+  startTime?: string;
+  endTime?: string;
+  docsDestination?: GoogleMeetTranscriptDocsDestination;
+}
+
+export interface GoogleMeetTranscriptsResponse {
+  transcripts?: GoogleMeetTranscript[];
+  nextPageToken?: string;
+}
+
+export type GoogleMeetSyncEventType =
+  | 'sync_started'
+  | 'meeting_found'
+  | 'transcript_downloaded'
+  | 'transcript_saved'
+  | 'sync_completed'
+  | 'sync_error';
+
+export interface GoogleMeetSyncEvent {
+  type: GoogleMeetSyncEventType;
+  message: string;
+  meetingTopic?: string;
+  conferenceName?: string;
+  error?: string;
+  totalSynced?: number;
+}
