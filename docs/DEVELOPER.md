@@ -682,12 +682,16 @@ src/
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
 │       ├── IntegrationsStore.vue     # Store-like integrations browser
-│       └── StorageSettings.vue
+│       ├── StorageSettings.vue
+│       └── ZoomSettings.vue         # Zoom integration configuration panel
 ├── composables/
 │   └── useMarkdownShortcuts.ts      # Smart editing for markdown textareas
 ├── icons/                           # SVG icon components for providers
 ├── services/
 │   ├── integrationService.ts        # Integration settings (localStorage)
+│   ├── zoomService.ts               # Zoom API client (Server-to-Server OAuth)
+│   ├── zoomSyncService.ts           # Zoom auto-sync orchestrator
+│   ├── vttParser.ts                 # VTT transcript to Markdown parser
 │   ├── chatService.ts               # Chat session management
 │   ├── database.ts                  # DuckDB operations
 │   ├── documentGeneratorService.ts  # PDF/DOCX/MD generation
@@ -730,3 +734,39 @@ src/
 | `file_versions` | Version history (diff-based) |
 | `web_search_cache` | Web search result cache |
 | `web_search_chunks` | Web search content chunks |
+
+---
+
+## Zoom Integration
+
+Auto-syncs meeting transcripts from Zoom Cloud Recordings into HydraNote projects.
+
+### Authentication
+
+Uses **Zoom Server-to-Server OAuth**. Users create an app at [marketplace.zoom.us](https://marketplace.zoom.us) with `recording:read:admin` scope and provide Account ID, Client ID, and Client Secret in Settings > Integrations > Zoom.
+
+Token exchange: `POST https://zoom.us/oauth/token` with `grant_type=account_credentials`. Tokens auto-refresh ~5 min before expiry.
+
+### Auto-Sync Flow
+
+1. `zoomSyncService` polls `GET /users/me/recordings` at a configurable interval (default 5 min)
+2. Filters for recordings with `file_type: "TRANSCRIPT"` not already synced
+3. Downloads VTT transcript via Zoom download URL
+4. `vttParser` converts VTT to Markdown (grouped by speaker with timestamps)
+5. Saves as `zoom-meetings/{date}-{topic}.md` in the configured target project via `projectService.createFile()`
+6. Tracks synced meeting UUIDs in localStorage to prevent duplicates
+
+### Services
+
+| Service | Purpose |
+|---------|---------|
+| `zoomService.ts` | OAuth token management, Zoom REST API calls (via `web:fetch` IPC) |
+| `zoomSyncService.ts` | Polling orchestrator, event emitter for UI updates |
+| `vttParser.ts` | WebVTT to Markdown conversion with speaker grouping |
+
+### localStorage Keys
+
+| Key | Contents |
+|-----|----------|
+| `hydranote_zoom_settings` | Zoom credentials, sync config, cached token, synced meeting UUIDs |
+| `hydranote_integration_settings` | General integration toggles (zoom enabled/disabled) |
