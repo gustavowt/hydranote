@@ -544,6 +544,14 @@
             <IntegrationsStore
               v-model="integrationSettings"
               @toggle="handleIntegrationToggle"
+              @configure="handleIntegrationConfigure"
+            />
+
+            <ZoomSettings
+              v-if="showZoomSettings"
+              @close="showZoomSettings = false"
+              @activated="handleZoomActivated"
+              @deactivated="handleZoomDeactivated"
             />
           </section>
 
@@ -871,7 +879,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -993,6 +1001,7 @@ const webSearchStatus = ref<{
 
 // Integrations section state
 const integrationSettings = ref<IntegrationSettings>({ ...DEFAULT_INTEGRATION_SETTINGS });
+const showZoomSettings = ref(false);
 
 // Web search provider configurations
 const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
@@ -1406,6 +1415,29 @@ function formatLastSyncTime(isoString: string): string {
 // Integrations handler
 function handleIntegrationToggle(id: IntegrationId, enabled: boolean) {
   saveIntegrationSettings(integrationSettings.value);
+}
+
+function handleIntegrationConfigure(id: IntegrationId) {
+  if (id === 'zoom') {
+    showZoomSettings.value = true;
+  }
+}
+
+function handleZoomActivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    zoom: { enabled: true, connectedAt: new Date().toISOString() },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+}
+
+function handleZoomDeactivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    zoom: { enabled: false, connectedAt: undefined },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+  showZoomSettings.value = false;
 }
 
 // Web Search handlers

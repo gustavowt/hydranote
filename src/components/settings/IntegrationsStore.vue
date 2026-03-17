@@ -48,19 +48,28 @@
             <span>Connected</span>
           </div>
 
-          <button
-            v-if="isEnabled(integration.id)"
-            class="btn btn-deactivate"
-            @click="handleToggle(integration.id, false)"
-          >
-            Deactivate
-          </button>
+          <template v-if="isEnabled(integration.id)">
+            <button
+              v-if="requiresConfiguration(integration.id)"
+              class="btn btn-configure"
+              @click="emit('configure', integration.id)"
+            >
+              <ion-icon :icon="settingsOutline" />
+              Settings
+            </button>
+            <button
+              class="btn btn-deactivate"
+              @click="handleToggle(integration.id, false)"
+            >
+              Deactivate
+            </button>
+          </template>
           <button
             v-else
             class="btn btn-activate"
-            @click="handleToggle(integration.id, true)"
+            @click="handleActivate(integration.id)"
           >
-            Activate
+            {{ requiresConfiguration(integration.id) ? 'Configure' : 'Activate' }}
           </button>
         </div>
       </div>
@@ -80,6 +89,7 @@ import { IonIcon, toastController } from '@ionic/vue';
 import {
   checkmarkCircleOutline,
   extensionPuzzleOutline,
+  settingsOutline,
 } from 'ionicons/icons';
 import type { IntegrationSettings, IntegrationId, IntegrationCategory } from '@/types';
 import { INTEGRATION_CATALOG } from '@/types';
@@ -89,6 +99,8 @@ import {
   GoogleCalendarIcon,
 } from '@/icons';
 
+const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom'];
+
 const props = defineProps<{
   modelValue: IntegrationSettings;
 }>();
@@ -96,6 +108,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: IntegrationSettings): void;
   (e: 'toggle', id: IntegrationId, enabled: boolean): void;
+  (e: 'configure', id: IntegrationId): void;
 }>();
 
 const activeCategory = ref<'all' | IntegrationCategory>('all');
@@ -127,6 +140,18 @@ function getCategoryLabel(cat: IntegrationCategory): string {
 
 function isEnabled(id: IntegrationId): boolean {
   return props.modelValue[id]?.enabled ?? false;
+}
+
+function requiresConfiguration(id: IntegrationId): boolean {
+  return CONFIGURABLE_INTEGRATIONS.includes(id);
+}
+
+function handleActivate(id: IntegrationId) {
+  if (requiresConfiguration(id)) {
+    emit('configure', id);
+    return;
+  }
+  handleToggle(id, true);
 }
 
 async function handleToggle(id: IntegrationId, enabled: boolean) {
@@ -328,6 +353,24 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
 .btn-activate:hover {
   filter: brightness(1.1);
   transform: translateY(-1px);
+}
+
+.btn-configure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--hn-bg-elevated);
+  border: 1px solid var(--hn-border-default);
+  color: var(--hn-text-secondary);
+}
+
+.btn-configure:hover {
+  border-color: var(--hn-purple);
+  color: var(--hn-purple-light);
+}
+
+.btn-configure ion-icon {
+  font-size: 1rem;
 }
 
 .btn-deactivate {
