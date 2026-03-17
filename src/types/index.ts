@@ -2144,3 +2144,91 @@ export const DEFAULT_INTEGRATION_SETTINGS: IntegrationSettings = {
   zoom: { enabled: false },
   google_calendar: { enabled: false },
 };
+
+// ============================================
+// Zoom Integration Types
+// ============================================
+
+export interface ZoomCredentials {
+  accountId: string;
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface ZoomSyncSettings {
+  syncIntervalMinutes: number;
+  targetProjectId?: string;
+  lastSyncTime?: string;
+  syncedMeetingUuids: string[];
+}
+
+export interface ZoomTokenData {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface ZoomSettings {
+  credentials: ZoomCredentials;
+  syncSettings: ZoomSyncSettings;
+  token?: ZoomTokenData;
+}
+
+export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
+  credentials: {
+    accountId: '',
+    clientId: '',
+    clientSecret: '',
+  },
+  syncSettings: {
+    syncIntervalMinutes: 5,
+    syncedMeetingUuids: [],
+  },
+};
+
+export interface ZoomRecordingFile {
+  id: string;
+  file_type: string;
+  file_extension: string;
+  download_url: string;
+  status: string;
+  recording_start: string;
+  recording_end: string;
+}
+
+export interface ZoomMeeting {
+  uuid: string;
+  id: number;
+  topic: string;
+  start_time: string;
+  duration: number;
+  total_size: number;
+  recording_count: number;
+  recording_files: ZoomRecordingFile[];
+}
+
+export interface ZoomRecordingsResponse {
+  from: string;
+  to: string;
+  page_count: number;
+  page_size: number;
+  total_records: number;
+  next_page_token: string;
+  meetings: ZoomMeeting[];
+}
+
+export type ZoomSyncEventType =
+  | 'sync_started'
+  | 'meeting_found'
+  | 'transcript_downloaded'
+  | 'transcript_saved'
+  | 'sync_completed'
+  | 'sync_error';
+
+export interface ZoomSyncEvent {
+  type: ZoomSyncEventType;
+  message: string;
+  meetingTopic?: string;
+  meetingUuid?: string;
+  error?: string;
+  totalSynced?: number;
+}
