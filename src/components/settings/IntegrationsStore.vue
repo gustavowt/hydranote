@@ -99,7 +99,7 @@ import {
   GoogleCalendarIcon,
 } from '@/icons';
 
-const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom'];
+const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom', 'google_meet'];
 
 const props = defineProps<{
   modelValue: IntegrationSettings;
@@ -315,8 +315,8 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
 .card-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
   padding-top: 16px;
   border-top: 1px solid var(--hn-border-default);
 }
@@ -335,19 +335,29 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
 }
 
 .btn {
-  padding: 10px 20px;
+  padding: 8px 14px;
   border: none;
   border-radius: 8px;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.connected-info + .btn,
+.connected-info ~ .btn {
   margin-left: auto;
+}
+
+.connected-info:first-child {
+  margin-right: auto;
 }
 
 .btn-activate {
   background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   color: #ffffff;
+  margin-left: auto;
 }
 
 .btn-activate:hover {

@@ -10,3 +10,4 @@ export { default as IndexerProviderSelector } from './IndexerProviderSelector.vu
 export { default as StorageSettings } from './StorageSettings.vue';
 export { default as IntegrationsStore } from './IntegrationsStore.vue';
 export { default as ZoomSettings } from './ZoomSettings.vue';
+export { default as GoogleMeetSettings } from './GoogleMeetSettings.vue';

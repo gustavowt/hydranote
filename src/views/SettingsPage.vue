@@ -553,6 +553,13 @@
               @activated="handleZoomActivated"
               @deactivated="handleZoomDeactivated"
             />
+
+            <GoogleMeetSettings
+              v-if="showGoogleMeetSettings"
+              @close="showGoogleMeetSettings = false"
+              @activated="handleGoogleMeetActivated"
+              @deactivated="handleGoogleMeetDeactivated"
+            />
           </section>
 
           <!-- Storage Section -->
@@ -879,7 +886,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleMeetSettings } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -1002,6 +1009,7 @@ const webSearchStatus = ref<{
 // Integrations section state
 const integrationSettings = ref<IntegrationSettings>({ ...DEFAULT_INTEGRATION_SETTINGS });
 const showZoomSettings = ref(false);
+const showGoogleMeetSettings = ref(false);
 
 // Web search provider configurations
 const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
@@ -1420,6 +1428,8 @@ function handleIntegrationToggle(id: IntegrationId, enabled: boolean) {
 function handleIntegrationConfigure(id: IntegrationId) {
   if (id === 'zoom') {
     showZoomSettings.value = true;
+  } else if (id === 'google_meet') {
+    showGoogleMeetSettings.value = true;
   }
 }
 
@@ -1438,6 +1448,23 @@ function handleZoomDeactivated() {
   };
   saveIntegrationSettings(integrationSettings.value);
   showZoomSettings.value = false;
+}
+
+function handleGoogleMeetActivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    google_meet: { enabled: true, connectedAt: new Date().toISOString() },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+}
+
+function handleGoogleMeetDeactivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    google_meet: { enabled: false, connectedAt: undefined },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+  showGoogleMeetSettings.value = false;
 }
 
 // Web Search handlers
