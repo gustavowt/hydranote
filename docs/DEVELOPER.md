@@ -681,6 +681,7 @@ src/
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
+│       ├── GoogleMeetSettings.vue   # Google Meet integration configuration panel
 │       ├── IntegrationsStore.vue     # Store-like integrations browser
 │       ├── StorageSettings.vue
 │       └── ZoomSettings.vue         # Zoom integration configuration panel
@@ -689,6 +690,8 @@ src/
 ├── icons/                           # SVG icon components for providers
 ├── services/
 │   ├── integrationService.ts        # Integration settings (localStorage)
+│   ├── googleMeetService.ts         # Google Meet API client (Service Account JWT)
+│   ├── googleMeetSyncService.ts     # Google Meet auto-sync orchestrator
 │   ├── zoomService.ts               # Zoom API client (Server-to-Server OAuth)
 │   ├── zoomSyncService.ts           # Zoom auto-sync orchestrator
 │   ├── vttParser.ts                 # VTT transcript to Markdown parser
@@ -769,4 +772,43 @@ Token exchange: `POST https://zoom.us/oauth/token` with `grant_type=account_cred
 | Key | Contents |
 |-----|----------|
 | `hydranote_zoom_settings` | Zoom credentials, sync config, cached token, synced meeting UUIDs |
-| `hydranote_integration_settings` | General integration toggles (zoom enabled/disabled) |
+| `hydranote_integration_settings` | General integration toggles (zoom/google_meet enabled/disabled) |
+
+---
+
+## Google Meet Integration
+
+Auto-syncs meeting transcripts from Google Meet via the Workspace API into HydraNote projects.
+
+### Authentication
+
+Uses **Google Workspace Service Account** with domain-wide delegation. Users create a GCP project, enable the **Meet REST API** and **Google Drive API**, create a service account, and grant it domain-wide delegation with the required scopes. They paste the downloaded JSON key file and an impersonated user email into Settings > Integrations > Google Meet.
+
+Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to `https://oauth2.googleapis.com/token` with `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`. Tokens auto-refresh ~5 min before expiry.
+
+**Required Scopes:**
+- `https://www.googleapis.com/auth/meetings.space.readonly` — list conference records
+- `https://www.googleapis.com/auth/drive.meet.readonly` — download transcript docs from Drive
+
+### Auto-Sync Flow
+
+1. `googleMeetSyncService` polls `GET https://meet.googleapis.com/v2/conferenceRecords` at a configurable interval (default 5 min)
+2. For each conference, lists transcripts via `conferenceRecords/{id}/transcripts`
+3. Filters for transcripts with `state: FILE_GENERATED` and a `docsDestination.document` ID
+4. Downloads transcript content via Drive export API (`GET /drive/v3/files/{docId}/export?mimeType=text/plain`)
+5. Formats plain-text transcript into Markdown (grouped by speaker)
+6. Saves as `google-meet/{date}-{topic}.md` in the configured target project via `projectService.createFile()`
+7. Tracks synced conference record names in localStorage to prevent duplicates
+
+### Services
+
+| Service | Purpose |
+|---------|---------|
+| `googleMeetService.ts` | Service Account JWT auth, Google Meet + Drive REST API calls (via `web:fetch` IPC) |
+| `googleMeetSyncService.ts` | Polling orchestrator, event emitter for UI updates, transcript formatting |
+
+### localStorage Keys
+
+| Key | Contents |
+|-----|----------|
+| `hydranote_google_meet_settings` | Service Account JSON, impersonated email, sync config, cached token, synced conference names |
