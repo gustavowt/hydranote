@@ -96,6 +96,10 @@ Handles tool execution with Planner → Executor → Checker architecture.
 | `deleteFile` | Delete a file |
 | `deleteProject` | Delete a project (global mode) |
 | `generateImage` | Generate an image from a text description (returns image attachment) |
+| `listEvents` | List upcoming/past Google Calendar events (no project needed) |
+| `createEvent` | Create a new Google Calendar event (no project needed) |
+| `searchTranscripts` | Search meeting transcripts from Zoom/Google Meet |
+| `prepareMeeting` | Prepare for an upcoming meeting with calendar + notes context (returns attachment) |
 
 **Orchestration Flow:**
 1. **Planner**: Analyze request, create ordered tool execution plan (passes file + instruction to updateFile)
@@ -118,7 +122,7 @@ This architecture ensures:
 - The Tool has full context to make precise, minimal changes
 - Changes are atomic and reviewable via unified diff format
 
-**Auto-Execute Tools** (no confirmation needed): `read`, `search`, `summarize`
+**Auto-Execute Tools** (no confirmation needed): `read`, `search`, `summarize`, `listEvents`, `searchTranscripts`, `prepareMeeting`
 
 **File Update Confirmation Behavior:**
 - Single `updateFile` in plan: Shows confirmation dialog with diff preview
@@ -853,3 +857,73 @@ Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to 
 | Key | Contents |
 |-----|----------|
 | `hydranote_google_calendar_settings` | Service Account JSON, impersonated email, sync config, selected calendars, cached token, synced event IDs |
+
+---
+
+## Integration Chat Tools
+
+The integrations (Zoom, Google Meet, Google Calendar) extend the chat with four new tools that leverage synced data and live API access.
+
+### listEvents Tool
+
+Queries Google Calendar in real-time for events within a configurable date range. Requires Google Calendar integration to be enabled.
+
+**Parameters:**
+- `days` (number, default 7) — Days ahead to look
+- `pastDays` (number, default 0) — Days behind to look
+- `calendarId` (string, optional) — Specific calendar, defaults to configured calendars or primary
+
+**Auto-executes** (low complexity, read-only). The LLM system prompt also includes today's upcoming events when Google Calendar is enabled, so the assistant passively knows the user's schedule.
+
+### createEvent Tool
+
+Creates a new event on Google Calendar via the REST API. Always requires user confirmation (high complexity).
+
+**Parameters:**
+- `title` (string) — Event summary
+- `startTime` (string) — ISO datetime
+- `endTime` (string, optional) — ISO datetime, defaults to 1 hour after start
+- `allDay` (boolean, optional) — All-day event
+- `description`, `location`, `attendees` (string, optional)
+
+### searchTranscripts Tool
+
+Semantic search across meeting transcripts. Prioritizes files in `zoom-meetings/`, `google-meet/`, and `google-calendar/` directories, but falls back to general results.
+
+**Parameters:**
+- `query` (string) — Search terms
+- `project` (string, optional) — Restrict to a specific project
+- `maxResults` (number, default 5)
+
+### prepareMeeting Tool
+
+Combines calendar data with semantic search to generate a meeting preparation document. Returns a `ToolAttachment` of type `'summary'`.
+
+**Flow:**
+1. Fetches upcoming events from Google Calendar (next 24h)
+2. Matches the specified meeting topic (or picks the next event)
+3. Searches project notes/transcripts for related context
+4. Uses LLM to generate a structured prep document (overview, context, agenda, questions, action items)
+
+**Parameters:**
+- `meeting` (string, optional) — Topic to prepare for; uses next upcoming event if omitted
+- `project` (string, optional) — Project to search for context
+
+### @meeting: Reference
+
+Users can type `@meeting:` in the chat input to autocomplete meeting transcript files. The FileReferenceAutocomplete shows a "Meetings" section (with teal styling and microphone icon) for files in `zoom-meetings/`, `google-meet/`, or `google-calendar/` directories. The `@meeting:` reference renders as a distinct pill in the chat input and message display.
+
+### Generate Meeting Notes (Editor)
+
+When a file from a meeting directory (`zoom-meetings/`, `google-meet/`, `google-calendar/`) is open in the MarkdownEditor, the 3-dots menu shows a "Generate Meeting Notes" action. This uses the LLM to extract:
+- Meeting summary
+- Key decisions
+- Action items (with checkbox syntax)
+- Discussion points
+- Open questions
+
+The generated notes are prepended to the file content, with the original transcript preserved below a separator.
+
+### Calendar Context in System Prompt
+
+When Google Calendar is enabled, `buildSystemPrompt()` and `buildGlobalSystemPrompt()` inject today's upcoming events (next 24 hours) into the system prompt. This gives the LLM passive awareness of the user's schedule without requiring an explicit `listEvents` tool call. The integration tool documentation is conditionally included — only tools for enabled integrations appear in the prompt.
