@@ -43,26 +43,27 @@
         </div>
 
         <div class="card-footer">
-          <div v-if="isEnabled(integration.id)" class="connected-info">
-            <ion-icon :icon="checkmarkCircleOutline" />
-            <span>Connected</span>
-          </div>
-
           <template v-if="isEnabled(integration.id)">
-            <button
-              v-if="requiresConfiguration(integration.id)"
-              class="btn btn-configure"
-              @click="emit('configure', integration.id)"
-            >
-              <ion-icon :icon="settingsOutline" />
-              Settings
-            </button>
-            <button
-              class="btn btn-deactivate"
-              @click="handleToggle(integration.id, false)"
-            >
-              Deactivate
-            </button>
+            <div class="connected-info">
+              <ion-icon :icon="checkmarkCircleOutline" />
+              <span>Connected</span>
+            </div>
+            <div class="card-actions">
+              <button
+                v-if="requiresConfiguration(integration.id)"
+                class="btn btn-configure"
+                @click="emit('configure', integration.id)"
+              >
+                <ion-icon :icon="settingsOutline" />
+                Settings
+              </button>
+              <button
+                class="btn btn-deactivate"
+                @click="handleToggle(integration.id, false)"
+              >
+                Deactivate
+              </button>
+            </div>
           </template>
           <button
             v-else
@@ -314,9 +315,8 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
 /* Card Footer */
 .card-footer {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
   padding-top: 16px;
   border-top: 1px solid var(--hn-border-default);
 }
@@ -334,6 +334,15 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
   font-size: 1.1rem;
 }
 
+.card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.card-actions .btn {
+  flex: 1;
+}
+
 .btn {
   padding: 8px 14px;
   border: none;
@@ -343,21 +352,13 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
-}
-
-.connected-info + .btn,
-.connected-info ~ .btn {
-  margin-left: auto;
-}
-
-.connected-info:first-child {
-  margin-right: auto;
+  text-align: center;
 }
 
 .btn-activate {
+  width: 100%;
   background: linear-gradient(135deg, var(--hn-purple), var(--hn-purple-light));
   color: #ffffff;
-  margin-left: auto;
 }
 
 .btn-activate:hover {
@@ -368,6 +369,7 @@ async function handleToggle(id: IntegrationId, enabled: boolean) {
 .btn-configure {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   background: var(--hn-bg-elevated);
   border: 1px solid var(--hn-border-default);
