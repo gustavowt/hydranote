@@ -32,9 +32,32 @@
           </div>
         </template>
 
+        <!-- Meetings Section -->
+        <template v-if="filteredMeetingItems.length > 0">
+          <div class="section-header" :class="{ 'has-top-border': filteredProjects.length > 0 }">
+            <span class="section-title">Meetings</span>
+            <span class="section-count">{{ filteredMeetingItems.length }}</span>
+          </div>
+          <div
+            v-for="(item, index) in filteredMeetingItems"
+            :key="item.id"
+            class="autocomplete-item is-meeting"
+            :class="{ selected: (index + filteredProjects.length) === selectedIndex }"
+            @click="selectItem(item)"
+            @mouseenter="selectedIndex = index + filteredProjects.length"
+          >
+            <ion-icon :icon="getItemIcon(item)" :style="{ color: getItemIconColor(item) }" />
+            <div class="file-info">
+              <span class="file-name">{{ item.name }}</span>
+              <span v-if="item.projectName" class="file-project">{{ item.projectName }}</span>
+              <span v-else-if="item.path !== item.name" class="file-path">{{ item.path }}</span>
+            </div>
+          </div>
+        </template>
+
         <!-- Files Section -->
         <template v-if="filteredFileItems.length > 0">
-          <div class="section-header" :class="{ 'has-top-border': filteredProjects.length > 0 }">
+          <div class="section-header" :class="{ 'has-top-border': filteredProjects.length > 0 || filteredMeetingItems.length > 0 }">
             <span class="section-title">Files</span>
             <span class="section-count">{{ filteredFileItems.length }}</span>
           </div>
@@ -42,9 +65,9 @@
             v-for="(item, index) in filteredFileItems"
             :key="item.id"
             class="autocomplete-item"
-            :class="{ selected: (index + filteredProjects.length) === selectedIndex }"
+            :class="{ selected: (index + filteredProjects.length + filteredMeetingItems.length) === selectedIndex }"
             @click="selectItem(item)"
-            @mouseenter="selectedIndex = index + filteredProjects.length"
+            @mouseenter="selectedIndex = index + filteredProjects.length + filteredMeetingItems.length"
           >
             <ion-icon :icon="getItemIcon(item)" :style="{ color: getItemIconColor(item) }" />
             <div class="file-info">
@@ -75,12 +98,13 @@ import {
   codeSlashOutline,
   logoMarkdown,
   folderOutline,
+  micOutline,
 } from 'ionicons/icons';
 import type { SupportedFileType } from '@/types';
 import { getProjectFilesForAutocomplete, getAllFilesForAutocomplete, getAllProjects } from '@/services';
 
-// Type for autocomplete items (can be file or project)
-type AutocompleteItemType = 'file' | 'project';
+// Type for autocomplete items (can be file, project, or meeting)
+type AutocompleteItemType = 'file' | 'project' | 'meeting';
 
 interface AutocompleteItem {
   id: string;
@@ -141,6 +165,13 @@ const filteredItems = computed(() => {
   return filtered;
 });
 
+const MEETING_DIRS = ['zoom-meetings/', 'google-meet/', 'google-calendar/'];
+
+function isMeetingFile(item: AutocompleteItem): boolean {
+  const path = item.path.toLowerCase();
+  return MEETING_DIRS.some(d => path.startsWith(d) || path.includes('/' + d));
+}
+
 // Filtered projects (max 5)
 const filteredProjects = computed(() => 
   filteredItems.value
@@ -148,7 +179,14 @@ const filteredProjects = computed(() =>
     .slice(0, 5)
 );
 
-// Filtered files (max 8)
+// Filtered meetings (max 5)
+const filteredMeetingItems = computed(() =>
+  filteredItems.value
+    .filter(item => item.itemType === 'meeting')
+    .slice(0, 5)
+);
+
+// Filtered files (max 8) - exclude meeting files
 const filteredFileItems = computed(() => 
   filteredItems.value
     .filter(item => item.itemType === 'file')
@@ -158,6 +196,7 @@ const filteredFileItems = computed(() =>
 // Combined list for keyboard navigation
 const filteredFiles = computed(() => [
   ...filteredProjects.value,
+  ...filteredMeetingItems.value,
   ...filteredFileItems.value,
 ]);
 
@@ -199,10 +238,11 @@ async function loadFiles() {
     if (props.projectId) {
       // Project mode - load files from specific project
       const projectFiles = await getProjectFilesForAutocomplete(props.projectId);
-      items.value = projectFiles.map(f => ({
-        ...f,
-        itemType: 'file' as AutocompleteItemType,
-      }));
+      items.value = projectFiles.map(f => {
+        const item: AutocompleteItem = { ...f, itemType: 'file' };
+        if (isMeetingFile(item)) item.itemType = 'meeting';
+        return item;
+      });
     } else {
       // Global mode - load projects AND files from all projects
       const loadedItems: AutocompleteItem[] = [];
@@ -220,13 +260,12 @@ async function loadFiles() {
         });
       }
       
-      // Then add all files
+      // Then add all files, classifying meetings
       const allFiles = await getAllFilesForAutocomplete();
       for (const file of allFiles) {
-        loadedItems.push({
-          ...file,
-          itemType: 'file',
-        });
+        const item: AutocompleteItem = { ...file, itemType: 'file' };
+        if (isMeetingFile(item)) item.itemType = 'meeting';
+        loadedItems.push(item);
       }
       
       items.value = loadedItems;
@@ -241,9 +280,8 @@ function selectItem(item: AutocompleteItem) {
 }
 
 function getItemIcon(item: AutocompleteItem): string {
-  if (item.itemType === 'project') {
-    return folderOutline;
-  }
+  if (item.itemType === 'project') return folderOutline;
+  if (item.itemType === 'meeting') return micOutline;
   
   switch (item.type) {
     case 'md':
@@ -265,9 +303,8 @@ function getItemIcon(item: AutocompleteItem): string {
 }
 
 function getItemIconColor(item: AutocompleteItem): string {
-  if (item.itemType === 'project') {
-    return 'var(--hn-green)';
-  }
+  if (item.itemType === 'project') return 'var(--hn-green)';
+  if (item.itemType === 'meeting') return 'var(--hn-teal)';
   
   switch (item.type) {
     case 'md':
@@ -486,6 +523,11 @@ defineExpose({ refresh });
 
 .autocomplete-item.is-project {
   border-left: 3px solid var(--hn-green);
+  padding-left: 10px;
+}
+
+.autocomplete-item.is-meeting {
+  border-left: 3px solid var(--hn-teal);
   padding-left: 10px;
 }
 

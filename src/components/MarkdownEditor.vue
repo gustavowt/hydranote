@@ -135,6 +135,10 @@
                 <ion-icon :icon="sparklesOutline" slot="start" />
                 <ion-label>Run AI Formatting</ion-label>
               </ion-item>
+              <ion-item v-if="isMeetingTranscript" button @click="handleGenerateMeetingNotes" :detail="false">
+                <ion-icon :icon="clipboardOutline" slot="start" />
+                <ion-label>Generate Meeting Notes</ion-label>
+              </ion-item>
               <ion-item button @click="handleStartRename" :detail="false">
                 <ion-icon :icon="pencilOutline" slot="start" />
                 <ion-label>Rename</ion-label>
@@ -568,6 +572,7 @@ import {
   downloadOutline,
   addOutline,
   keypadOutline,
+  clipboardOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, VersionSource } from '@/types';
 import type { NoteExecutionStep } from '@/services';
@@ -600,6 +605,7 @@ import {
   flushDatabase,
   findFileByPath,
   getFile,
+  chatCompletion,
 } from '@/services';
 import type { DocumentFormat } from '@/types';
 import FormatStudio from '@/components/FormatStudio.vue';
@@ -768,6 +774,13 @@ function stopSplitResize() {
 
 // Actions menu state
 const showActionsMenu = ref(false);
+const generatingMeetingNotes = ref(false);
+
+const MEETING_DIRS = ['zoom-meetings/', 'google-meet/', 'google-calendar/'];
+const isMeetingTranscript = computed(() => {
+  const filePath = props.currentFile?.name?.toLowerCase() || '';
+  return MEETING_DIRS.some(d => filePath.startsWith(d) || filePath.includes('/' + d));
+});
 
 // AI Format Studio state
 const showFormatStudio = ref(false);
@@ -1645,6 +1658,55 @@ async function handleManualSave() {
 function handleOpenFormatStudio() {
   showActionsMenu.value = false;
   showFormatStudio.value = true;
+}
+
+async function handleGenerateMeetingNotes() {
+  showActionsMenu.value = false;
+  if (!content.value.trim() || generatingMeetingNotes.value) return;
+
+  generatingMeetingNotes.value = true;
+  try {
+    const response = await chatCompletion({
+      messages: [
+        {
+          role: 'system',
+          content: `You are a meeting notes assistant. Given a meeting transcript, extract structured meeting notes in Markdown format. Include:
+
+## Meeting Summary
+A 2-3 sentence overview of the meeting.
+
+## Key Decisions
+- List any decisions that were made
+
+## Action Items
+- [ ] Task — Owner (if identifiable)
+
+## Discussion Points
+- Key topics discussed with brief context
+
+## Open Questions
+- Any unresolved questions
+
+Be concise and actionable. Use checkbox syntax for action items. If attendees are identifiable from the transcript, include them.`,
+        },
+        {
+          role: 'user',
+          content: `Generate meeting notes from this transcript:\n\n${content.value}`,
+        },
+      ],
+      temperature: 0.3,
+      maxTokens: 2000,
+    });
+
+    const meetingNotes = response.content;
+    const separator = '\n\n---\n\n';
+    content.value = meetingNotes + separator + '## Original Transcript\n\n' + content.value;
+    emit('content-change', content.value);
+  } catch {
+    // Silently fail
+  } finally {
+    generatingMeetingNotes.value = false;
+  }
 }
 
 // ============================================

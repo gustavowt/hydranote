@@ -1626,6 +1626,13 @@ function renderInputReferences(content: string): string {
     return createMarker(html);
   });
   
+  // Handle @meeting:path references - show as meeting pill
+  result = result.replace(/@meeting:(.+?\.(?:md|pdf|docx|doc|txt))(?=\s|$)/gi, (match, filePath) => {
+    const fileName = getFileName(filePath);
+    const html = `<span class="input-pill meeting-pill" contenteditable="false" data-reference="${escapeHtml(match)}"><span class="pill-icon">🎙️</span><span class="pill-text">${escapeHtml(fileName)}</span></span>`;
+    return createMarker(html);
+  });
+
   // Handle @file:path references - show only filename
   // Match until file extension (handles paths with spaces)
   result = result.replace(/@file:(.+?\.(?:md|pdf|docx|doc|txt|png|jpg|jpeg|webp|gif))(?=\s|$)/gi, (match, filePath) => {
@@ -1676,7 +1683,7 @@ function updateAutocompletePosition() {
   autocompleteAnchorRect.value = rect;
 }
 
-function handleAutocompleteSelect(item: { id: string; name: string; path: string; type: SupportedFileType | 'project'; itemType?: 'file' | 'project'; projectName?: string }) {
+function handleAutocompleteSelect(item: { id: string; name: string; path: string; type: SupportedFileType | 'project'; itemType?: 'file' | 'project' | 'meeting'; projectName?: string }) {
   // Replace from the @ symbol to current position with the reference
   const start = autocompleteStartIndex.value;
   const before = inputMessage.value.substring(0, start);
@@ -1686,6 +1693,11 @@ function handleAutocompleteSelect(item: { id: string; name: string; path: string
   if (item.itemType === 'project' || item.type === 'project') {
     // Project reference
     reference = `@project:${item.name} `;
+  } else if (item.itemType === 'meeting') {
+    // Meeting reference - use @meeting: prefix
+    reference = item.projectName
+      ? `@meeting:${item.projectName}/${item.path} `
+      : `@meeting:${item.path} `;
   } else {
     // File reference - include project name in global mode
     reference = item.projectName 
@@ -2184,28 +2196,29 @@ function renderMarkdown(content: string): string {
 // ============================================
 
 interface ParsedReference {
-  type: 'file' | 'project' | 'selection';
+  type: 'file' | 'project' | 'selection' | 'meeting';
   fullMatch: string;
   filePath?: string;
   projectName?: string;
   startLine?: number;
   endLine?: number;
   codeContent?: string;
-  id?: string; // Unique ID for selection cards (for expand/collapse state)
+  id?: string;
 }
 
 /**
- * Parse user message for @file:, @project:, and @selection: references
+ * Parse user message for @file:, @project:, @meeting:, and @selection: references
  */
 function parseUserMessageReferences(content: string): { parts: Array<string | ParsedReference>; references: ParsedReference[] } {
   const references: ParsedReference[] = [];
   const parts: Array<string | ParsedReference> = [];
   
   // Combined pattern to match all reference types in order
-  // Pattern 1: @selection:filepath:startLine-endLine followed by code block (filepath can have spaces, captured until :digits)
-  // Pattern 2: @file:path/to/file.md (match until file extension, handles spaces in paths)
-  // Pattern 3: @project:ProjectName (match until double space, newline, or another @ reference)
-  const combinedPattern = /(@selection:(.+?):(\d+)-(\d+)\s*\n```(?:\w*\n)?([\s\S]*?)```)|(@file:(.+?\.(?:md|pdf|docx|doc|txt|png|jpg|jpeg|webp|gif)))(?=\s|$|@)|(@project:(.+?))(?=\s{2}|\n|$|@)/gi;
+  // Pattern 1: @selection:filepath:startLine-endLine followed by code block
+  // Pattern 2: @meeting:path/to/file.md (meeting transcript reference)
+  // Pattern 3: @file:path/to/file.md (match until file extension, handles spaces in paths)
+  // Pattern 4: @project:ProjectName (match until double space, newline, or another @ reference)
+  const combinedPattern = /(@selection:(.+?):(\d+)-(\d+)\s*\n```(?:\w*\n)?([\s\S]*?)```)|(@meeting:(.+?\.(?:md|pdf|docx|doc|txt)))(?=\s|$|@)|(@file:(.+?\.(?:md|pdf|docx|doc|txt|png|jpg|jpeg|webp|gif)))(?=\s|$|@)|(@project:(.+?))(?=\s{2}|\n|$|@)/gi;
   
   let lastIndex = 0;
   let match;
@@ -2234,20 +2247,29 @@ function parseUserMessageReferences(content: string): { parts: Array<string | Pa
       references.push(ref);
       parts.push(ref);
     } else if (match[6]) {
-      // File reference
+      // Meeting reference — treat as file reference for LLM processing
       const ref: ParsedReference = {
-        type: 'file',
+        type: 'meeting',
         fullMatch: match[6],
         filePath: match[7],
       };
       references.push(ref);
       parts.push(ref);
     } else if (match[8]) {
+      // File reference
+      const ref: ParsedReference = {
+        type: 'file',
+        fullMatch: match[8],
+        filePath: match[9],
+      };
+      references.push(ref);
+      parts.push(ref);
+    } else if (match[10]) {
       // Project reference
       const ref: ParsedReference = {
         type: 'project',
-        fullMatch: match[8],
-        projectName: match[9],
+        fullMatch: match[10],
+        projectName: match[11],
       };
       references.push(ref);
       parts.push(ref);
@@ -2331,6 +2353,13 @@ function renderUserMessage(content: string): string {
     if (typeof part === 'string') {
       // Plain text - escape and preserve whitespace
       html += `<span class="user-text">${escapeHtml(part)}</span>`;
+    } else if (part.type === 'meeting') {
+      // Meeting pill
+      const fileName = getFileName(part.filePath || '');
+      html += `<span class="reference-pill meeting-pill" title="${escapeHtml(part.filePath || '')}">
+        <span class="pill-icon">🎙️</span>
+        <span class="pill-label">${escapeHtml(fileName)}</span>
+      </span>`;
     } else if (part.type === 'file') {
       // File pill
       const fileName = getFileName(part.filePath || '');
@@ -3205,6 +3234,16 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 .rich-input :deep(.input-pill.project-pill:hover) {
   background: rgba(0, 200, 83, 0.1);
   border-color: rgba(0, 200, 83, 0.8);
+}
+
+.rich-input :deep(.input-pill.meeting-pill) {
+  color: #4dd0e1;
+  border-color: rgba(0, 188, 212, 0.6);
+}
+
+.rich-input :deep(.input-pill.meeting-pill:hover) {
+  background: rgba(0, 188, 212, 0.1);
+  border-color: rgba(0, 188, 212, 0.8);
 }
 
 /* Selection pill in input - outline style */
@@ -4160,6 +4199,17 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection });
 .project-pill:hover {
   background: rgba(0, 200, 83, 0.25);
   border-color: rgba(0, 200, 83, 0.4);
+}
+
+.meeting-pill {
+  background: rgba(0, 188, 212, 0.15);
+  color: #4dd0e1;
+  border: 1px solid rgba(0, 188, 212, 0.25);
+}
+
+.meeting-pill:hover {
+  background: rgba(0, 188, 212, 0.25);
+  border-color: rgba(0, 188, 212, 0.4);
 }
 
 /* Selection Card */
