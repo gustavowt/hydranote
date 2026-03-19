@@ -682,6 +682,7 @@ src/
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
 │       ├── GoogleMeetSettings.vue   # Google Meet integration configuration panel
+│       ├── GoogleCalendarSettings.vue # Google Calendar integration configuration panel
 │       ├── IntegrationsStore.vue     # Store-like integrations browser
 │       ├── StorageSettings.vue
 │       └── ZoomSettings.vue         # Zoom integration configuration panel
@@ -692,6 +693,8 @@ src/
 │   ├── integrationService.ts        # Integration settings (localStorage)
 │   ├── googleMeetService.ts         # Google Meet API client (Service Account JWT)
 │   ├── googleMeetSyncService.ts     # Google Meet auto-sync orchestrator
+│   ├── googleCalendarService.ts     # Google Calendar API client (Service Account JWT)
+│   ├── googleCalendarSyncService.ts # Google Calendar auto-sync orchestrator
 │   ├── zoomService.ts               # Zoom API client (Server-to-Server OAuth)
 │   ├── zoomSyncService.ts           # Zoom auto-sync orchestrator
 │   ├── vttParser.ts                 # VTT transcript to Markdown parser
@@ -787,7 +790,7 @@ Uses **Google Workspace Service Account** with domain-wide delegation. Users cre
 Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to `https://oauth2.googleapis.com/token` with `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`. Tokens auto-refresh ~5 min before expiry.
 
 **Required Scopes:**
-- `https://www.googleapis.com/auth/meetings.space.readonly` — list conference records
+- `https://www.googleapis.com/auth/meetings.space` — list and manage conference records (write-enabled for future chat tool use)
 - `https://www.googleapis.com/auth/drive.meet.readonly` — download transcript docs from Drive
 
 ### Auto-Sync Flow
@@ -812,3 +815,41 @@ Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to 
 | Key | Contents |
 |-----|----------|
 | `hydranote_google_meet_settings` | Service Account JSON, impersonated email, sync config, cached token, synced conference names |
+
+---
+
+## Google Calendar Integration
+
+Auto-syncs calendar events from Google Calendar via the Calendar API into HydraNote projects as structured Markdown notes. Supports both past and upcoming events with configurable date ranges and selectable calendars.
+
+### Authentication
+
+Uses **Google Workspace Service Account** with domain-wide delegation (same pattern as Google Meet). Users create a GCP project, enable the **Google Calendar API**, create a service account, and grant it domain-wide delegation. They paste the downloaded JSON key file and an impersonated user email into Settings > Integrations > Google Calendar.
+
+Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to `https://oauth2.googleapis.com/token` with `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`. Tokens auto-refresh ~5 min before expiry.
+
+**Required Scope:**
+- `https://www.googleapis.com/auth/calendar` — full read/write access to calendars and events (write-enabled for future chat tool use)
+
+### Auto-Sync Flow
+
+1. `googleCalendarSyncService` polls at a configurable interval (default 5 min)
+2. Builds a date range from the configured past/future days (default: 7 days each direction)
+3. For each selected calendar (or primary if none selected), calls `GET /calendar/v3/calendars/{id}/events`
+4. Filters out already-synced event IDs and cancelled events
+5. Formats each event into Markdown (title, date/time, location, attendees, description, Meet link)
+6. Saves as `google-calendar/{date}-{event-title}.md` in the configured target project via `projectService.createFile()`
+7. Tracks synced event IDs in localStorage to prevent duplicates
+
+### Services
+
+| Service | Purpose |
+|---------|---------|
+| `googleCalendarService.ts` | Service Account JWT auth, Google Calendar REST API calls (via `web:fetch` IPC) |
+| `googleCalendarSyncService.ts` | Polling orchestrator, event emitter for UI updates |
+
+### localStorage Keys
+
+| Key | Contents |
+|-----|----------|
+| `hydranote_google_calendar_settings` | Service Account JSON, impersonated email, sync config, selected calendars, cached token, synced event IDs |
