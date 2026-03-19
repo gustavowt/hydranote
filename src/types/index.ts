@@ -2318,3 +2318,117 @@ export interface GoogleMeetSyncEvent {
   error?: string;
   totalSynced?: number;
 }
+
+// ============================================
+// Google Calendar Integration Types
+// ============================================
+
+export interface GoogleCalendarCredentials {
+  serviceAccountJson: string;
+  impersonatedUserEmail: string;
+}
+
+export interface GoogleCalendarSyncSettings {
+  syncIntervalMinutes: number;
+  targetProjectId?: string;
+  lastSyncTime?: string;
+  syncedEventIds: string[];
+  selectedCalendarIds: string[];
+  pastDays: number;
+  futureDays: number;
+}
+
+export interface GoogleCalendarTokenData {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface GoogleCalendarSettings {
+  credentials: GoogleCalendarCredentials;
+  syncSettings: GoogleCalendarSyncSettings;
+  token?: GoogleCalendarTokenData;
+}
+
+export const DEFAULT_GOOGLE_CALENDAR_SETTINGS: GoogleCalendarSettings = {
+  credentials: {
+    serviceAccountJson: '',
+    impersonatedUserEmail: '',
+  },
+  syncSettings: {
+    syncIntervalMinutes: 5,
+    syncedEventIds: [],
+    selectedCalendarIds: [],
+    pastDays: 7,
+    futureDays: 7,
+  },
+};
+
+export interface GoogleCalendarEventDateTime {
+  dateTime?: string;
+  date?: string;
+  timeZone?: string;
+}
+
+export interface GoogleCalendarAttendee {
+  email: string;
+  displayName?: string;
+  responseStatus?: 'needsAction' | 'declined' | 'tentative' | 'accepted';
+  organizer?: boolean;
+  self?: boolean;
+}
+
+export interface GoogleCalendarEvent {
+  id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  start: GoogleCalendarEventDateTime;
+  end: GoogleCalendarEventDateTime;
+  attendees?: GoogleCalendarAttendee[];
+  hangoutLink?: string;
+  htmlLink?: string;
+  status?: 'confirmed' | 'tentative' | 'cancelled';
+  organizer?: { email?: string; displayName?: string };
+  creator?: { email?: string; displayName?: string };
+  recurrence?: string[];
+  recurringEventId?: string;
+}
+
+export interface GoogleCalendarEventsResponse {
+  items?: GoogleCalendarEvent[];
+  nextPageToken?: string;
+  summary?: string;
+  timeZone?: string;
+}
+
+export interface GoogleCalendarListEntry {
+  id: string;
+  summary: string;
+  description?: string;
+  primary?: boolean;
+  backgroundColor?: string;
+  foregroundColor?: string;
+  accessRole?: string;
+  selected?: boolean;
+}
+
+export interface GoogleCalendarListResponse {
+  items?: GoogleCalendarListEntry[];
+  nextPageToken?: string;
+}
+
+export type GoogleCalendarSyncEventType =
+  | 'sync_started'
+  | 'event_found'
+  | 'event_saved'
+  | 'sync_completed'
+  | 'sync_error';
+
+export interface GoogleCalendarSyncEvent {
+  type: GoogleCalendarSyncEventType;
+  message: string;
+  eventTitle?: string;
+  eventId?: string;
+  error?: string;
+  totalSynced?: number;
+}

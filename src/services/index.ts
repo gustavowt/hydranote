@@ -436,6 +436,31 @@ export {
   isSyncRunning as isGoogleMeetSyncRunning,
 } from './googleMeetSyncService';
 
+// Google Calendar Service
+export {
+  loadGoogleCalendarSettings,
+  saveGoogleCalendarSettings,
+  getAccessToken as getGoogleCalendarAccessToken,
+  testConnection as testGoogleCalendarConnection,
+  listCalendars,
+  listEvents as listCalendarEvents,
+  filterNewEvents,
+  formatEventToMarkdown,
+  getEventDatePrefix,
+  sanitizeFileName as sanitizeCalendarFileName,
+} from './googleCalendarService';
+
+// Google Calendar Sync Service
+export {
+  startSync as startGoogleCalendarSync,
+  stopSync as stopGoogleCalendarSync,
+  restartSync as restartGoogleCalendarSync,
+  syncNow as googleCalendarSyncNow,
+  onSyncEvent as onGoogleCalendarSyncEvent,
+  isSyncing as isGoogleCalendarSyncing,
+  isSyncRunning as isGoogleCalendarSyncRunning,
+} from './googleCalendarSyncService';
+
 // Update Service (GitHub version check)
 export {
   currentVersion,

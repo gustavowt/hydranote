@@ -560,6 +560,13 @@
               @activated="handleGoogleMeetActivated"
               @deactivated="handleGoogleMeetDeactivated"
             />
+
+            <GoogleCalendarSettings
+              v-if="showGoogleCalendarSettings"
+              @close="showGoogleCalendarSettings = false"
+              @activated="handleGoogleCalendarActivated"
+              @deactivated="handleGoogleCalendarDeactivated"
+            />
           </section>
 
           <!-- Storage Section -->
@@ -886,7 +893,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleMeetSettings } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleMeetSettings, GoogleCalendarSettings } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -1010,6 +1017,7 @@ const webSearchStatus = ref<{
 const integrationSettings = ref<IntegrationSettings>({ ...DEFAULT_INTEGRATION_SETTINGS });
 const showZoomSettings = ref(false);
 const showGoogleMeetSettings = ref(false);
+const showGoogleCalendarSettings = ref(false);
 
 // Web search provider configurations
 const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
@@ -1430,6 +1438,8 @@ function handleIntegrationConfigure(id: IntegrationId) {
     showZoomSettings.value = true;
   } else if (id === 'google_meet') {
     showGoogleMeetSettings.value = true;
+  } else if (id === 'google_calendar') {
+    showGoogleCalendarSettings.value = true;
   }
 }
 
@@ -1465,6 +1475,23 @@ function handleGoogleMeetDeactivated() {
   };
   saveIntegrationSettings(integrationSettings.value);
   showGoogleMeetSettings.value = false;
+}
+
+function handleGoogleCalendarActivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    google_calendar: { enabled: true, connectedAt: new Date().toISOString() },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+}
+
+function handleGoogleCalendarDeactivated() {
+  integrationSettings.value = {
+    ...integrationSettings.value,
+    google_calendar: { enabled: false, connectedAt: undefined },
+  };
+  saveIntegrationSettings(integrationSettings.value);
+  showGoogleCalendarSettings.value = false;
 }
 
 // Web Search handlers

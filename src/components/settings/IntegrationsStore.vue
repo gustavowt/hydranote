@@ -99,7 +99,7 @@ import {
   GoogleCalendarIcon,
 } from '@/icons';
 
-const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom', 'google_meet'];
+const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom', 'google_meet', 'google_calendar'];
 
 const props = defineProps<{
   modelValue: IntegrationSettings;
