@@ -202,6 +202,7 @@ import {
   getAllProjects,
   createProject,
   getProject,
+  getFile,
   get_project_files,
   updateFile,
   renameFile,
@@ -383,9 +384,7 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
   selectedFileId.value = file.id;
   currentProject.value = await getProject(projectId) || null;
   
-  // Load file content
-  const files = await get_project_files(projectId);
-  const projectFile = files.find(f => f.id === file.id);
+  const projectFile = await getFile(file.id);
   
   if (projectFile) {
     currentFile.value = projectFile;
@@ -394,10 +393,8 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
     // For PDF files: prefer systemFilePath, fallback to binaryData for legacy files
     if (projectFile.type === 'pdf') {
       if (projectFile.systemFilePath) {
-        // New approach: load from file system (handled by PDFViewer)
         pdfData.value = null;
       } else if (projectFile.binaryData) {
-        // Legacy: load from stored binary data
         pdfData.value = base64ToArrayBuffer(projectFile.binaryData);
       } else {
         pdfData.value = null;
@@ -407,7 +404,6 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
     }
   }
   
-  // Update chat sidebar project
   chatSidebarRef.value?.selectProject(projectId);
 }
 

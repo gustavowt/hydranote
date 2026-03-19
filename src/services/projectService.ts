@@ -379,6 +379,32 @@ export async function get_project_files(projectId: string): Promise<ProjectFile[
 }
 
 /**
+ * Get file metadata only (no content, binary data, or HTML) for tree building.
+ * Much faster than get_project_files for large projects.
+ */
+export async function get_project_files_metadata(projectId: string): Promise<ProjectFile[]> {
+  await ensureInitialized();
+  
+  const conn = getConnection();
+  const result = await conn.query(`
+    SELECT id, project_id, name, type, size, status, system_file_path, created_at, updated_at
+    FROM files WHERE project_id = '${projectId}' ORDER BY created_at DESC
+  `);
+  
+  return result.toArray().map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    projectId: row.project_id as string,
+    name: row.name as string,
+    type: row.type as ProjectFile['type'],
+    size: row.size as number,
+    status: row.status as ProjectFile['status'],
+    systemFilePath: row.system_file_path as string | undefined,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
+  }));
+}
+
+/**
  * Get all chunks belonging to a file
  * Roadmap: get_file_chunks(file_id)
  */
@@ -1094,7 +1120,7 @@ function countDirectories(nodes: FileTreeNode[]): number {
 export async function getProjectFileTree(projectId: string): Promise<ProjectFileTree> {
   await ensureInitialized();
   
-  const files = await get_project_files(projectId);
+  const files = await get_project_files_metadata(projectId);
   const nodes = buildFileTree(files);
   
   return {

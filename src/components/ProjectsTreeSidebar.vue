@@ -837,11 +837,11 @@ function scrollFileIntoView(fileId: string) {
 
 // Expose refresh method (only refreshes file trees, projects come from parent)
 async function refresh() {
-  // Reload file trees for expanded projects
-  for (const projectId of expandedProjects.value) {
+  const expandedIds = Array.from(expandedProjects.value);
+  for (const projectId of expandedIds) {
     delete projectFileTrees.value[projectId];
-    await loadProjectFiles(projectId);
   }
+  await Promise.all(expandedIds.map(projectId => loadProjectFiles(projectId)));
 }
 
 defineExpose({ refresh, revealFile });
