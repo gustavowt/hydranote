@@ -22,7 +22,7 @@ const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/meetings.space.readonly',
+  'https://www.googleapis.com/auth/meetings.space',
   'https://www.googleapis.com/auth/drive.meet.readonly',
 ].join(' ');
 

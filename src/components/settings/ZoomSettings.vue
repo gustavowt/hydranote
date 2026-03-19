@@ -127,6 +127,29 @@
           <option value="">Select a project...</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
+        <div v-if="!creatingProject" class="inline-create-trigger">
+          <button class="btn-inline-create" @click="creatingProject = true" type="button">
+            <ion-icon :icon="addCircleOutline" />
+            <span>Create new project</span>
+          </button>
+        </div>
+        <div v-else class="inline-create-form">
+          <input
+            v-model="newProjectName"
+            type="text"
+            class="text-input"
+            placeholder="New project name"
+            @keydown.enter="handleCreateProject"
+            ref="newProjectInput"
+          />
+          <button class="btn btn-primary btn-sm" @click="handleCreateProject" :disabled="!newProjectName.trim() || creatingProjectLoading">
+            <ion-spinner v-if="creatingProjectLoading" name="crescent" />
+            <span v-else>Create</span>
+          </button>
+          <button class="btn btn-secondary btn-sm" @click="creatingProject = false; newProjectName = ''" :disabled="creatingProjectLoading">
+            Cancel
+          </button>
+        </div>
         <span class="field-hint">Transcripts will be saved in a <code>zoom-meetings/</code> directory inside this project.</span>
       </div>
 
@@ -238,6 +261,7 @@ import {
   unlinkOutline,
   saveOutline,
   informationCircleOutline,
+  addCircleOutline,
 } from 'ionicons/icons';
 import type { ZoomSettings, ZoomSyncEvent, Project } from '@/types';
 import { DEFAULT_ZOOM_SETTINGS } from '@/types';
@@ -256,7 +280,7 @@ import {
   isSyncing,
   isSyncRunning,
 } from '@/services/zoomSyncService';
-import { getAllProjects } from '@/services/projectService';
+import { getAllProjects, createProject } from '@/services/projectService';
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -273,6 +297,9 @@ const testResult = ref<{ success: boolean; message: string } | null>(null);
 const syncLog = ref<ZoomSyncEvent[]>([]);
 const currentlySyncing = ref(false);
 const syncRunning = ref(false);
+const creatingProject = ref(false);
+const newProjectName = ref('');
+const creatingProjectLoading = ref(false);
 
 const hasCredentials = computed(() => {
   const c = localSettings.value.credentials;
@@ -324,6 +351,37 @@ onUnmounted(() => {
 function openExternal(url: string) {
   if (window.electronAPI?.shell?.openExternal) {
     window.electronAPI.shell.openExternal(url);
+  }
+}
+
+async function handleCreateProject() {
+  const name = newProjectName.value.trim();
+  if (!name) return;
+  creatingProjectLoading.value = true;
+  try {
+    const project = await createProject(name);
+    projects.value.push(project);
+    localSettings.value.syncSettings.targetProjectId = project.id;
+    newProjectName.value = '';
+    creatingProject.value = false;
+    const toast = await toastController.create({
+      message: `Project "${project.name}" created`,
+      duration: 2000,
+      color: 'success',
+      position: 'top',
+    });
+    await toast.present();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const toast = await toastController.create({
+      message: `Failed to create project: ${msg}`,
+      duration: 3000,
+      color: 'danger',
+      position: 'top',
+    });
+    await toast.present();
+  } finally {
+    creatingProjectLoading.value = false;
   }
 }
 
@@ -651,6 +709,52 @@ async function handleSyncNow() {
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.9em;
+}
+
+/* Inline Create Project */
+.inline-create-trigger {
+  margin-top: 8px;
+}
+
+.btn-inline-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: var(--hn-purple-light);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: 6px;
+  transition: opacity 0.15s;
+}
+
+.btn-inline-create:hover {
+  opacity: 0.8;
+}
+
+.btn-inline-create ion-icon {
+  font-size: 1rem;
+}
+
+.inline-create-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inline-create-form .text-input {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.btn-sm {
+  padding: 7px 14px !important;
+  font-size: 0.82rem !important;
 }
 
 /* Secret Input */
