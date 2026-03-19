@@ -14,6 +14,8 @@ import type {
 } from '../types';
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
 import { getProject, get_project_files, getProjectStats, searchProject, getAllProjects, searchAllProjects } from './projectService';
+import { getUpcomingEventsForContext } from './googleCalendarService';
+import { isIntegrationEnabled } from './integrationService';
 import {
   createChatSession as dbCreateSession,
   getChatSession as dbGetSession,
@@ -47,6 +49,22 @@ export async function buildSystemPrompt(projectId: string): Promise<string> {
 
   const fileList = files.map(f => `  - ${f.name} (${f.type}, ${formatSize(f.size)}, id: ${f.id})`).join('\n');
 
+  // Build calendar context if integration is enabled
+  let calendarSection = '';
+  if (isIntegrationEnabled('google_calendar')) {
+    try {
+      const calendarContext = await getUpcomingEventsForContext(24);
+      if (calendarContext) {
+        calendarSection = `\n\n## Today's Calendar
+${calendarContext}`;
+      }
+    } catch {
+      // Calendar context is optional
+    }
+  }
+
+  const integrationToolsSection = buildIntegrationToolsPrompt();
+
   return `You are HydraNote, an AI assistant specialized in document analysis and interaction.
 
 ## Project Context
@@ -57,7 +75,7 @@ ${project.description ? `**Description:** ${project.description}` : ''}
 
 ### Project Files
 ${fileList || 'No files uploaded yet.'}
-
+${calendarSection}
 ## Tool Execution System
 
 You have access to tools that you MUST use when performing actions. Tools are executed by including a \`tool_call\` code block in your response.
@@ -117,7 +135,7 @@ Operations: "replace", "insert_before", "insert_after"
 {"tool": "generateImage", "params": {"prompt": "detailed image description", "size": "1024x1024"}}
 \`\`\`
 Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
-
+${integrationToolsSection}
 ## When to Use Tools
 
 | User Request | Tool to Use |
@@ -129,6 +147,10 @@ Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
 | Update, edit, modify, change a file | UPDATE FILE |
 | Search web, current news, external info | WEB RESEARCH |
 | Generate, create, draw, make an image | GENERATE IMAGE |
+| Calendar, schedule, meetings today, what's next | LIST EVENTS |
+| Schedule, create meeting/event | CREATE EVENT |
+| Meeting notes, transcript, what was discussed | SEARCH TRANSCRIPTS |
+| Prepare for meeting, meeting prep | PREPARE MEETING |
 
 ## Response Flow
 
@@ -189,6 +211,22 @@ When the user refers to "the project", "add a file", or similar without specifyi
 `
     : '';
 
+  // Build calendar context if integration is enabled
+  let calendarSection = '';
+  if (isIntegrationEnabled('google_calendar')) {
+    try {
+      const calendarContext = await getUpcomingEventsForContext(24);
+      if (calendarContext) {
+        calendarSection = `\n\n## Today's Calendar
+${calendarContext}`;
+      }
+    } catch {
+      // Calendar context is optional
+    }
+  }
+
+  const integrationToolsSection = buildIntegrationToolsPrompt();
+
   return `You are HydraNote, an AI assistant specialized in document analysis and interaction.
 
 ## Global Mode
@@ -200,7 +238,7 @@ ${workingContextSection}
 **Total Chunks Indexed:** ${totalChunks}
 
 ${projectSections.join('\n\n')}
-
+${calendarSection}
 ## Tool Execution System
 
 You have access to tools that you MUST use when performing actions. Tools are executed by including a \`tool_call\` code block in your response.
@@ -279,7 +317,7 @@ AI generates title if not provided and decides directory for all formats. For MD
 {"tool": "generateImage", "params": {"prompt": "detailed image description", "size": "1024x1024"}}
 \`\`\`
 Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
-
+${integrationToolsSection}
 ## When to Use Tools
 
 | User Request | Tool to Use |
@@ -295,6 +333,10 @@ Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
 | Delete a project | DELETE PROJECT |
 | Web search, external info | WEB RESEARCH |
 | Generate, create, draw, make an image | GENERATE IMAGE |
+| Calendar, schedule, meetings today, what's next | LIST EVENTS |
+| Schedule, create meeting/event | CREATE EVENT |
+| Meeting notes, transcript, what was discussed | SEARCH TRANSCRIPTS |
+| Prepare for meeting, meeting prep | PREPARE MEETING |
 
 ## Response Flow
 
@@ -313,6 +355,46 @@ Sizes: "1024x1024" (default), "1792x1024" (landscape), "1024x1792" (portrait)
 - If a tool fails, explain the error and suggest alternatives
 - For multi-step tasks, you can chain multiple tools across responses
 - **Image reuse**: If an image was already generated earlier in the conversation, do NOT generate it again. Use the existing image file path to write/create files referencing it. Only call generateImage for NEW image requests.`;
+}
+
+/**
+ * Build integration-specific tool documentation for system prompts.
+ * Only includes tools for enabled integrations.
+ */
+function buildIntegrationToolsPrompt(): string {
+  const sections: string[] = [];
+
+  const calendarEnabled = isIntegrationEnabled('google_calendar');
+  const meetingsEnabled = isIntegrationEnabled('google_meet') || isIntegrationEnabled('zoom');
+
+  if (calendarEnabled) {
+    sections.push(`
+**LIST EVENTS** - List upcoming calendar events
+\`\`\`tool_call
+{"tool": "listEvents", "params": {"days": 7, "pastDays": 0}}
+\`\`\`
+
+**CREATE EVENT** - Create a Google Calendar event
+\`\`\`tool_call
+{"tool": "createEvent", "params": {"title": "Meeting", "startTime": "2025-01-15T14:00:00", "endTime": "2025-01-15T15:00:00", "attendees": "user@example.com"}}
+\`\`\``);
+  }
+
+  if (meetingsEnabled || calendarEnabled) {
+    sections.push(`
+**SEARCH TRANSCRIPTS** - Search meeting transcripts and notes
+\`\`\`tool_call
+{"tool": "searchTranscripts", "params": {"query": "what was discussed about X"}}
+\`\`\`
+
+**PREPARE MEETING** - Prepare for an upcoming meeting with context
+\`\`\`tool_call
+{"tool": "prepareMeeting", "params": {"meeting": "optional meeting topic"}}
+\`\`\``);
+  }
+
+  if (sections.length === 0) return '';
+  return '\n### Integration Tools\n' + sections.join('\n');
 }
 
 /**

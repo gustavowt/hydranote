@@ -314,7 +314,7 @@ export interface WorkingContext {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch' | 'generateImage';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch' | 'generateImage' | 'listEvents' | 'createEvent' | 'searchTranscripts' | 'prepareMeeting';
 
 /**
  * Tool definition for system prompt
@@ -599,7 +599,15 @@ export interface ToolResult {
     chunkCount?: number;
     truncated?: boolean;
     downloadUrl?: string;
-    wasExisting?: boolean; // For createProject upsert - true if project already existed
+    wasExisting?: boolean;
+    eventId?: string;
+    eventTitle?: string;
+    eventCount?: number;
+    resultCount?: number;
+    meetingTitle?: string;
+    hasCalendarEvent?: boolean;
+    relatedNotesCount?: number;
+    htmlLink?: string;
   };
 }
 
@@ -1479,6 +1487,66 @@ export interface WebResearchToolParams {
  * Progress callback for web research status updates
  */
 export type WebResearchProgressCallback = (status: string) => void;
+
+// ============================================
+// Integration Tool Types
+// ============================================
+
+/**
+ * Parameters for the listEvents tool
+ */
+export interface ListEventsToolParams {
+  /** Number of days to look ahead (default: 7) */
+  days?: number;
+  /** Number of days to look back (default: 0) */
+  pastDays?: number;
+  /** Calendar ID to query (default: primary) */
+  calendarId?: string;
+}
+
+/**
+ * Parameters for the createEvent tool
+ */
+export interface CreateEventToolParams {
+  /** Event title/summary */
+  title: string;
+  /** Start date/time ISO string or natural language */
+  startTime: string;
+  /** End date/time ISO string (optional, defaults to 1 hour after start) */
+  endTime?: string;
+  /** Whether this is an all-day event */
+  allDay?: boolean;
+  /** Event description */
+  description?: string;
+  /** Event location */
+  location?: string;
+  /** Comma-separated attendee emails */
+  attendees?: string;
+  /** Calendar ID (default: primary) */
+  calendarId?: string;
+}
+
+/**
+ * Parameters for the searchTranscripts tool
+ */
+export interface SearchTranscriptsToolParams {
+  /** Search query */
+  query: string;
+  /** Project to search in (optional, searches all if not specified) */
+  project?: string;
+  /** Maximum results (default: 5) */
+  maxResults?: number;
+}
+
+/**
+ * Parameters for the prepareMeeting tool
+ */
+export interface PrepareMeetingToolParams {
+  /** Meeting title or topic to prepare for (optional, uses next upcoming if not specified) */
+  meeting?: string;
+  /** Project to search for related notes (optional) */
+  project?: string;
+}
 
 export interface WebResearchOptions {
   /** Maximum URLs to fetch (default: 5) */

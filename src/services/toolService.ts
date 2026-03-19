@@ -26,6 +26,11 @@ import type {
   WebResearchToolParams,
   WorkingContext,
   SelectionContext,
+  ListEventsToolParams,
+  CreateEventToolParams,
+  SearchTranscriptsToolParams,
+  PrepareMeetingToolParams,
+  GoogleCalendarEvent,
 } from "../types";
 import { DEFAULT_PROGRESSIVE_READ_CONFIG } from "../types";
 import {
@@ -58,6 +63,14 @@ import {
 } from "./noteService";
 import { webResearch, formatWebResearchResults, isWebSearchConfigured } from "./webSearchService";
 import { generateImage as generateImageAPI, isImageGenerationConfigured } from "./imageGenerationService";
+import {
+  listEvents as listCalendarEvents,
+  createEvent as createCalendarEvent,
+  getUpcomingEventsForContext,
+  loadGoogleCalendarSettings,
+  listCalendars,
+} from "./googleCalendarService";
+import { isIntegrationEnabled } from "./integrationService";
 
 // ============================================
 // Execution Log Types
@@ -2007,6 +2020,416 @@ export async function applyFileUpdate(
 }
 
 // ============================================
+// Integration Tools Implementation
+// ============================================
+
+/**
+ * Execute the listEvents tool - fetch calendar events from Google Calendar
+ */
+export async function executeListEventsTool(
+  params: ListEventsToolParams,
+): Promise<ToolResult> {
+  try {
+    if (!isIntegrationEnabled('google_calendar')) {
+      return {
+        success: false,
+        tool: 'listEvents',
+        error: 'Google Calendar integration is not enabled. Enable it in Settings > Integrations.',
+      };
+    }
+
+    const settings = loadGoogleCalendarSettings();
+    if (!settings.credentials.serviceAccountJson || !settings.credentials.impersonatedUserEmail) {
+      return {
+        success: false,
+        tool: 'listEvents',
+        error: 'Google Calendar credentials are not configured. Set them up in Settings > Integrations > Google Calendar.',
+      };
+    }
+
+    const futureDays = params.days ?? 7;
+    const pastDays = params.pastDays ?? 0;
+    const now = new Date();
+    const timeMin = new Date(now.getTime() - pastDays * 24 * 60 * 60 * 1000).toISOString();
+    const timeMax = new Date(now.getTime() + futureDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const calendarIds = params.calendarId
+      ? [params.calendarId]
+      : settings.syncSettings.selectedCalendarIds.length > 0
+        ? settings.syncSettings.selectedCalendarIds
+        : ['primary'];
+
+    const allEvents: GoogleCalendarEvent[] = [];
+    for (const calId of calendarIds) {
+      const events = await listCalendarEvents(calId, timeMin, timeMax, settings);
+      allEvents.push(...events);
+    }
+
+    const activeEvents = allEvents
+      .filter(e => e.status !== 'cancelled' && e.summary?.trim())
+      .sort((a, b) => {
+        const aTime = a.start.dateTime || a.start.date || '';
+        const bTime = b.start.dateTime || b.start.date || '';
+        return aTime.localeCompare(bTime);
+      });
+
+    if (activeEvents.length === 0) {
+      const rangeDesc = pastDays > 0
+        ? `between ${pastDays} days ago and ${futureDays} days from now`
+        : `in the next ${futureDays} day(s)`;
+      return {
+        success: true,
+        tool: 'listEvents',
+        data: `No calendar events found ${rangeDesc}.`,
+        metadata: { eventCount: 0 },
+      };
+    }
+
+    const formatted = activeEvents.map(e => {
+      const start = e.start.dateTime
+        ? new Date(e.start.dateTime).toLocaleString()
+        : e.start.date || 'Unknown';
+      const end = e.end.dateTime
+        ? new Date(e.end.dateTime).toLocaleString()
+        : e.end.date || '';
+      const parts = [`**${e.summary}**`, `  Start: ${start}`];
+      if (end) parts.push(`  End: ${end}`);
+      if (e.location) parts.push(`  Location: ${e.location}`);
+      if (e.attendees && e.attendees.length > 0) {
+        const names = e.attendees.map(a => a.displayName || a.email).join(', ');
+        parts.push(`  Attendees: ${names}`);
+      }
+      if (e.hangoutLink) parts.push(`  Meet: ${e.hangoutLink}`);
+      if (e.description) {
+        const desc = e.description.length > 200
+          ? e.description.substring(0, 200) + '...'
+          : e.description;
+        parts.push(`  Description: ${desc}`);
+      }
+      return parts.join('\n');
+    }).join('\n\n---\n\n');
+
+    return {
+      success: true,
+      tool: 'listEvents',
+      data: formatted,
+      metadata: { eventCount: activeEvents.length },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'listEvents',
+      error: error instanceof Error ? error.message : 'Failed to list calendar events',
+    };
+  }
+}
+
+/**
+ * Execute the createEvent tool - create a new Google Calendar event
+ */
+export async function executeCreateEventTool(
+  params: CreateEventToolParams,
+): Promise<ToolResult> {
+  try {
+    if (!isIntegrationEnabled('google_calendar')) {
+      return {
+        success: false,
+        tool: 'createEvent',
+        error: 'Google Calendar integration is not enabled. Enable it in Settings > Integrations.',
+      };
+    }
+
+    const settings = loadGoogleCalendarSettings();
+    if (!settings.credentials.serviceAccountJson || !settings.credentials.impersonatedUserEmail) {
+      return {
+        success: false,
+        tool: 'createEvent',
+        error: 'Google Calendar credentials are not configured.',
+      };
+    }
+
+    const calendarId = params.calendarId || 'primary';
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    let startObj: { dateTime?: string; date?: string; timeZone?: string };
+    let endObj: { dateTime?: string; date?: string; timeZone?: string };
+
+    if (params.allDay) {
+      const startDate = new Date(params.startTime).toISOString().split('T')[0];
+      const endDate = params.endTime
+        ? new Date(params.endTime).toISOString().split('T')[0]
+        : new Date(new Date(params.startTime).getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      startObj = { date: startDate };
+      endObj = { date: endDate };
+    } else {
+      const startDt = new Date(params.startTime).toISOString();
+      const endDt = params.endTime
+        ? new Date(params.endTime).toISOString()
+        : new Date(new Date(params.startTime).getTime() + 60 * 60 * 1000).toISOString();
+      startObj = { dateTime: startDt, timeZone };
+      endObj = { dateTime: endDt, timeZone };
+    }
+
+    const attendees = params.attendees
+      ? params.attendees.split(',').map(e => ({ email: e.trim() })).filter(a => a.email)
+      : undefined;
+
+    const created = await createCalendarEvent(calendarId, {
+      summary: params.title,
+      start: startObj,
+      end: endObj,
+      description: params.description,
+      location: params.location,
+      attendees,
+    }, settings);
+
+    const startDisplay = created.start.dateTime
+      ? new Date(created.start.dateTime).toLocaleString()
+      : created.start.date || 'Unknown';
+
+    return {
+      success: true,
+      tool: 'createEvent',
+      data: `Event "${created.summary}" created successfully for ${startDisplay}.${created.hangoutLink ? ` Meet link: ${created.hangoutLink}` : ''}`,
+      metadata: {
+        eventId: created.id,
+        eventTitle: created.summary,
+        htmlLink: created.htmlLink,
+      },
+      persistedChanges: true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'createEvent',
+      error: error instanceof Error ? error.message : 'Failed to create calendar event',
+    };
+  }
+}
+
+/**
+ * Execute the searchTranscripts tool - search meeting transcripts
+ */
+export async function executeSearchTranscriptsTool(
+  projectId: string | undefined,
+  params: SearchTranscriptsToolParams,
+): Promise<ToolResult> {
+  try {
+    const query = params.query;
+    if (!query?.trim()) {
+      return {
+        success: false,
+        tool: 'searchTranscripts',
+        error: 'Search query is required',
+      };
+    }
+
+    const maxResults = params.maxResults || 5;
+
+    let targetProjectId: string | undefined;
+    if (params.project) {
+      const resolved = await resolveProject(params.project);
+      if (resolved) targetProjectId = resolved.id;
+    } else {
+      targetProjectId = projectId || undefined;
+    }
+
+    const meetingDirs = ['zoom-meetings/', 'google-meet/', 'google-calendar/'];
+
+    let results;
+    if (targetProjectId) {
+      results = await searchProject(targetProjectId, query, maxResults * 3);
+    } else {
+      results = await searchAllProjects(query, maxResults * 3);
+    }
+
+    const transcriptResults = results.filter(r => {
+      const fileName = r.fileName.toLowerCase();
+      return meetingDirs.some(dir => fileName.includes(dir)) ||
+        fileName.includes('transcript') ||
+        fileName.includes('meeting');
+    });
+
+    const finalResults = transcriptResults.length > 0
+      ? transcriptResults.slice(0, maxResults)
+      : results.slice(0, maxResults);
+
+    if (finalResults.length === 0) {
+      return {
+        success: true,
+        tool: 'searchTranscripts',
+        data: 'No meeting transcripts or related notes found for your query.',
+        metadata: { resultCount: 0 },
+      };
+    }
+
+    const formatted = finalResults
+      .map((result, i) => {
+        const scorePercent = (result.score * 100).toFixed(1);
+        const isTranscript = meetingDirs.some(d => result.fileName.toLowerCase().includes(d));
+        const tag = isTranscript ? ' [Transcript]' : '';
+        return `[Result ${i + 1}]${tag} (Source: ${result.fileName}, Relevance: ${scorePercent}%)\n${result.text}`;
+      })
+      .join('\n\n---\n\n');
+
+    return {
+      success: true,
+      tool: 'searchTranscripts',
+      data: formatted,
+      metadata: { resultCount: finalResults.length },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'searchTranscripts',
+      error: error instanceof Error ? error.message : 'Failed to search transcripts',
+    };
+  }
+}
+
+/**
+ * Execute the prepareMeeting tool - prepare for an upcoming meeting
+ */
+export async function executePrepareMeetingTool(
+  projectId: string | undefined,
+  params: PrepareMeetingToolParams,
+): Promise<ToolResult> {
+  try {
+    let meetingTitle = params.meeting;
+    let meetingEvent: GoogleCalendarEvent | undefined;
+    let calendarContext = '';
+
+    if (isIntegrationEnabled('google_calendar')) {
+      const settings = loadGoogleCalendarSettings();
+      if (settings.credentials.serviceAccountJson && settings.credentials.impersonatedUserEmail) {
+        const now = new Date();
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        const calendarIds = settings.syncSettings.selectedCalendarIds.length > 0
+          ? settings.syncSettings.selectedCalendarIds
+          : ['primary'];
+
+        const allEvents: GoogleCalendarEvent[] = [];
+        for (const calId of calendarIds) {
+          try {
+            const events = await listCalendarEvents(calId, now.toISOString(), tomorrow.toISOString(), settings);
+            allEvents.push(...events);
+          } catch {
+            // Skip failing calendars
+          }
+        }
+
+        const upcoming = allEvents
+          .filter(e => e.status !== 'cancelled' && e.summary?.trim())
+          .sort((a, b) => {
+            const aTime = a.start.dateTime || a.start.date || '';
+            const bTime = b.start.dateTime || b.start.date || '';
+            return aTime.localeCompare(bTime);
+          });
+
+        if (meetingTitle) {
+          meetingEvent = upcoming.find(e =>
+            e.summary?.toLowerCase().includes(meetingTitle!.toLowerCase()),
+          );
+        } else if (upcoming.length > 0) {
+          meetingEvent = upcoming[0];
+          meetingTitle = meetingEvent.summary || 'Upcoming meeting';
+        }
+
+        if (meetingEvent) {
+          const start = meetingEvent.start.dateTime
+            ? new Date(meetingEvent.start.dateTime).toLocaleString()
+            : meetingEvent.start.date || '';
+          const attendees = meetingEvent.attendees
+            ?.map(a => a.displayName || a.email)
+            .join(', ') || 'None listed';
+          calendarContext = `\n\n## Calendar Event Details\n- **Title:** ${meetingEvent.summary}\n- **Time:** ${start}\n- **Attendees:** ${attendees}`;
+          if (meetingEvent.location) calendarContext += `\n- **Location:** ${meetingEvent.location}`;
+          if (meetingEvent.hangoutLink) calendarContext += `\n- **Meet Link:** ${meetingEvent.hangoutLink}`;
+          if (meetingEvent.description) calendarContext += `\n- **Description:** ${meetingEvent.description}`;
+        }
+      }
+    }
+
+    if (!meetingTitle) {
+      return {
+        success: false,
+        tool: 'prepareMeeting',
+        error: 'No meeting specified and no upcoming calendar events found. Please specify a meeting topic.',
+      };
+    }
+
+    let targetProjectId: string | undefined;
+    if (params.project) {
+      const resolved = await resolveProject(params.project);
+      if (resolved) targetProjectId = resolved.id;
+    } else {
+      targetProjectId = projectId || undefined;
+    }
+
+    let relatedContext = '';
+    const searchTerms = meetingTitle;
+    let results;
+    if (targetProjectId) {
+      results = await searchProject(targetProjectId, searchTerms, 10);
+    } else {
+      results = await searchAllProjects(searchTerms, 10);
+    }
+
+    if (results.length > 0) {
+      const topResults = results.slice(0, 5);
+      relatedContext = '\n\n## Related Notes & Transcripts\n' + topResults.map((r, i) => {
+        return `### ${i + 1}. ${r.fileName} (${(r.score * 100).toFixed(0)}% relevant)\n${r.text.substring(0, 500)}${r.text.length > 500 ? '...' : ''}`;
+      }).join('\n\n');
+    }
+
+    const prepContent = `# Meeting Preparation: ${meetingTitle}${calendarContext}${relatedContext}`;
+
+    const systemPrompt = `You are a meeting preparation assistant. Given the calendar event details and related notes/transcripts from previous meetings, create a comprehensive meeting preparation document. Include:
+1. **Meeting Overview** - What this meeting is about based on the title and description
+2. **Key Context** - Relevant information from past notes and transcripts
+3. **Suggested Agenda Items** - Topics to discuss based on the context
+4. **Open Questions** - Questions that should be addressed
+5. **Action Items to Follow Up** - Any pending items from previous meetings
+
+Keep it concise and actionable. If there's limited context, focus on what's available and suggest topics based on the meeting title.`;
+
+    const response = await chatCompletion({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prepContent },
+      ],
+      temperature: 0.4,
+      maxTokens: 2000,
+    });
+
+    const attachment: ToolAttachment = {
+      id: crypto.randomUUID(),
+      type: 'summary',
+      title: `Meeting Prep: ${meetingTitle}`,
+      content: response.content,
+    };
+
+    return {
+      success: true,
+      tool: 'prepareMeeting',
+      data: response.content,
+      attachment,
+      metadata: {
+        meetingTitle,
+        hasCalendarEvent: !!meetingEvent,
+        relatedNotesCount: results?.length || 0,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: 'prepareMeeting',
+      error: error instanceof Error ? error.message : 'Failed to prepare meeting',
+    };
+  }
+}
+
+// ============================================
 // Tool Executor
 // ============================================
 
@@ -2320,6 +2743,38 @@ async function executeToolInternal(
         onProgress,
       );
 
+    case "listEvents":
+      return executeListEventsTool({
+        days: call.params.days ? parseInt(call.params.days) : undefined,
+        pastDays: call.params.pastDays ? parseInt(call.params.pastDays) : undefined,
+        calendarId: call.params.calendarId,
+      });
+
+    case "createEvent":
+      return executeCreateEventTool({
+        title: call.params.title || call.params.summary || "",
+        startTime: call.params.startTime || call.params.start || "",
+        endTime: call.params.endTime || call.params.end,
+        allDay: call.params.allDay === 'true',
+        description: call.params.description,
+        location: call.params.location,
+        attendees: call.params.attendees,
+        calendarId: call.params.calendarId,
+      });
+
+    case "searchTranscripts":
+      return executeSearchTranscriptsTool(projectId, {
+        query: call.params.query || call.params.q || "",
+        project: call.params.project,
+        maxResults: call.params.maxResults ? parseInt(call.params.maxResults) : undefined,
+      });
+
+    case "prepareMeeting":
+      return executePrepareMeetingTool(projectId, {
+        meeting: call.params.meeting || call.params.topic || call.params.title,
+        project: call.params.project,
+      });
+
     default:
       return {
         success: false,
@@ -2473,7 +2928,7 @@ STEP 1 - PROJECT CONTEXT CHECK:
 - If NO to both (Global mode) → Go to STEP 2
 
 STEP 2 - GLOBAL MODE DECISION:
-- Is the request ONLY for project-independent tools (search, webResearch, generateImage)?
+- Is the request ONLY for project-independent tools (search, webResearch, generateImage, listEvents, createEvent, prepareMeeting)?
   - YES → Proceed to STEP 3 without a project. These tools work without project context.
 - Is the user explicitly asking to "create a project" or "new project"?
   - YES → First step must be createProject, all following steps use projectId from it, proceed to STEP 3
@@ -2493,8 +2948,10 @@ STEP 5 - ASSESS COMPLEXITY:
 Determine if this plan is LOW or HIGH complexity. Default to LOW unless HIGH criteria are clearly met.
 
 LOW complexity (auto-execute without confirmation) - USE THIS WHEN:
-- Read-only operations: read, search, summarize (ALWAYS low)
+- Read-only operations: read, search, summarize, listEvents, searchTranscripts (ALWAYS low)
 - Image generation: generateImage (ALWAYS low, no project needed)
+- Calendar queries: listEvents (ALWAYS low, no project needed)
+- Meeting preparation: prepareMeeting (ALWAYS low)
 - 1-2 steps with clear instructions
 - User specified the file/project names explicitly
 - File updates with @selection: reference
@@ -2503,6 +2960,7 @@ LOW complexity (auto-execute without confirmation) - USE THIS WHEN:
 HIGH complexity (requires user confirmation) - ONLY USE WHEN:
 - 3+ steps
 - Creating NEW files/projects where names must be generated by AI
+- Creating calendar events (createEvent) - always requires confirmation
 - Destructive operations (delete)
 - Ambiguous requests where you're uncertain what the user wants
 
@@ -2513,7 +2971,11 @@ Examples:
 - "search X and summarize results" → LOW (read-only, 2 steps)
 - "update @selection: fix typos" → LOW (clear instruction with selection)
 - "generate an image of a cat" → LOW (1 step, no project needed)
+- "what's on my calendar today?" → LOW (listEvents, 1 step)
+- "what did we discuss about X?" → LOW (searchTranscripts, 1 step)
+- "prepare me for my next meeting" → LOW (prepareMeeting, 1 step)
 - "create a note about cats" → HIGH (AI must generate filename)
+- "schedule a meeting tomorrow at 3pm" → HIGH (createEvent, needs confirmation)
 - "reorganize my project structure" → HIGH (ambiguous, multiple files)
 - "delete old-file.md" → HIGH (destructive)
 
@@ -2529,6 +2991,10 @@ Available tools:
 - deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
 - webResearch: Search the web for information. Params: {query: "search query", maxResults?: number}
 - generateImage: Generate an image from a text description. Params: {prompt: "detailed image description", size?: "1024x1024"}
+- listEvents: List calendar events from Google Calendar. No project needed. Params: {days?: number (default 7), pastDays?: number (default 0), calendarId?: "calendar id"}
+- createEvent: Create a new Google Calendar event. No project needed. Params: {title: "event title", startTime: "ISO datetime", endTime?: "ISO datetime", allDay?: boolean, description?: "desc", location?: "location", attendees?: "email1,email2", calendarId?: "calendar id"}
+- searchTranscripts: Search meeting transcripts (Zoom, Google Meet). Params: {query: "search query", project?: "project name", maxResults?: number}
+- prepareMeeting: Prepare for an upcoming meeting by gathering context from calendar and notes. Params: {meeting?: "meeting title/topic", project?: "project name"}
 
 User message references:
 - @file:path/to/file.md - References a specific file in the current project
@@ -2567,6 +3033,9 @@ Context propagation (CRITICAL):
 - webResearchResults: write step needs this from webResearch step
 - searchResults: write step needs this from search step
 - generatedImageFile: when generateImage runs, subsequent write steps can reference the generated file
+- calendarEvents: listEvents provides this for subsequent steps
+- transcriptResults: searchTranscripts provides this for subsequent steps
+- meetingPrep: prepareMeeting provides this for write steps
 
 Respond ONLY with a JSON object:
 {
@@ -2871,6 +3340,10 @@ export function getToolIcon(tool: ToolName): string {
     deleteProject: "🗑️",
     webResearch: "🌐",
     generateImage: "🎨",
+    listEvents: "📅",
+    createEvent: "📅",
+    searchTranscripts: "🎙️",
+    prepareMeeting: "📋",
   };
   return icons[tool] || "⚙️";
 }
@@ -2929,6 +3402,23 @@ function extractContextFromResult(
       if (result.attachment) {
         context.generatedImageAttachment = result.attachment;
       }
+      break;
+
+    case "listEvents":
+      context.calendarEvents = result.data;
+      break;
+
+    case "createEvent":
+      context.createdEventId = result.metadata?.eventId;
+      context.createdEventTitle = result.metadata?.eventTitle;
+      break;
+
+    case "searchTranscripts":
+      context.transcriptResults = result.data;
+      break;
+
+    case "prepareMeeting":
+      context.meetingPrep = result.data;
       break;
 
     default:

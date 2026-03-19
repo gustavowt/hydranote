@@ -391,6 +391,119 @@ export async function listEvents(
 }
 
 // ============================================
+// Create Event
+// ============================================
+
+/**
+ * Create a new event on the specified calendar.
+ */
+export async function createEvent(
+  calendarId: string,
+  event: {
+    summary: string;
+    start: { dateTime?: string; date?: string; timeZone?: string };
+    end: { dateTime?: string; date?: string; timeZone?: string };
+    description?: string;
+    location?: string;
+    attendees?: Array<{ email: string }>;
+  },
+  settings?: GoogleCalendarSettings,
+): Promise<GoogleCalendarEvent> {
+  const token = await getAccessToken(settings);
+
+  const result = await calendarFetch(
+    `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(event),
+    },
+  );
+
+  if (!result.success || !result.body) {
+    throw new Error(result.error || 'Failed to create calendar event');
+  }
+
+  let parsed: GoogleCalendarEvent & { error?: { message?: string } };
+  try {
+    parsed = JSON.parse(result.body);
+  } catch {
+    throw new Error('Invalid response from Google Calendar API');
+  }
+
+  if ((parsed as unknown as { error?: { message?: string } }).error) {
+    throw new Error(`Google Calendar API error: ${(parsed as unknown as { error: { message: string } }).error.message}`);
+  }
+
+  return parsed;
+}
+
+/**
+ * Get upcoming events for the next N hours (used for system prompt injection).
+ * Returns a compact formatted string of today's events.
+ */
+export async function getUpcomingEventsForContext(
+  hoursAhead: number = 24,
+  settings?: GoogleCalendarSettings,
+): Promise<string> {
+  const s = settings ?? loadGoogleCalendarSettings();
+  const { serviceAccountJson, impersonatedUserEmail } = s.credentials;
+
+  if (!serviceAccountJson || !impersonatedUserEmail) {
+    return '';
+  }
+
+  try {
+    const now = new Date();
+    const end = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
+    const timeMin = now.toISOString();
+    const timeMax = end.toISOString();
+
+    const calendarIds = s.syncSettings.selectedCalendarIds.length > 0
+      ? s.syncSettings.selectedCalendarIds
+      : ['primary'];
+
+    const allEvents: GoogleCalendarEvent[] = [];
+    for (const calId of calendarIds) {
+      try {
+        const events = await listEvents(calId, timeMin, timeMax, s);
+        allEvents.push(...events);
+      } catch {
+        // Skip calendars that fail
+      }
+    }
+
+    if (allEvents.length === 0) return '';
+
+    allEvents.sort((a, b) => {
+      const aTime = a.start.dateTime || a.start.date || '';
+      const bTime = b.start.dateTime || b.start.date || '';
+      return aTime.localeCompare(bTime);
+    });
+
+    const lines = allEvents
+      .filter(e => e.status !== 'cancelled' && e.summary?.trim())
+      .slice(0, 10)
+      .map(e => {
+        const startStr = formatEventDateTime(e.start);
+        const attendeeCount = e.attendees?.length || 0;
+        const parts = [`- **${e.summary}** — ${startStr}`];
+        if (e.location) parts.push(`  Location: ${e.location}`);
+        if (attendeeCount > 0) parts.push(`  ${attendeeCount} attendee(s)`);
+        if (e.hangoutLink) parts.push(`  [Google Meet](${e.hangoutLink})`);
+        return parts.join('\n');
+      });
+
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// ============================================
 // Helpers
 // ============================================
 
