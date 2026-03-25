@@ -479,6 +479,203 @@ ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<We
 });
 
 // ============================================
+// Google OAuth 2.0 IPC Handlers
+// ============================================
+
+import * as http from 'http';
+import * as crypto from 'crypto';
+
+interface GoogleOAuthParams {
+  clientId: string;
+  clientSecret: string;
+  scopes: string;
+}
+
+interface GoogleOAuthResult {
+  success: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  email?: string;
+  error?: string;
+}
+
+interface GoogleRefreshParams {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}
+
+interface GoogleRefreshResult {
+  success: boolean;
+  accessToken?: string;
+  expiresAt?: number;
+  error?: string;
+}
+
+ipcMain.handle('google:startOAuth', async (_event, params: GoogleOAuthParams): Promise<GoogleOAuthResult> => {
+  const { clientId, clientSecret, scopes } = params;
+
+  if (!clientId || !clientSecret || !scopes) {
+    return { success: false, error: 'Missing required parameters: clientId, clientSecret, scopes' };
+  }
+
+  return new Promise((resolve) => {
+    const state = crypto.randomBytes(16).toString('hex');
+    let settled = false;
+
+    const server = http.createServer(async (req, res) => {
+      if (settled) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>You may close this window.</body></html>');
+        return;
+      }
+
+      const url = new URL(req.url || '/', `http://127.0.0.1`);
+      const code = url.searchParams.get('code');
+      const returnedState = url.searchParams.get('state');
+      const errorParam = url.searchParams.get('error');
+
+      if (errorParam) {
+        settled = true;
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`<html><body><h2>Authorization denied</h2><p>${errorParam}</p><p>You may close this window.</p></body></html>`);
+        server.close();
+        resolve({ success: false, error: `Authorization denied: ${errorParam}` });
+        return;
+      }
+
+      if (!code || returnedState !== state) {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<html><body><p>Invalid callback. Please try again.</p></body></html>');
+        return;
+      }
+
+      settled = true;
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body><h2>Signed in to HydraNote</h2><p>You may close this window and return to the app.</p></body></html>');
+
+      try {
+        const port = (server.address() as { port: number }).port;
+        const tokenBody = new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: `http://127.0.0.1:${port}`,
+          grant_type: 'authorization_code',
+        }).toString();
+
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: tokenBody,
+        });
+        const tokenData = await tokenRes.json() as {
+          access_token?: string;
+          refresh_token?: string;
+          expires_in?: number;
+          error?: string;
+          error_description?: string;
+        };
+
+        if (tokenData.error || !tokenData.access_token) {
+          server.close();
+          resolve({ success: false, error: `Token exchange failed: ${tokenData.error_description || tokenData.error}` });
+          return;
+        }
+
+        let email = '';
+        try {
+          const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` },
+          });
+          const userInfo = await userInfoRes.json() as { email?: string };
+          email = userInfo.email || '';
+        } catch {
+          // Non-fatal: email is a convenience field
+        }
+
+        server.close();
+        resolve({
+          success: true,
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresAt: Date.now() + (tokenData.expires_in || 3600) * 1000,
+          email,
+        });
+      } catch (err) {
+        server.close();
+        resolve({ success: false, error: err instanceof Error ? err.message : 'Token exchange failed' });
+      }
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as { port: number }).port;
+      const redirectUri = `http://127.0.0.1:${port}`;
+      const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authUrl.searchParams.set('client_id', clientId);
+      authUrl.searchParams.set('redirect_uri', redirectUri);
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', scopes);
+      authUrl.searchParams.set('access_type', 'offline');
+      authUrl.searchParams.set('prompt', 'consent');
+      authUrl.searchParams.set('state', state);
+
+      shell.openExternal(authUrl.toString());
+    });
+
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        server.close();
+        resolve({ success: false, error: 'OAuth timed out after 2 minutes. Please try again.' });
+      }
+    }, 120_000);
+  });
+});
+
+ipcMain.handle('google:refreshToken', async (_event, params: GoogleRefreshParams): Promise<GoogleRefreshResult> => {
+  const { clientId, clientSecret, refreshToken } = params;
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    return { success: false, error: 'Missing required parameters for token refresh' };
+  }
+
+  try {
+    const body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }).toString();
+
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const data = await res.json() as {
+      access_token?: string;
+      expires_in?: number;
+      error?: string;
+      error_description?: string;
+    };
+
+    if (data.error || !data.access_token) {
+      return { success: false, error: `Token refresh failed: ${data.error_description || data.error}` };
+    }
+
+    return {
+      success: true,
+      accessToken: data.access_token,
+      expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Token refresh failed' };
+  }
+});
+
+// ============================================
 // MCP Server IPC Handlers
 // ============================================
 

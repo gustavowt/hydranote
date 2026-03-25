@@ -130,6 +130,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       timeout?: number;
     }) => ipcRenderer.invoke('web:fetch', options),
   },
+  // Google OAuth Operations
+  google: {
+    startOAuth: (params: { clientId: string; clientSecret: string; scopes: string }) =>
+      ipcRenderer.invoke('google:startOAuth', params),
+    refreshToken: (params: { clientId: string; clientSecret: string; refreshToken: string }) =>
+      ipcRenderer.invoke('google:refreshToken', params),
+  },
   // MCP Server Operations
   mcp: {
     getSettings: () => ipcRenderer.invoke('mcp:getSettings'),

@@ -272,6 +272,23 @@ interface ElectronAPI {
   web: {
     fetch: (options: ElectronWebFetchOptions) => Promise<ElectronWebFetchResult>;
   };
+  // Google OAuth Operations
+  google: {
+    startOAuth: (params: { clientId: string; clientSecret: string; scopes: string }) => Promise<{
+      success: boolean;
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: number;
+      email?: string;
+      error?: string;
+    }>;
+    refreshToken: (params: { clientId: string; clientSecret: string; refreshToken: string }) => Promise<{
+      success: boolean;
+      accessToken?: string;
+      expiresAt?: number;
+      error?: string;
+    }>;
+  };
   // MCP Server Operations
   mcp: {
     getSettings: () => Promise<{ success: boolean; settings?: ElectronMCPSettings; error?: string }>;
