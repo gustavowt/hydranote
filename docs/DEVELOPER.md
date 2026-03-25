@@ -685,8 +685,7 @@ src/
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
-│       ├── GoogleMeetSettings.vue   # Google Meet integration configuration panel
-│       ├── GoogleCalendarSettings.vue # Google Calendar integration configuration panel
+│       ├── GoogleWorkspaceSettings.vue # Google Workspace integration (Meet + Calendar) config panel
 │       ├── IntegrationsStore.vue     # Store-like integrations browser
 │       ├── StorageSettings.vue
 │       └── ZoomSettings.vue         # Zoom integration configuration panel
@@ -695,9 +694,10 @@ src/
 ├── icons/                           # SVG icon components for providers
 ├── services/
 │   ├── integrationService.ts        # Integration settings (localStorage)
-│   ├── googleMeetService.ts         # Google Meet API client (Service Account JWT)
+│   ├── googleWorkspaceAuthService.ts # Shared Google Workspace OAuth 2.0 auth, token management, settings
+│   ├── googleMeetService.ts         # Google Meet API client
 │   ├── googleMeetSyncService.ts     # Google Meet auto-sync orchestrator
-│   ├── googleCalendarService.ts     # Google Calendar API client (Service Account JWT)
+│   ├── googleCalendarService.ts     # Google Calendar API client
 │   ├── googleCalendarSyncService.ts # Google Calendar auto-sync orchestrator
 │   ├── zoomService.ts               # Zoom API client (Server-to-Server OAuth)
 │   ├── zoomSyncService.ts           # Zoom auto-sync orchestrator
@@ -779,25 +779,43 @@ Token exchange: `POST https://zoom.us/oauth/token` with `grant_type=account_cred
 | Key | Contents |
 |-----|----------|
 | `hydranote_zoom_settings` | Zoom credentials, sync config, cached token, synced meeting UUIDs |
-| `hydranote_integration_settings` | General integration toggles (zoom/google_meet enabled/disabled) |
+| `hydranote_integration_settings` | General integration toggles (zoom/google_workspace enabled/disabled) |
 
 ---
 
-## Google Meet Integration
+## Google Workspace Integration
 
-Auto-syncs meeting transcripts from Google Meet via the Workspace API into HydraNote projects.
+Unified integration for Google Meet and Google Calendar. Users connect their Google account via OAuth 2.0 and select which apps (Meet, Calendar) to enable. A shared access token covers all enabled scopes.
 
 ### Authentication
 
-Uses **Google Workspace Service Account** with domain-wide delegation. Users create a GCP project, enable the **Meet REST API** and **Google Drive API**, create a service account, and grant it domain-wide delegation with the required scopes. They paste the downloaded JSON key file and an impersonated user email into Settings > Integrations > Google Meet.
+Uses **OAuth 2.0 Authorization Code** flow with a loopback redirect. Each user creates their own GCP project with a Desktop-type OAuth 2.0 Client ID — no Google Workspace admin access or compliance review required. Works with both personal Gmail and Workspace accounts.
 
-Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to `https://oauth2.googleapis.com/token` with `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`. Tokens auto-refresh ~5 min before expiry.
+**Flow:**
+1. User pastes their Client ID and Client Secret into Settings > Integrations > Google Workspace
+2. Clicks "Sign in with Google" — Electron main process starts a temporary HTTP server on `127.0.0.1` (random port)
+3. System browser opens Google consent screen via `shell.openExternal()`
+4. After user grants consent, Google redirects to the loopback server with an authorization code
+5. Main process exchanges the code for access + refresh tokens via `POST https://oauth2.googleapis.com/token`
+6. Fetches user email from `https://www.googleapis.com/oauth2/v2/userinfo`
+7. Returns tokens + email to the renderer; refresh token is persisted in settings
 
-**Required Scopes:**
-- `https://www.googleapis.com/auth/meetings.space` — list and manage conference records (write-enabled for future chat tool use)
-- `https://www.googleapis.com/auth/drive.meet.readonly` — download transcript docs from Drive
+Token refresh: When the cached access token expires (~5 min buffer), `getWorkspaceAccessToken()` calls the `google:refreshToken` Electron IPC handler which exchanges the stored refresh token for a new access token. If the refresh token has been revoked, the user is prompted to re-sign in.
 
-### Auto-Sync Flow
+**Electron IPC Handlers:**
+- `google:startOAuth` — Full OAuth flow (loopback server + code exchange + userinfo), returns `{ accessToken, refreshToken, expiresAt, email }`
+- `google:refreshToken` — Exchanges a refresh token for a new access token, returns `{ accessToken, expiresAt }`
+
+**Scopes per App:**
+
+| App | Required APIs | Scopes |
+|-----|---------------|--------|
+| Google Meet | Meet REST API, Google Drive API | `meetings.space`, `drive.meet.readonly` |
+| Google Calendar | Google Calendar API | `calendar` |
+
+The setup guide in the configuration panel walks users through creating a GCP project, enabling APIs, configuring the OAuth consent screen, and creating a Desktop OAuth Client ID.
+
+### Google Meet Auto-Sync
 
 1. `googleMeetSyncService` polls `GET https://meet.googleapis.com/v2/conferenceRecords` at a configurable interval (default 5 min)
 2. For each conference, lists transcripts via `conferenceRecords/{id}/transcripts`
@@ -805,37 +823,9 @@ Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to 
 4. Downloads transcript content via Drive export API (`GET /drive/v3/files/{docId}/export?mimeType=text/plain`)
 5. Formats plain-text transcript into Markdown (grouped by speaker)
 6. Saves as `google-meet/{date}-{topic}.md` in the configured target project via `projectService.createFile()`
-7. Tracks synced conference record names in localStorage to prevent duplicates
+7. Tracks synced conference record names in settings to prevent duplicates
 
-### Services
-
-| Service | Purpose |
-|---------|---------|
-| `googleMeetService.ts` | Service Account JWT auth, Google Meet + Drive REST API calls (via `web:fetch` IPC) |
-| `googleMeetSyncService.ts` | Polling orchestrator, event emitter for UI updates, transcript formatting |
-
-### localStorage Keys
-
-| Key | Contents |
-|-----|----------|
-| `hydranote_google_meet_settings` | Service Account JSON, impersonated email, sync config, cached token, synced conference names |
-
----
-
-## Google Calendar Integration
-
-Auto-syncs calendar events from Google Calendar via the Calendar API into HydraNote projects as structured Markdown notes. Supports both past and upcoming events with configurable date ranges and selectable calendars.
-
-### Authentication
-
-Uses **Google Workspace Service Account** with domain-wide delegation (same pattern as Google Meet). Users create a GCP project, enable the **Google Calendar API**, create a service account, and grant it domain-wide delegation. They paste the downloaded JSON key file and an impersonated user email into Settings > Integrations > Google Calendar.
-
-Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to `https://oauth2.googleapis.com/token` with `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`. Tokens auto-refresh ~5 min before expiry.
-
-**Required Scope:**
-- `https://www.googleapis.com/auth/calendar` — full read/write access to calendars and events (write-enabled for future chat tool use)
-
-### Auto-Sync Flow
+### Google Calendar Auto-Sync
 
 1. `googleCalendarSyncService` polls at a configurable interval (default 5 min)
 2. Builds a date range from the configured past/future days (default: 7 days each direction)
@@ -843,20 +833,27 @@ Token exchange: Creates a signed JWT (RS256 via Web Crypto API) and posts it to 
 4. Filters out already-synced event IDs and cancelled events
 5. Formats each event into Markdown (title, date/time, location, attendees, description, Meet link)
 6. Saves as `google-calendar/{date}-{event-title}.md` in the configured target project via `projectService.createFile()`
-7. Tracks synced event IDs in localStorage to prevent duplicates
+7. Tracks synced event IDs in settings to prevent duplicates
 
 ### Services
 
 | Service | Purpose |
 |---------|---------|
-| `googleCalendarService.ts` | Service Account JWT auth, Google Calendar REST API calls (via `web:fetch` IPC) |
-| `googleCalendarSyncService.ts` | Polling orchestrator, event emitter for UI updates |
+| `googleWorkspaceAuthService.ts` | Shared OAuth 2.0 auth, token management (via Electron IPC), settings persistence, legacy migration |
+| `googleMeetService.ts` | Google Meet + Drive REST API calls (via `web:fetch` IPC) |
+| `googleMeetSyncService.ts` | Meet polling orchestrator, event emitter for UI updates, transcript formatting |
+| `googleCalendarService.ts` | Google Calendar REST API calls (via `web:fetch` IPC) |
+| `googleCalendarSyncService.ts` | Calendar polling orchestrator, event emitter for UI updates |
 
 ### localStorage Keys
 
 | Key | Contents |
 |-----|----------|
-| `hydranote_google_calendar_settings` | Service Account JSON, impersonated email, sync config, selected calendars, cached token, synced event IDs |
+| `hydranote_google_workspace_settings` | OAuth Client ID, Client Secret, refresh token, user email, enabled apps (meet/calendar), per-app sync configs, cached access token |
+
+### Data Migration
+
+On first load, `googleWorkspaceAuthService` checks for legacy keys (`hydranote_google_meet_settings`, `hydranote_google_calendar_settings`). If found, it preserves sync settings and app toggles into the new unified `hydranote_google_workspace_settings` key and removes the old keys. Legacy service account credentials cannot be migrated to OAuth — they are cleared, and the user must re-authenticate via "Sign in with Google". Existing workspace settings with old-format `serviceAccountJson` credentials are also detected and cleared on load. The `hydranote_integration_settings` toggles for `google_meet`/`google_calendar` are migrated to `google_workspace`.
 
 ---
 
