@@ -2162,9 +2162,11 @@ export const SUGGESTED_LOCAL_MODELS: Partial<HFModelRef>[] = [
 // Integrations (Settings Store)
 // ============================================
 
-export type IntegrationId = 'google_meet' | 'zoom' | 'google_calendar';
+export type IntegrationId = 'google_workspace' | 'zoom';
 
-export type IntegrationCategory = 'meetings' | 'calendar' | 'productivity';
+export type IntegrationCategory = 'meetings' | 'calendar' | 'productivity' | 'workspace';
+
+export type GoogleWorkspaceApp = 'meet' | 'calendar';
 
 export interface IntegrationConfig {
   enabled: boolean;
@@ -2185,11 +2187,11 @@ export interface IntegrationSettings {
 
 export const INTEGRATION_CATALOG: IntegrationMeta[] = [
   {
-    id: 'google_meet',
-    name: 'Google Meet',
-    description: 'Automatically capture meeting notes and action items from Google Meet calls.',
-    category: 'meetings',
-    learnMoreUrl: 'https://meet.google.com',
+    id: 'google_workspace',
+    name: 'Google Workspace',
+    description: 'Connect Google Meet transcripts and Google Calendar events with your Google account.',
+    category: 'workspace',
+    learnMoreUrl: 'https://workspace.google.com',
   },
   {
     id: 'zoom',
@@ -2198,19 +2200,11 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     category: 'meetings',
     learnMoreUrl: 'https://zoom.us',
   },
-  {
-    id: 'google_calendar',
-    name: 'Google Calendar',
-    description: 'Sync calendar events to create meeting-linked notes and reminders.',
-    category: 'calendar',
-    learnMoreUrl: 'https://calendar.google.com',
-  },
 ];
 
 export const DEFAULT_INTEGRATION_SETTINGS: IntegrationSettings = {
-  google_meet: { enabled: false },
+  google_workspace: { enabled: false },
   zoom: { enabled: false },
-  google_calendar: { enabled: false },
 };
 
 // ============================================
@@ -2302,12 +2296,24 @@ export interface ZoomSyncEvent {
 }
 
 // ============================================
-// Google Meet Integration Types
+// Google Workspace Integration Types (shared auth)
 // ============================================
 
-export interface GoogleMeetCredentials {
-  serviceAccountJson: string;
-  impersonatedUserEmail: string;
+export interface GoogleWorkspaceCredentials {
+  clientId: string;
+  clientSecret: string;
+  refreshToken?: string;
+  userEmail?: string;
+}
+
+export interface GoogleWorkspaceTokenData {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface GoogleWorkspaceEnabledApps {
+  meet: boolean;
+  calendar: boolean;
 }
 
 export interface GoogleMeetSyncSettings {
@@ -2317,25 +2323,43 @@ export interface GoogleMeetSyncSettings {
   syncedConferenceNames: string[];
 }
 
-export interface GoogleMeetTokenData {
-  accessToken: string;
-  expiresAt: number;
+export interface GoogleCalendarSyncSettings {
+  syncIntervalMinutes: number;
+  targetProjectId?: string;
+  lastSyncTime?: string;
+  syncedEventIds: string[];
+  selectedCalendarIds: string[];
+  pastDays: number;
+  futureDays: number;
 }
 
-export interface GoogleMeetSettings {
-  credentials: GoogleMeetCredentials;
-  syncSettings: GoogleMeetSyncSettings;
-  token?: GoogleMeetTokenData;
+export interface GoogleWorkspaceSettings {
+  credentials: GoogleWorkspaceCredentials;
+  enabledApps: GoogleWorkspaceEnabledApps;
+  meetSyncSettings: GoogleMeetSyncSettings;
+  calendarSyncSettings: GoogleCalendarSyncSettings;
+  token?: GoogleWorkspaceTokenData;
 }
 
-export const DEFAULT_GOOGLE_MEET_SETTINGS: GoogleMeetSettings = {
+export const DEFAULT_GOOGLE_WORKSPACE_SETTINGS: GoogleWorkspaceSettings = {
   credentials: {
-    serviceAccountJson: '',
-    impersonatedUserEmail: '',
+    clientId: '',
+    clientSecret: '',
   },
-  syncSettings: {
+  enabledApps: {
+    meet: false,
+    calendar: false,
+  },
+  meetSyncSettings: {
     syncIntervalMinutes: 5,
     syncedConferenceNames: [],
+  },
+  calendarSyncSettings: {
+    syncIntervalMinutes: 5,
+    syncedEventIds: [],
+    selectedCalendarIds: [],
+    pastDays: 7,
+    futureDays: 7,
   },
 };
 
@@ -2388,48 +2412,8 @@ export interface GoogleMeetSyncEvent {
 }
 
 // ============================================
-// Google Calendar Integration Types
+// Google Calendar API DTO Types
 // ============================================
-
-export interface GoogleCalendarCredentials {
-  serviceAccountJson: string;
-  impersonatedUserEmail: string;
-}
-
-export interface GoogleCalendarSyncSettings {
-  syncIntervalMinutes: number;
-  targetProjectId?: string;
-  lastSyncTime?: string;
-  syncedEventIds: string[];
-  selectedCalendarIds: string[];
-  pastDays: number;
-  futureDays: number;
-}
-
-export interface GoogleCalendarTokenData {
-  accessToken: string;
-  expiresAt: number;
-}
-
-export interface GoogleCalendarSettings {
-  credentials: GoogleCalendarCredentials;
-  syncSettings: GoogleCalendarSyncSettings;
-  token?: GoogleCalendarTokenData;
-}
-
-export const DEFAULT_GOOGLE_CALENDAR_SETTINGS: GoogleCalendarSettings = {
-  credentials: {
-    serviceAccountJson: '',
-    impersonatedUserEmail: '',
-  },
-  syncSettings: {
-    syncIntervalMinutes: 5,
-    syncedEventIds: [],
-    selectedCalendarIds: [],
-    pastDays: 7,
-    futureDays: 7,
-  },
-};
 
 export interface GoogleCalendarEventDateTime {
   dateTime?: string;
