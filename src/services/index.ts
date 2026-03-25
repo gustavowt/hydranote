@@ -384,7 +384,20 @@ export {
   saveIntegrationSettings,
   toggleIntegration,
   isIntegrationEnabled,
+  isGoogleAppEnabled,
 } from './integrationService';
+
+// Google Workspace Auth Service
+export {
+  loadGoogleWorkspaceSettings,
+  saveGoogleWorkspaceSettings,
+  getWorkspaceAccessToken,
+  startGoogleOAuth,
+  googleFetch,
+  buildScopesForEnabledApps,
+  MEET_SCOPES,
+  CALENDAR_SCOPES,
+} from './googleWorkspaceAuthService';
 
 // Zoom Service
 export {
@@ -417,10 +430,7 @@ export {
 
 // Google Meet Service
 export {
-  loadGoogleMeetSettings,
-  saveGoogleMeetSettings,
-  getAccessToken as getGoogleMeetAccessToken,
-  testConnection as testGoogleMeetConnection,
+  testMeetConnection,
   listConferenceRecords,
   listTranscripts as listGoogleMeetTranscripts,
   downloadTranscriptDoc,
@@ -442,10 +452,7 @@ export {
 
 // Google Calendar Service
 export {
-  loadGoogleCalendarSettings,
-  saveGoogleCalendarSettings,
-  getAccessToken as getGoogleCalendarAccessToken,
-  testConnection as testGoogleCalendarConnection,
+  testCalendarConnection,
   listCalendars,
   listEvents as listCalendarEvents,
   createEvent as createCalendarEvent,

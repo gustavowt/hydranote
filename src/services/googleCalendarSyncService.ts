@@ -6,8 +6,6 @@
 
 import type { GoogleCalendarSyncEvent, GoogleCalendarEvent } from '../types';
 import {
-  loadGoogleCalendarSettings,
-  saveGoogleCalendarSettings,
   listCalendars,
   listEvents,
   filterNewEvents,
@@ -15,8 +13,12 @@ import {
   getEventDatePrefix,
   sanitizeFileName,
 } from './googleCalendarService';
+import {
+  loadGoogleWorkspaceSettings,
+  saveGoogleWorkspaceSettings,
+} from './googleWorkspaceAuthService';
 import { createFile } from './projectService';
-import { isIntegrationEnabled } from './integrationService';
+import { isGoogleAppEnabled } from './integrationService';
 
 type SyncEventCallback = (event: GoogleCalendarSyncEvent) => void;
 
@@ -103,8 +105,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
   let errorCount = 0;
 
   try {
-    const settings = loadGoogleCalendarSettings();
-    const { targetProjectId, pastDays, futureDays, selectedCalendarIds } = settings.syncSettings;
+    const wsSettings = loadGoogleWorkspaceSettings();
+    const { targetProjectId, pastDays, futureDays, selectedCalendarIds } = wsSettings.calendarSyncSettings;
 
     if (!targetProjectId) {
       throw new Error('No target project configured for Google Calendar sync');
@@ -118,7 +120,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
     let calendarNameMap: Map<string, string> = new Map();
 
     if (calendarIds.length === 0) {
-      const calendars = await listCalendars(settings);
+      const calendars = await listCalendars(wsSettings);
       const primary = calendars.find((c) => c.primary);
       if (primary) {
         calendarIds = [primary.id];
@@ -129,7 +131,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       }
     } else {
       try {
-        const calendars = await listCalendars(settings);
+        const calendars = await listCalendars(wsSettings);
         for (const cal of calendars) {
           calendarNameMap.set(cal.id, cal.summary);
         }
@@ -151,8 +153,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
 
     for (const calId of calendarIds) {
       try {
-        const events = await listEvents(calId, timeMin, timeMax, settings);
-        const newEvents = filterNewEvents(events, settings.syncSettings.syncedEventIds);
+        const events = await listEvents(calId, timeMin, timeMax, wsSettings);
+        const newEvents = filterNewEvents(events, wsSettings.calendarSyncSettings.syncedEventIds);
         const calName = calendarNameMap.get(calId);
         for (const ev of newEvents) {
           allNewEvents.push({ event: ev, calendarName: calName });
@@ -174,8 +176,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
         message: 'No new events to sync',
         totalSynced: 0,
       });
-      settings.syncSettings.lastSyncTime = new Date().toISOString();
-      saveGoogleCalendarSettings(settings);
+      wsSettings.calendarSyncSettings.lastSyncTime = new Date().toISOString();
+      saveGoogleWorkspaceSettings(wsSettings);
       return { synced: 0, errors: 0 };
     }
 
@@ -189,7 +191,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
         const saved = await syncEvent(event, targetProjectId, calendarName);
         if (saved && event.id) {
           syncedCount++;
-          settings.syncSettings.syncedEventIds.push(event.id);
+          wsSettings.calendarSyncSettings.syncedEventIds.push(event.id);
         }
       } catch (err) {
         errorCount++;
@@ -204,8 +206,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       }
     }
 
-    settings.syncSettings.lastSyncTime = new Date().toISOString();
-    saveGoogleCalendarSettings(settings);
+    wsSettings.calendarSyncSettings.lastSyncTime = new Date().toISOString();
+    saveGoogleWorkspaceSettings(wsSettings);
 
     emitEvent({
       type: 'sync_completed',
@@ -234,15 +236,15 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
 export function startSync(): void {
   if (syncIntervalId !== null) return;
 
-  if (!isIntegrationEnabled('google_calendar')) return;
+  if (!isGoogleAppEnabled('calendar')) return;
 
-  const settings = loadGoogleCalendarSettings();
-  const intervalMs = settings.syncSettings.syncIntervalMinutes * 60 * 1000;
+  const wsSettings = loadGoogleWorkspaceSettings();
+  const intervalMs = wsSettings.calendarSyncSettings.syncIntervalMinutes * 60 * 1000;
 
   syncNow();
 
   syncIntervalId = setInterval(() => {
-    if (isIntegrationEnabled('google_calendar')) {
+    if (isGoogleAppEnabled('calendar')) {
       syncNow();
     } else {
       stopSync();

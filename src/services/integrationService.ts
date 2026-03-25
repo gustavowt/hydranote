@@ -1,5 +1,6 @@
-import type { IntegrationSettings, IntegrationId } from '@/types';
+import type { IntegrationSettings, IntegrationId, GoogleWorkspaceApp } from '@/types';
 import { DEFAULT_INTEGRATION_SETTINGS } from '@/types';
+import { loadGoogleWorkspaceSettings } from './googleWorkspaceAuthService';
 
 const STORAGE_KEY = 'hydranote_integration_settings';
 
@@ -55,4 +56,14 @@ export function toggleIntegration(
 export function isIntegrationEnabled(id: IntegrationId): boolean {
   const settings = loadIntegrationSettings();
   return settings[id]?.enabled ?? false;
+}
+
+/**
+ * Check if a specific Google Workspace app (meet/calendar) is enabled.
+ * Requires both the workspace integration toggle AND the per-app toggle.
+ */
+export function isGoogleAppEnabled(app: GoogleWorkspaceApp): boolean {
+  if (!isIntegrationEnabled('google_workspace')) return false;
+  const ws = loadGoogleWorkspaceSettings();
+  return ws.enabledApps[app] ?? false;
 }

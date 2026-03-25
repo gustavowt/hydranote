@@ -6,8 +6,6 @@
 
 import type { GoogleMeetSyncEvent, GoogleMeetConferenceRecord, GoogleMeetTranscript } from '../types';
 import {
-  loadGoogleMeetSettings,
-  saveGoogleMeetSettings,
   listConferenceRecords,
   listTranscripts,
   downloadTranscriptDoc,
@@ -15,8 +13,12 @@ import {
   getTranscriptDocumentId,
   getMeetingTopic,
 } from './googleMeetService';
+import {
+  loadGoogleWorkspaceSettings,
+  saveGoogleWorkspaceSettings,
+} from './googleWorkspaceAuthService';
 import { createFile } from './projectService';
-import { isIntegrationEnabled } from './integrationService';
+import { isGoogleAppEnabled } from './integrationService';
 
 type SyncEventCallback = (event: GoogleMeetSyncEvent) => void;
 
@@ -200,8 +202,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
   let errorCount = 0;
 
   try {
-    const settings = loadGoogleMeetSettings();
-    const { targetProjectId } = settings.syncSettings;
+    const wsSettings = loadGoogleWorkspaceSettings();
+    const { targetProjectId } = wsSettings.meetSyncSettings;
 
     if (!targetProjectId) {
       throw new Error('No target project configured for Google Meet sync');
@@ -209,14 +211,14 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
 
     emitEvent({ type: 'sync_started', message: 'Starting Google Meet sync...' });
 
-    const { from, to } = buildDateRange(settings.syncSettings.lastSyncTime);
-    const records = await listConferenceRecords(from, to, settings);
+    const { from, to } = buildDateRange(wsSettings.meetSyncSettings.lastSyncTime);
+    const records = await listConferenceRecords(from, to, wsSettings);
 
     // Fetch transcripts for each conference record
     const transcriptsMap = new Map<string, GoogleMeetTranscript[]>();
     for (const record of records) {
       try {
-        const transcripts = await listTranscripts(record.name, settings);
+        const transcripts = await listTranscripts(record.name, wsSettings);
         transcriptsMap.set(record.name, transcripts);
       } catch {
         // Skip records where transcript listing fails
@@ -226,7 +228,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
     const newRecords = filterNewConferencesWithTranscripts(
       records,
       transcriptsMap,
-      settings.syncSettings.syncedConferenceNames,
+      wsSettings.meetSyncSettings.syncedConferenceNames,
     );
 
     if (newRecords.length === 0) {
@@ -235,8 +237,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
         message: 'No new meetings to sync',
         totalSynced: 0,
       });
-      settings.syncSettings.lastSyncTime = new Date().toISOString();
-      saveGoogleMeetSettings(settings);
+      wsSettings.meetSyncSettings.lastSyncTime = new Date().toISOString();
+      saveGoogleWorkspaceSettings(wsSettings);
       return { synced: 0, errors: 0 };
     }
 
@@ -251,7 +253,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
         const saved = await syncConference(record, transcripts, targetProjectId);
         if (saved) {
           syncedCount++;
-          settings.syncSettings.syncedConferenceNames.push(record.name);
+          wsSettings.meetSyncSettings.syncedConferenceNames.push(record.name);
         }
       } catch (err) {
         errorCount++;
@@ -267,8 +269,8 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       }
     }
 
-    settings.syncSettings.lastSyncTime = new Date().toISOString();
-    saveGoogleMeetSettings(settings);
+    wsSettings.meetSyncSettings.lastSyncTime = new Date().toISOString();
+    saveGoogleWorkspaceSettings(wsSettings);
 
     emitEvent({
       type: 'sync_completed',
@@ -297,15 +299,15 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
 export function startSync(): void {
   if (syncIntervalId !== null) return;
 
-  if (!isIntegrationEnabled('google_meet')) return;
+  if (!isGoogleAppEnabled('meet')) return;
 
-  const settings = loadGoogleMeetSettings();
-  const intervalMs = settings.syncSettings.syncIntervalMinutes * 60 * 1000;
+  const wsSettings = loadGoogleWorkspaceSettings();
+  const intervalMs = wsSettings.meetSyncSettings.syncIntervalMinutes * 60 * 1000;
 
   syncNow();
 
   syncIntervalId = setInterval(() => {
-    if (isIntegrationEnabled('google_meet')) {
+    if (isGoogleAppEnabled('meet')) {
       syncNow();
     } else {
       stopSync();

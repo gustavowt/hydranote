@@ -15,7 +15,7 @@ import type {
 import { DEFAULT_CONTEXT_CONFIG } from '../types';
 import { getProject, get_project_files, getProjectStats, searchProject, getAllProjects, searchAllProjects } from './projectService';
 import { getUpcomingEventsForContext } from './googleCalendarService';
-import { isIntegrationEnabled } from './integrationService';
+import { isIntegrationEnabled, isGoogleAppEnabled } from './integrationService';
 import {
   createChatSession as dbCreateSession,
   getChatSession as dbGetSession,
@@ -51,7 +51,7 @@ export async function buildSystemPrompt(projectId: string): Promise<string> {
 
   // Build calendar context if integration is enabled
   let calendarSection = '';
-  if (isIntegrationEnabled('google_calendar')) {
+  if (isGoogleAppEnabled('calendar')) {
     try {
       const calendarContext = await getUpcomingEventsForContext(24);
       if (calendarContext) {
@@ -213,7 +213,7 @@ When the user refers to "the project", "add a file", or similar without specifyi
 
   // Build calendar context if integration is enabled
   let calendarSection = '';
-  if (isIntegrationEnabled('google_calendar')) {
+  if (isGoogleAppEnabled('calendar')) {
     try {
       const calendarContext = await getUpcomingEventsForContext(24);
       if (calendarContext) {
@@ -364,8 +364,8 @@ ${integrationToolsSection}
 function buildIntegrationToolsPrompt(): string {
   const sections: string[] = [];
 
-  const calendarEnabled = isIntegrationEnabled('google_calendar');
-  const meetingsEnabled = isIntegrationEnabled('google_meet') || isIntegrationEnabled('zoom');
+  const calendarEnabled = isGoogleAppEnabled('calendar');
+  const meetingsEnabled = isGoogleAppEnabled('meet') || isIntegrationEnabled('zoom');
 
   if (calendarEnabled) {
     sections.push(`

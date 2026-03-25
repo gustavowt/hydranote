@@ -67,10 +67,10 @@ import {
   listEvents as listCalendarEvents,
   createEvent as createCalendarEvent,
   getUpcomingEventsForContext,
-  loadGoogleCalendarSettings,
   listCalendars,
 } from "./googleCalendarService";
-import { isIntegrationEnabled } from "./integrationService";
+import { loadGoogleWorkspaceSettings } from "./googleWorkspaceAuthService";
+import { isGoogleAppEnabled } from "./integrationService";
 
 // ============================================
 // Execution Log Types
@@ -2030,7 +2030,7 @@ export async function executeListEventsTool(
   params: ListEventsToolParams,
 ): Promise<ToolResult> {
   try {
-    if (!isIntegrationEnabled('google_calendar')) {
+    if (!isGoogleAppEnabled('calendar')) {
       return {
         success: false,
         tool: 'listEvents',
@@ -2038,12 +2038,12 @@ export async function executeListEventsTool(
       };
     }
 
-    const settings = loadGoogleCalendarSettings();
-    if (!settings.credentials.serviceAccountJson || !settings.credentials.impersonatedUserEmail) {
+    const wsSettings = loadGoogleWorkspaceSettings();
+    if (!wsSettings.credentials.clientId || !wsSettings.credentials.refreshToken) {
       return {
         success: false,
         tool: 'listEvents',
-        error: 'Google Calendar credentials are not configured. Set them up in Settings > Integrations > Google Calendar.',
+        error: 'Google Workspace is not signed in. Sign in via Settings > Integrations > Google Workspace.',
       };
     }
 
@@ -2055,13 +2055,13 @@ export async function executeListEventsTool(
 
     const calendarIds = params.calendarId
       ? [params.calendarId]
-      : settings.syncSettings.selectedCalendarIds.length > 0
-        ? settings.syncSettings.selectedCalendarIds
+      : wsSettings.calendarSyncSettings.selectedCalendarIds.length > 0
+        ? wsSettings.calendarSyncSettings.selectedCalendarIds
         : ['primary'];
 
     const allEvents: GoogleCalendarEvent[] = [];
     for (const calId of calendarIds) {
-      const events = await listCalendarEvents(calId, timeMin, timeMax, settings);
+      const events = await listCalendarEvents(calId, timeMin, timeMax, wsSettings);
       allEvents.push(...events);
     }
 
@@ -2131,7 +2131,7 @@ export async function executeCreateEventTool(
   params: CreateEventToolParams,
 ): Promise<ToolResult> {
   try {
-    if (!isIntegrationEnabled('google_calendar')) {
+    if (!isGoogleAppEnabled('calendar')) {
       return {
         success: false,
         tool: 'createEvent',
@@ -2139,12 +2139,12 @@ export async function executeCreateEventTool(
       };
     }
 
-    const settings = loadGoogleCalendarSettings();
-    if (!settings.credentials.serviceAccountJson || !settings.credentials.impersonatedUserEmail) {
+    const wsSettingsCreate = loadGoogleWorkspaceSettings();
+    if (!wsSettingsCreate.credentials.clientId || !wsSettingsCreate.credentials.refreshToken) {
       return {
         success: false,
         tool: 'createEvent',
-        error: 'Google Calendar credentials are not configured.',
+        error: 'Google Workspace is not signed in. Sign in via Settings > Integrations > Google Workspace.',
       };
     }
 
@@ -2181,7 +2181,7 @@ export async function executeCreateEventTool(
       description: params.description,
       location: params.location,
       attendees,
-    }, settings);
+    }, wsSettingsCreate);
 
     const startDisplay = created.start.dateTime
       ? new Date(created.start.dateTime).toLocaleString()
@@ -2299,19 +2299,19 @@ export async function executePrepareMeetingTool(
     let meetingEvent: GoogleCalendarEvent | undefined;
     let calendarContext = '';
 
-    if (isIntegrationEnabled('google_calendar')) {
-      const settings = loadGoogleCalendarSettings();
-      if (settings.credentials.serviceAccountJson && settings.credentials.impersonatedUserEmail) {
+    if (isGoogleAppEnabled('calendar')) {
+      const wsSettings = loadGoogleWorkspaceSettings();
+      if (wsSettings.credentials.clientId && wsSettings.credentials.refreshToken) {
         const now = new Date();
         const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-        const calendarIds = settings.syncSettings.selectedCalendarIds.length > 0
-          ? settings.syncSettings.selectedCalendarIds
+        const calendarIds = wsSettings.calendarSyncSettings.selectedCalendarIds.length > 0
+          ? wsSettings.calendarSyncSettings.selectedCalendarIds
           : ['primary'];
 
         const allEvents: GoogleCalendarEvent[] = [];
         for (const calId of calendarIds) {
           try {
-            const events = await listCalendarEvents(calId, now.toISOString(), tomorrow.toISOString(), settings);
+            const events = await listCalendarEvents(calId, now.toISOString(), tomorrow.toISOString(), wsSettings);
             allEvents.push(...events);
           } catch {
             // Skip failing calendars
