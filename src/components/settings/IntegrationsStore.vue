@@ -95,12 +95,11 @@ import {
 import type { IntegrationSettings, IntegrationId, IntegrationCategory } from '@/types';
 import { INTEGRATION_CATALOG } from '@/types';
 import {
-  GoogleMeetIcon,
+  GoogleWorkspaceIcon,
   ZoomIcon,
-  GoogleCalendarIcon,
 } from '@/icons';
 
-const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom', 'google_meet', 'google_calendar'];
+const CONFIGURABLE_INTEGRATIONS: IntegrationId[] = ['zoom', 'google_workspace'];
 
 const props = defineProps<{
   modelValue: IntegrationSettings;
@@ -115,15 +114,15 @@ const emit = defineEmits<{
 const activeCategory = ref<'all' | IntegrationCategory>('all');
 
 const categories: { id: IntegrationCategory; label: string }[] = [
+  { id: 'workspace', label: 'Workspace' },
   { id: 'meetings', label: 'Meetings' },
   { id: 'calendar', label: 'Calendar' },
   { id: 'productivity', label: 'Productivity' },
 ];
 
-const iconMap: Record<IntegrationId, typeof GoogleMeetIcon> = {
-  google_meet: GoogleMeetIcon,
+const iconMap: Record<IntegrationId, typeof GoogleWorkspaceIcon> = {
+  google_workspace: GoogleWorkspaceIcon,
   zoom: ZoomIcon,
-  google_calendar: GoogleCalendarIcon,
 };
 
 const filteredIntegrations = computed(() => {

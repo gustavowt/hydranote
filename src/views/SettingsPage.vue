@@ -554,18 +554,11 @@
               @deactivated="handleZoomDeactivated"
             />
 
-            <GoogleMeetSettings
-              v-if="showGoogleMeetSettings"
-              @close="showGoogleMeetSettings = false"
-              @activated="handleGoogleMeetActivated"
-              @deactivated="handleGoogleMeetDeactivated"
-            />
-
-            <GoogleCalendarSettings
-              v-if="showGoogleCalendarSettings"
-              @close="showGoogleCalendarSettings = false"
-              @activated="handleGoogleCalendarActivated"
-              @deactivated="handleGoogleCalendarDeactivated"
+            <GoogleWorkspaceSettings
+              v-if="showGoogleWorkspaceSettings"
+              @close="showGoogleWorkspaceSettings = false"
+              @activated="handleGoogleWorkspaceActivated"
+              @deactivated="handleGoogleWorkspaceDeactivated"
             />
           </section>
 
@@ -893,7 +886,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleMeetSettings, GoogleCalendarSettings } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleWorkspaceSettings } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -1016,8 +1009,7 @@ const webSearchStatus = ref<{
 // Integrations section state
 const integrationSettings = ref<IntegrationSettings>({ ...DEFAULT_INTEGRATION_SETTINGS });
 const showZoomSettings = ref(false);
-const showGoogleMeetSettings = ref(false);
-const showGoogleCalendarSettings = ref(false);
+const showGoogleWorkspaceSettings = ref(false);
 
 // Web search provider configurations
 const webSearchProviders: { id: WebSearchProvider; name: string; description: string; iconComponent: typeof SearxngIcon }[] = [
@@ -1436,10 +1428,8 @@ function handleIntegrationToggle(id: IntegrationId, enabled: boolean) {
 function handleIntegrationConfigure(id: IntegrationId) {
   if (id === 'zoom') {
     showZoomSettings.value = true;
-  } else if (id === 'google_meet') {
-    showGoogleMeetSettings.value = true;
-  } else if (id === 'google_calendar') {
-    showGoogleCalendarSettings.value = true;
+  } else if (id === 'google_workspace') {
+    showGoogleWorkspaceSettings.value = true;
   }
 }
 
@@ -1460,38 +1450,21 @@ function handleZoomDeactivated() {
   showZoomSettings.value = false;
 }
 
-function handleGoogleMeetActivated() {
+function handleGoogleWorkspaceActivated() {
   integrationSettings.value = {
     ...integrationSettings.value,
-    google_meet: { enabled: true, connectedAt: new Date().toISOString() },
+    google_workspace: { enabled: true, connectedAt: new Date().toISOString() },
   };
   saveIntegrationSettings(integrationSettings.value);
 }
 
-function handleGoogleMeetDeactivated() {
+function handleGoogleWorkspaceDeactivated() {
   integrationSettings.value = {
     ...integrationSettings.value,
-    google_meet: { enabled: false, connectedAt: undefined },
+    google_workspace: { enabled: false, connectedAt: undefined },
   };
   saveIntegrationSettings(integrationSettings.value);
-  showGoogleMeetSettings.value = false;
-}
-
-function handleGoogleCalendarActivated() {
-  integrationSettings.value = {
-    ...integrationSettings.value,
-    google_calendar: { enabled: true, connectedAt: new Date().toISOString() },
-  };
-  saveIntegrationSettings(integrationSettings.value);
-}
-
-function handleGoogleCalendarDeactivated() {
-  integrationSettings.value = {
-    ...integrationSettings.value,
-    google_calendar: { enabled: false, connectedAt: undefined },
-  };
-  saveIntegrationSettings(integrationSettings.value);
-  showGoogleCalendarSettings.value = false;
+  showGoogleWorkspaceSettings.value = false;
 }
 
 // Web Search handlers

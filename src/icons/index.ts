@@ -21,4 +21,5 @@ export { default as DuckDuckGoIcon } from './DuckDuckGoIcon.vue';
 export { default as GoogleMeetIcon } from './GoogleMeetIcon.vue';
 export { default as ZoomIcon } from './ZoomIcon.vue';
 export { default as GoogleCalendarIcon } from './GoogleCalendarIcon.vue';
+export { default as GoogleWorkspaceIcon } from './GoogleWorkspaceIcon.vue';
 
