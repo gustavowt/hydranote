@@ -673,14 +673,16 @@ When adding major features, keep these files aligned with the actual workflow an
 src/
 ├── components/
 │   ├── ChatSidebar.vue              # AI chat with project context
+│   ├── DateChipPopover.vue           # Date chip popover with calendar events + create event
 │   ├── FileReferenceAutocomplete.vue # @file: autocomplete
 │   ├── FileTreeNode.vue             # Recursive file tree node
 │   ├── FormatStudio.vue             # Iterative AI formatting modal
-│   ├── MarkdownEditor.vue           # Markdown editor
+│   ├── MarkdownEditor.vue           # Markdown editor (with inline date chips)
 │   ├── PDFViewer.vue                # PDF viewer
 │   ├── RichTextEditor.vue           # WYSIWYG editor for DOCX
 │   ├── ProjectsTreeSidebar.vue      # Projects/files tree
 │   ├── SearchAutocomplete.vue       # Global search bar
+│   ├── TimelineView.vue             # Date-based timeline view of notes + events
 │   ├── UpdateBanner.vue             # App update notification banner
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
@@ -703,7 +705,8 @@ src/
 │   ├── zoomSyncService.ts           # Zoom auto-sync orchestrator
 │   ├── vttParser.ts                 # VTT transcript to Markdown parser
 │   ├── chatService.ts               # Chat session management
-│   ├── database.ts                  # DuckDB operations
+│   ├── database.ts                  # DuckDB operations (includes calendar_events table)
+│   ├── dateDetectionService.ts      # chrono-node date parsing + deadline detection
 │   ├── documentGeneratorService.ts  # PDF/DOCX/MD generation
 │   ├── documentProcessor.ts         # File processing
 │   ├── embeddingService.ts          # Multi-provider embeddings
@@ -744,6 +747,7 @@ src/
 | `file_versions` | Version history (diff-based) |
 | `web_search_cache` | Web search result cache |
 | `web_search_chunks` | Web search content chunks |
+| `calendar_events` | Google Calendar events synced to DuckDB |
 
 ---
 
@@ -831,9 +835,10 @@ The setup guide in the configuration panel walks users through creating a GCP pr
 2. Builds a date range from the configured past/future days (default: 7 days each direction)
 3. For each selected calendar (or primary if none selected), calls `GET /calendar/v3/calendars/{id}/events`
 4. Filters out already-synced event IDs and cancelled events
-5. Formats each event into Markdown (title, date/time, location, attendees, description, Meet link)
-6. Saves as `google-calendar/{date}-{event-title}.md` in the configured target project via `projectService.createFile()`
-7. Tracks synced event IDs in settings to prevent duplicates
+5. Upserts each event into the DuckDB `calendar_events` table (no project/file dependency)
+6. Tracks synced event IDs in settings to prevent duplicates
+
+Events are stored globally in DuckDB and queried by date range for display in date chip popovers and the timeline view.
 
 ### Services
 
@@ -924,3 +929,95 @@ The generated notes are prepended to the file content, with the original transcr
 ### Calendar Context in System Prompt
 
 When Google Calendar is enabled, `buildSystemPrompt()` and `buildGlobalSystemPrompt()` inject today's upcoming events (next 24 hours) into the system prompt. This gives the LLM passive awareness of the user's schedule without requiring an explicit `listEvents` tool call. The integration tool documentation is conditionally included — only tools for enabled integrations appear in the prompt.
+
+---
+
+## Smart Date Detection
+
+Dates mentioned in notes are detected and rendered as interactive chips, with calendar integration and a timeline view.
+
+### Date Detection Service (`dateDetectionService.ts`)
+
+Uses `chrono-node` to parse natural language date expressions from note content.
+
+**Features:**
+- Detects dates like "next Monday", "March 15th", "tomorrow at 3pm", ISO dates, relative dates
+- **Deadline detection**: scans preceding text for keywords (`deadline`, `due`, `due by`, `submit`, `finish by`, `expires`, etc.) and marks the date accordingly
+- Caches results by content hash (30s TTL) to avoid re-parsing on every render
+- Provides `formatDetectedDate()` and `getRelativeTime()` helpers
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `detectDates(text, referenceDate?)` | Parse all dates from text, returns `DetectedDate[]` |
+| `clearDateCache()` | Clear the detection cache |
+| `formatDetectedDate(date)` | Human-readable date string |
+| `getRelativeTime(date)` | Relative description ("in 3 days", "yesterday") |
+
+### Inline Date Chips (MarkdownEditor)
+
+When a note is rendered in preview or split mode, detected dates are wrapped in interactive `<span class="date-chip">` elements:
+
+- **Regular dates**: blue-tinted chip
+- **Deadline dates**: amber-tinted chip (turns red when overdue)
+- Clicking a chip opens the `DateChipPopover` component
+
+The chips are injected by post-processing the `renderedContent` HTML after `marked.parse()`. The `injectDateChips()` function replaces date text in the HTML with styled spans (avoiding replacements inside HTML tags).
+
+### DateChipPopover (`DateChipPopover.vue`)
+
+A floating popover anchored to the clicked date chip. Shows:
+
+- **Resolved date** with relative time indicator
+- **Matching calendar events** for that date (from DuckDB `calendar_events` table)
+- **Create Event button** (when Google Calendar is enabled):
+  - Uses LLM to extract a suggested event title from the surrounding note context
+  - Pre-fills start/end time from the detected date
+  - Creates the event via Google Calendar API and stores it in DuckDB
+
+### Timeline View (`TimelineView.vue`)
+
+A date-based view of the knowledge base, toggled via the clock icon in the workspace header.
+
+**Data sources:**
+- Calendar events from DuckDB (`getCalendarEventsByDateRange`)
+- Note date references: runs `detectDates()` on all notes in the current project (or all projects)
+
+**UI:**
+- Vertical date axis with day-by-day layout
+- Calendar event cards (blue left border) with time, title, location
+- Note reference cards (purple left border, amber for deadlines) with filename and context snippet
+- Clicking a note card opens that file in the editor
+- Date picker / range navigation (back/forward 7 days)
+- "Show empty days" toggle
+- "Today" jump button
+
+### Calendar Events DuckDB Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | VARCHAR | Primary key (UUID) |
+| `google_event_id` | VARCHAR | Google Calendar event ID (indexed, used for dedup) |
+| `calendar_id` | VARCHAR | Google Calendar ID |
+| `calendar_name` | VARCHAR | Human-readable calendar name |
+| `summary` | VARCHAR | Event title |
+| `description` | TEXT | Event description |
+| `location` | VARCHAR | Event location |
+| `start_time` | TIMESTAMP | Start time (indexed) |
+| `end_time` | TIMESTAMP | End time |
+| `all_day` | BOOLEAN | Whether it's an all-day event |
+| `attendees` | TEXT | JSON array of attendees |
+| `hangout_link` | VARCHAR | Google Meet link |
+| `html_link` | VARCHAR | Link to event in Google Calendar |
+| `status` | VARCHAR | Event status (confirmed/tentative/cancelled) |
+| `synced_at` | TIMESTAMP | When the event was synced |
+
+**CRUD functions** (in `database.ts`):
+| Function | Description |
+|----------|-------------|
+| `upsertCalendarEvent(event)` | Insert or update by google_event_id |
+| `getCalendarEventsByDateRange(start, end)` | Query events overlapping a range |
+| `getCalendarEventsForDate(date)` | Query events for a specific day |
+| `getCalendarEventByGoogleId(id)` | Lookup by Google event ID |
+| `deleteCalendarEventsByCalendarId(id)` | Delete all events for a calendar |
+| `getAllCalendarEvents()` | Get all stored events |
