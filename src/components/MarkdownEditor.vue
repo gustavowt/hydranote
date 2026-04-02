@@ -488,12 +488,23 @@
           class="split-resizer"
           @mousedown="startSplitResize"
         ></div>
-        <div class="split-preview markdown-preview" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent"></div>
+        <div class="split-preview markdown-preview" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent" @click="handlePreviewClick"></div>
       </div>
 
       <!-- View Mode -->
-      <div v-else class="preview-pane full markdown-preview" v-html="renderedContent"></div>
+      <div v-else class="preview-pane full markdown-preview" v-html="renderedContent" @click="handlePreviewClick"></div>
     </div>
+
+    <!-- Date Chip Popover -->
+    <DateChipPopover
+      v-if="datePopover.visible"
+      :date="datePopover.date"
+      :type="datePopover.type"
+      :original-text="datePopover.original"
+      :context="datePopover.context"
+      :anchor-rect="datePopover.anchorRect"
+      @close="closeDatePopover"
+    />
 
     <!-- Status Bar -->
     <div class="status-bar">
@@ -606,9 +617,11 @@ import {
   findFileByPath,
   getFile,
   chatCompletion,
+  detectDates,
 } from '@/services';
-import type { DocumentFormat } from '@/types';
+import type { DocumentFormat, DetectedDate } from '@/types';
 import FormatStudio from '@/components/FormatStudio.vue';
+import DateChipPopover from '@/components/DateChipPopover.vue';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -720,6 +733,46 @@ const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
+
+// Date chip popover state
+const datePopover = ref<{
+  visible: boolean;
+  date: string;
+  type: string;
+  original: string;
+  context: string;
+  anchorRect: DOMRect | null;
+}>({
+  visible: false,
+  date: '',
+  type: 'regular',
+  original: '',
+  context: '',
+  anchorRect: null,
+});
+
+function handlePreviewClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const chip = target.closest('.date-chip') as HTMLElement | null;
+
+  if (chip) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = chip.getBoundingClientRect();
+    datePopover.value = {
+      visible: true,
+      date: chip.dataset.date || '',
+      type: chip.dataset.type || 'regular',
+      original: chip.dataset.original || '',
+      context: chip.dataset.context || '',
+      anchorRect: rect,
+    };
+  }
+}
+
+function closeDatePopover() {
+  datePopover.value.visible = false;
+}
 
 // Keyboard shortcuts catalog
 const showShortcutsModal = ref(false);
@@ -890,13 +943,48 @@ const displayFileName = computed(() => {
   return props.currentFile.name || 'Untitled';
 });
 
+function injectDateChips(html: string, dates: DetectedDate[]): string {
+  if (dates.length === 0) return html;
+
+  let result = html;
+  const sorted = [...dates].sort((a, b) => b.text.length - a.text.length);
+  const replaced = new Set<string>();
+
+  for (const d of sorted) {
+    const dateText = d.text;
+    if (replaced.has(dateText)) continue;
+
+    const isoDate = d.date.toISOString().split('T')[0];
+    const isPast = d.type === 'deadline' && d.date < new Date();
+    const chipClass = d.type === 'deadline'
+      ? (isPast ? 'date-chip deadline overdue' : 'date-chip deadline')
+      : 'date-chip';
+
+    const escapedText = dateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?<![\\w-])${escapedText}(?![\\w-])(?![^<]*>)`, 'g');
+
+    const replacement = `<span class="${chipClass}" data-date="${isoDate}" data-type="${d.type}" data-original="${dateText.replace(/"/g, '&quot;')}" data-context="${(d.context || '').replace(/"/g, '&quot;')}">${dateText}</span>`;
+
+    result = result.replace(regex, replacement);
+    replaced.add(dateText);
+  }
+
+  return result;
+}
+
 const renderedContent = computed(() => {
   if (!content.value.trim()) {
     return '<p class="placeholder-text">Preview will appear here...</p>';
   }
-  // Access imageBlobUrls to ensure reactivity triggers re-render when URLs resolve
   imageBlobUrls.value;
-  return marked.parse(content.value, { async: false }) as string;
+  let html = marked.parse(content.value, { async: false }) as string;
+
+  const dates = detectDates(content.value);
+  if (dates.length > 0) {
+    html = injectDateChips(html, dates);
+  }
+
+  return html;
 });
 
 // Normalize a relative image path against the current file's directory
@@ -2746,6 +2834,46 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   font-style: italic;
   padding: 12px;
   text-align: center;
+}
+
+/* Date Chip Styles */
+.markdown-preview :deep(.date-chip) {
+  display: inline;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: rgba(66, 133, 244, 0.12);
+  color: #7aafff;
+  border: 1px solid rgba(66, 133, 244, 0.25);
+}
+
+.markdown-preview :deep(.date-chip:hover) {
+  background: rgba(66, 133, 244, 0.22);
+  border-color: rgba(66, 133, 244, 0.45);
+}
+
+.markdown-preview :deep(.date-chip.deadline) {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.markdown-preview :deep(.date-chip.deadline:hover) {
+  background: rgba(251, 191, 36, 0.22);
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.markdown-preview :deep(.date-chip.deadline.overdue) {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.markdown-preview :deep(.date-chip.deadline.overdue:hover) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.5);
 }
 
 /* Status Bar */
