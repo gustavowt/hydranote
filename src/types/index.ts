@@ -2484,3 +2484,39 @@ export interface GoogleCalendarSyncEvent {
   error?: string;
   totalSynced?: number;
 }
+
+// ============================================
+// Calendar Event Record (DuckDB-persisted)
+// ============================================
+
+export interface CalendarEventRecord {
+  id: string;
+  googleEventId: string;
+  calendarId: string;
+  calendarName?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  startTime: Date;
+  endTime: Date;
+  allDay: boolean;
+  attendees?: string;
+  hangoutLink?: string;
+  htmlLink?: string;
+  status?: string;
+  syncedAt: Date;
+}
+
+// ============================================
+// Date Detection Types
+// ============================================
+
+export interface DetectedDate {
+  text: string;
+  date: Date;
+  endDate?: Date;
+  index: number;
+  length: number;
+  type: 'regular' | 'deadline';
+  context?: string;
+}

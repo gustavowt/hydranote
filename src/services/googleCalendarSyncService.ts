@@ -1,7 +1,7 @@
 /**
  * Google Calendar Sync Service
  * Orchestrates automatic syncing of Google Calendar events.
- * Polls for new events within a configurable date range and saves them as Markdown files.
+ * Polls for new events within a configurable date range and stores them in DuckDB.
  */
 
 import type { GoogleCalendarSyncEvent, GoogleCalendarEvent } from '../types';
@@ -9,15 +9,12 @@ import {
   listCalendars,
   listEvents,
   filterNewEvents,
-  formatEventToMarkdown,
-  getEventDatePrefix,
-  sanitizeFileName,
 } from './googleCalendarService';
 import {
   loadGoogleWorkspaceSettings,
   saveGoogleWorkspaceSettings,
 } from './googleWorkspaceAuthService';
-import { createFile } from './projectService';
+import { upsertCalendarEvent } from './database';
 import { isGoogleAppEnabled } from './integrationService';
 
 type SyncEventCallback = (event: GoogleCalendarSyncEvent) => void;
@@ -68,19 +65,40 @@ function buildDateRange(pastDays: number, futureDays: number): { timeMin: string
   };
 }
 
+function parseEventDateTime(dt: { dateTime?: string; date?: string }): Date {
+  if (dt.dateTime) return new Date(dt.dateTime);
+  if (dt.date) return new Date(dt.date + 'T00:00:00');
+  return new Date();
+}
+
 async function syncEvent(
   event: GoogleCalendarEvent,
-  targetProjectId: string,
+  calendarId: string,
   calendarName?: string,
 ): Promise<boolean> {
   if (!event.id || !event.summary) return false;
 
-  const markdown = formatEventToMarkdown(event, calendarName);
-  const datePrefix = getEventDatePrefix(event);
-  const safeTitle = sanitizeFileName(event.summary);
-  const filePath = `google-calendar/${datePrefix}-${safeTitle}.md`;
+  const startTime = parseEventDateTime(event.start);
+  const endTime = parseEventDateTime(event.end);
+  const allDay = !event.start.dateTime && !!event.start.date;
 
-  await createFile(targetProjectId, filePath, markdown, 'md');
+  await upsertCalendarEvent({
+    id: crypto.randomUUID(),
+    googleEventId: event.id,
+    calendarId,
+    calendarName,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    startTime,
+    endTime,
+    allDay,
+    attendees: event.attendees ? JSON.stringify(event.attendees) : undefined,
+    hangoutLink: event.hangoutLink,
+    htmlLink: event.htmlLink,
+    status: event.status,
+    syncedAt: new Date(),
+  });
 
   emitEvent({
     type: 'event_saved',
@@ -106,11 +124,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
 
   try {
     const wsSettings = loadGoogleWorkspaceSettings();
-    const { targetProjectId, pastDays, futureDays, selectedCalendarIds } = wsSettings.calendarSyncSettings;
-
-    if (!targetProjectId) {
-      throw new Error('No target project configured for Google Calendar sync');
-    }
+    const { pastDays, futureDays, selectedCalendarIds } = wsSettings.calendarSyncSettings;
 
     emitEvent({ type: 'sync_started', message: 'Starting Google Calendar sync...' });
 
@@ -149,7 +163,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       return { synced: 0, errors: 0 };
     }
 
-    let allNewEvents: Array<{ event: GoogleCalendarEvent; calendarName?: string }> = [];
+    let allNewEvents: Array<{ event: GoogleCalendarEvent; calendarId: string; calendarName?: string }> = [];
 
     for (const calId of calendarIds) {
       try {
@@ -157,7 +171,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
         const newEvents = filterNewEvents(events, wsSettings.calendarSyncSettings.syncedEventIds);
         const calName = calendarNameMap.get(calId);
         for (const ev of newEvents) {
-          allNewEvents.push({ event: ev, calendarName: calName });
+          allNewEvents.push({ event: ev, calendarId: calId, calendarName: calName });
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -186,9 +200,9 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       message: `Found ${allNewEvents.length} new event(s) to sync`,
     });
 
-    for (const { event, calendarName } of allNewEvents) {
+    for (const { event, calendarId, calendarName } of allNewEvents) {
       try {
-        const saved = await syncEvent(event, targetProjectId, calendarName);
+        const saved = await syncEvent(event, calendarId, calendarName);
         if (saved && event.id) {
           syncedCount++;
           wsSettings.calendarSyncSettings.syncedEventIds.push(event.id);

@@ -4,8 +4,8 @@
  */
 
 // Database
-export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles, updateProjectStatus } from './database';
-export type { FuzzySearchResult } from './database';
+export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles, updateProjectStatus, upsertCalendarEvent, getCalendarEventsByDateRange, getCalendarEventByGoogleId, getCalendarEventsForDate, deleteCalendarEventsByCalendarId, getAllCalendarEvents } from './database';
+export type { FuzzySearchResult, DBCalendarEvent } from './database';
 
 // Project Service
 export {
@@ -449,6 +449,14 @@ export {
   isSyncing as isGoogleMeetSyncing,
   isSyncRunning as isGoogleMeetSyncRunning,
 } from './googleMeetSyncService';
+
+// Date Detection Service
+export {
+  detectDates,
+  clearDateCache,
+  formatDetectedDate,
+  getRelativeTime,
+} from './dateDetectionService';
 
 // Google Calendar Service
 export {

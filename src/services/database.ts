@@ -4,7 +4,7 @@
  */
 
 import * as duckdb from '@duckdb/duckdb-wasm';
-import type { Project, ProjectFile, Chunk, Embedding } from '../types';
+import type { Project, ProjectFile, Chunk, Embedding, CalendarEventRecord } from '../types';
 
 /**
  * Convert Uint8Array to base64 string efficiently (avoids stack overflow for large files)
@@ -249,6 +249,39 @@ async function createSchema(): Promise<void> {
 
   await connection.query(`
     CREATE INDEX IF NOT EXISTS idx_file_versions_version ON file_versions(file_id, version_number)
+  `);
+
+  // Calendar events table (synced from Google Calendar)
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id VARCHAR PRIMARY KEY,
+      google_event_id VARCHAR NOT NULL,
+      calendar_id VARCHAR NOT NULL,
+      calendar_name VARCHAR,
+      summary VARCHAR,
+      description TEXT,
+      location VARCHAR,
+      start_time TIMESTAMP NOT NULL,
+      end_time TIMESTAMP NOT NULL,
+      all_day BOOLEAN DEFAULT FALSE,
+      attendees TEXT,
+      hangout_link VARCHAR,
+      html_link VARCHAR,
+      status VARCHAR,
+      synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_google_id ON calendar_events(google_event_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_time)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(start_time, end_time)
   `);
 
   // Migration: Add binary_data and html_content columns to files table
@@ -1330,5 +1363,142 @@ export async function updateVersionToFullContent(versionId: string, fullContent:
     WHERE id = '${versionId}'
   `);
   await flushDatabase();
+}
+
+// ============================================
+// Calendar Event Operations
+// ============================================
+
+export interface DBCalendarEvent {
+  id: string;
+  googleEventId: string;
+  calendarId: string;
+  calendarName?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  startTime: Date;
+  endTime: Date;
+  allDay: boolean;
+  attendees?: string;
+  hangoutLink?: string;
+  htmlLink?: string;
+  status?: string;
+  syncedAt: Date;
+}
+
+function escapeSQL(val: string | undefined | null): string {
+  if (val == null) return 'NULL';
+  return `'${String(val).replace(/'/g, "''")}'`;
+}
+
+export async function upsertCalendarEvent(event: DBCalendarEvent): Promise<void> {
+  const conn = getConnection();
+
+  const existing = await conn.query(
+    `SELECT id FROM calendar_events WHERE google_event_id = ${escapeSQL(event.googleEventId)} LIMIT 1`
+  );
+
+  if (existing.toArray().length > 0) {
+    await conn.query(`
+      UPDATE calendar_events SET
+        calendar_id = ${escapeSQL(event.calendarId)},
+        calendar_name = ${escapeSQL(event.calendarName)},
+        summary = ${escapeSQL(event.summary)},
+        description = ${escapeSQL(event.description)},
+        location = ${escapeSQL(event.location)},
+        start_time = '${event.startTime.toISOString()}',
+        end_time = '${event.endTime.toISOString()}',
+        all_day = ${event.allDay},
+        attendees = ${escapeSQL(event.attendees)},
+        hangout_link = ${escapeSQL(event.hangoutLink)},
+        html_link = ${escapeSQL(event.htmlLink)},
+        status = ${escapeSQL(event.status)},
+        synced_at = '${event.syncedAt.toISOString()}'
+      WHERE google_event_id = ${escapeSQL(event.googleEventId)}
+    `);
+  } else {
+    await conn.query(`
+      INSERT INTO calendar_events (
+        id, google_event_id, calendar_id, calendar_name, summary, description,
+        location, start_time, end_time, all_day, attendees, hangout_link,
+        html_link, status, synced_at
+      ) VALUES (
+        ${escapeSQL(event.id)}, ${escapeSQL(event.googleEventId)}, ${escapeSQL(event.calendarId)},
+        ${escapeSQL(event.calendarName)}, ${escapeSQL(event.summary)}, ${escapeSQL(event.description)},
+        ${escapeSQL(event.location)}, '${event.startTime.toISOString()}', '${event.endTime.toISOString()}',
+        ${event.allDay}, ${escapeSQL(event.attendees)}, ${escapeSQL(event.hangoutLink)},
+        ${escapeSQL(event.htmlLink)}, ${escapeSQL(event.status)}, '${event.syncedAt.toISOString()}'
+      )
+    `);
+  }
+
+  await flushDatabase();
+}
+
+function mapCalendarEventRow(row: Record<string, unknown>): DBCalendarEvent {
+  return {
+    id: row.id as string,
+    googleEventId: row.google_event_id as string,
+    calendarId: row.calendar_id as string,
+    calendarName: row.calendar_name as string | undefined,
+    summary: row.summary as string | undefined,
+    description: row.description as string | undefined,
+    location: row.location as string | undefined,
+    startTime: new Date(row.start_time as string),
+    endTime: new Date(row.end_time as string),
+    allDay: row.all_day as boolean,
+    attendees: row.attendees as string | undefined,
+    hangoutLink: row.hangout_link as string | undefined,
+    htmlLink: row.html_link as string | undefined,
+    status: row.status as string | undefined,
+    syncedAt: new Date(row.synced_at as string),
+  };
+}
+
+export async function getCalendarEventsByDateRange(
+  startDate: Date,
+  endDate: Date,
+): Promise<DBCalendarEvent[]> {
+  const conn = getConnection();
+  const result = await conn.query(`
+    SELECT * FROM calendar_events
+    WHERE start_time <= '${endDate.toISOString()}'
+      AND end_time >= '${startDate.toISOString()}'
+    ORDER BY start_time ASC
+  `);
+  return result.toArray().map(mapCalendarEventRow);
+}
+
+export async function getCalendarEventByGoogleId(
+  googleEventId: string,
+): Promise<DBCalendarEvent | null> {
+  const conn = getConnection();
+  const result = await conn.query(
+    `SELECT * FROM calendar_events WHERE google_event_id = ${escapeSQL(googleEventId)} LIMIT 1`
+  );
+  const rows = result.toArray();
+  if (rows.length === 0) return null;
+  return mapCalendarEventRow(rows[0]);
+}
+
+export async function deleteCalendarEventsByCalendarId(calendarId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM calendar_events WHERE calendar_id = ${escapeSQL(calendarId)}`);
+  await flushDatabase();
+}
+
+export async function getAllCalendarEvents(): Promise<DBCalendarEvent[]> {
+  const conn = getConnection();
+  const result = await conn.query(`SELECT * FROM calendar_events ORDER BY start_time ASC`);
+  return result.toArray().map(mapCalendarEventRow);
+}
+
+export async function getCalendarEventsForDate(date: Date): Promise<DBCalendarEvent[]> {
+  const dayStart = new Date(date);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(date);
+  dayEnd.setHours(23, 59, 59, 999);
+  return getCalendarEventsByDateRange(dayStart, dayEnd);
 }
 

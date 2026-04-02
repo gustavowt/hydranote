@@ -167,7 +167,7 @@
           </div>
           <div class="app-info">
             <span class="app-name">Google Calendar</span>
-            <span class="app-desc">Sync events as Markdown notes</span>
+            <span class="app-desc">Sync events &amp; detect dates in notes</span>
           </div>
         </label>
       </div>
@@ -305,37 +305,6 @@
             </span>
           </label>
         </div>
-      </div>
-
-      <div class="field-group">
-        <label>Target Project</label>
-        <select v-model="localSettings.calendarSyncSettings.targetProjectId" class="select-input">
-          <option value="">Select a project...</option>
-          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
-        <div v-if="!creatingCalProject" class="inline-create-trigger">
-          <button class="btn-inline-create" @click="creatingCalProject = true" type="button">
-            <ion-icon :icon="addCircleOutline" />
-            <span>Create new project</span>
-          </button>
-        </div>
-        <div v-else class="inline-create-form">
-          <input
-            v-model="newCalProjectName"
-            type="text"
-            class="text-input"
-            placeholder="New project name"
-            @keydown.enter="handleCreateCalProject"
-          />
-          <button class="btn btn-primary btn-sm" @click="handleCreateCalProject" :disabled="!newCalProjectName.trim() || creatingCalProjectLoading">
-            <ion-spinner v-if="creatingCalProjectLoading" name="crescent" />
-            <span v-else>Create</span>
-          </button>
-          <button class="btn btn-secondary btn-sm" @click="creatingCalProject = false; newCalProjectName = ''" :disabled="creatingCalProjectLoading">
-            Cancel
-          </button>
-        </div>
-        <span class="field-hint">Events will be saved in a <code>google-calendar/</code> directory inside this project.</span>
       </div>
 
       <div class="field-row">
@@ -527,10 +496,6 @@ const creatingMeetProject = ref(false);
 const newMeetProjectName = ref('');
 const creatingMeetProjectLoading = ref(false);
 
-// Project creation for Calendar
-const creatingCalProject = ref(false);
-const newCalProjectName = ref('');
-const creatingCalProjectLoading = ref(false);
 
 const hasClientCredentials = computed(() => {
   const c = localSettings.value.credentials;
@@ -542,9 +507,8 @@ const hasAnyAppEnabled = computed(() => {
 });
 
 const hasRequiredTargetProjects = computed(() => {
-  const { enabledApps, meetSyncSettings, calendarSyncSettings } = localSettings.value;
+  const { enabledApps, meetSyncSettings } = localSettings.value;
   if (enabledApps.meet && !meetSyncSettings.targetProjectId) return false;
-  if (enabledApps.calendar && !calendarSyncSettings.targetProjectId) return false;
   return true;
 });
 
@@ -689,26 +653,6 @@ async function handleCreateMeetProject() {
   }
 }
 
-async function handleCreateCalProject() {
-  const name = newCalProjectName.value.trim();
-  if (!name) return;
-  creatingCalProjectLoading.value = true;
-  try {
-    const project = await createProject(name);
-    projects.value.push(project);
-    localSettings.value.calendarSyncSettings.targetProjectId = project.id;
-    newCalProjectName.value = '';
-    creatingCalProject.value = false;
-    const toast = await toastController.create({ message: `Project "${project.name}" created`, duration: 2000, color: 'success', position: 'top' });
-    await toast.present();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const toast = await toastController.create({ message: `Failed to create project: ${msg}`, duration: 3000, color: 'danger', position: 'top' });
-    await toast.present();
-  } finally {
-    creatingCalProjectLoading.value = false;
-  }
-}
 
 async function handleTestConnection() {
   testing.value = true;
@@ -1309,7 +1253,7 @@ async function handleCalSyncNow() {
   gap: 8px;
 }
 
-.calendar-item {
+.calendar-list .calendar-item {
   display: flex;
   align-items: center;
   gap: 10px;
