@@ -24,6 +24,9 @@
           
           <!-- Right: Actions -->
           <div class="header-actions">
+            <ion-button fill="clear" @click="showTimeline = !showTimeline" :class="{ 'timeline-active': showTimeline }">
+              <ion-icon slot="icon-only" :icon="timeOutline" />
+            </ion-button>
             <ion-button @click="handleNewNote" class="add-note-btn">
               <ion-icon slot="start" :icon="addOutline" />
               New Note
@@ -62,10 +65,17 @@
         @mousedown="startLeftResize"
       ></div>
 
-      <!-- Center: Editor (routes based on file type) -->
+      <!-- Center: Timeline or Editor -->
+      <!-- Timeline View -->
+      <TimelineView
+        v-if="showTimeline"
+        :project-id="selectedProjectId"
+        @close="showTimeline = false"
+        @open-file="handleTimelineOpenFile"
+      />
       <!-- PDF Viewer (readonly, loads from file system) -->
       <PDFViewer
-        v-if="currentFile && currentFile.type === 'pdf'"
+        v-else-if="currentFile && currentFile.type === 'pdf'"
         ref="pdfViewerRef"
         :current-file="currentFile"
         :current-project="currentProject"
@@ -195,6 +205,7 @@ import {
 import {
   addOutline,
   settingsOutline,
+  timeOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult } from '@/types';
 import {
@@ -217,6 +228,7 @@ import RichTextEditor from '@/components/RichTextEditor.vue';
 import PDFViewer from '@/components/PDFViewer.vue';
 import ChatSidebar from '@/components/ChatSidebar.vue';
 import SearchAutocomplete from '@/components/SearchAutocomplete.vue';
+import TimelineView from '@/components/TimelineView.vue';
 
 const router = useRouter();
 
@@ -239,6 +251,9 @@ const currentProject = ref<Project | null>(null);
 const currentFile = ref<ProjectFile | null>(null);
 const editorInitialContent = ref('');
 const pdfData = ref<ArrayBuffer | null>(null);
+
+// Timeline view state
+const showTimeline = ref(false);
 
 // Sidebar resizer state
 const leftSidebarWidth = ref(280); // px
@@ -409,6 +424,11 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
 
 function handleChatProjectChange(projectId: string) {
   selectedProjectId.value = projectId;
+}
+
+async function handleTimelineOpenFile(fileId: string, projectId: string) {
+  showTimeline.value = false;
+  await handleFileSelect(projectId, { id: fileId, path: '', type: 'md' });
 }
 
 // Handle project list changes from chat (create, delete, move operations)
@@ -908,6 +928,10 @@ async function handleCreateProject() {
 
 .add-note-btn:active {
   transform: translateY(0);
+}
+
+.timeline-active {
+  --color: var(--hn-purple-light) !important;
 }
 
 /* Workspace Layout */
