@@ -1210,33 +1210,27 @@ export async function getAllFilesForAutocomplete(): Promise<Array<{
   projectName: string;
 }>> {
   await ensureInitialized();
-  
-  const projects = await dbGetAllProjects();
-  const allFiles: Array<{
-    id: string;
-    name: string;
-    path: string;
-    type: SupportedFileType;
-    projectId: string;
-    projectName: string;
-  }> = [];
-  
-  for (const project of projects) {
-    const files = await get_project_files(project.id);
-    
-    for (const f of files) {
-      allFiles.push({
-        id: f.id,
-        name: f.name.split('/').pop() || f.name,
-        path: f.name,
-        type: f.type,
-        projectId: project.id,
-        projectName: project.name,
-      });
-    }
-  }
-  
-  // Sort by project name, then file name
+
+  const conn = getConnection();
+  const result = await conn.query(`
+    SELECT f.id, f.name, f.type, f.project_id, p.name AS project_name
+    FROM files f
+    INNER JOIN projects p ON p.id = f.project_id
+    ORDER BY p.name ASC, f.name ASC
+  `);
+
+  const allFiles = result.toArray().map((row: Record<string, unknown>) => {
+    const path = row.name as string;
+    return {
+      id: row.id as string,
+      name: path.split('/').pop() || path,
+      path,
+      type: row.type as SupportedFileType,
+      projectId: row.project_id as string,
+      projectName: row.project_name as string,
+    };
+  });
+
   return allFiles.sort((a, b) => {
     const projectCompare = a.projectName.localeCompare(b.projectName);
     if (projectCompare !== 0) return projectCompare;

@@ -54,6 +54,7 @@ export {
   createChatSession,
   getChatSession,
   getOrCreateSession,
+  loadActiveSessionAndHistory,
   addMessage,
   getMessages,
   clearSession,

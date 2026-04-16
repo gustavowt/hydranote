@@ -626,31 +626,42 @@ export async function switchToSession(sessionId: string): Promise<ChatSession | 
  * @param projectId - Project ID, or undefined for global session
  */
 export async function getOrCreateSession(projectId?: string): Promise<ChatSession> {
-  // Check cache first for an active session
+  const { session } = await loadActiveSessionAndHistory(projectId);
+  return session;
+}
+
+/**
+ * Loads the active chat session and full session history for the scope in one
+ * round-trip when possible (avoids duplicate session-list queries).
+ */
+export async function loadActiveSessionAndHistory(projectId?: string): Promise<{
+  session: ChatSession;
+  history: ChatSession[];
+}> {
+  const historyRows = await dbGetSessionsByProject(projectId ?? null, MAX_SESSIONS_PER_PROJECT);
+  const history = historyRows.map((s) => dbSessionToSession(s));
+
   for (const session of activeSessions.values()) {
-    if (projectId === undefined && session.projectId === undefined) {
-      return session;
-    }
-    if (projectId && session.projectId === projectId) {
-      return session;
+    const match =
+      projectId === undefined ? session.projectId === undefined : session.projectId === projectId;
+    if (match) {
+      return { session, history };
     }
   }
-  
-  // Check database for existing sessions
-  const existingSessions = await dbGetSessionsByProject(projectId ?? null, 1);
-  if (existingSessions.length > 0) {
-    // Load the most recent session
-    const dbSession = existingSessions[0];
+
+  if (historyRows.length > 0) {
+    const dbSession = historyRows[0];
     const dbMessages = await dbGetMessages(dbSession.id);
     const messages: ChatMessage[] = dbMessages.map(dbMessageToChatMessage);
-    
     const session = dbSessionToSession(dbSession, messages);
     activeSessions.set(session.id, session);
-    return session;
+    return { session, history };
   }
-  
-  // Create new session
-  return createChatSession(projectId);
+
+  const session = await createChatSession(projectId);
+  const afterRows = await dbGetSessionsByProject(projectId ?? null, MAX_SESSIONS_PER_PROJECT);
+  const afterHistory = afterRows.map((s) => dbSessionToSession(s));
+  return { session, history: afterHistory };
 }
 
 /**

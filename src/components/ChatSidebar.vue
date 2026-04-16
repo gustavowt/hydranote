@@ -536,7 +536,7 @@ import {
 import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, ToolAttachment, WorkingContext, ToolResult, ProjectFile } from '@/types';
 import type { ExecutionStep } from '@/services';
 import {
-  getOrCreateSession,
+  loadActiveSessionAndHistory,
   addMessage,
   getMessages,
   buildSystemPrompt,
@@ -806,16 +806,13 @@ async function loadSession() {
   } else {
     selectedProjectId.value = selectedScope.value;
   }
-  
-  // Get or create session (undefined for global, projectId for project-specific)
-  const session = await getOrCreateSession(selectedProjectId.value);
+
+  const { session, history } = await loadActiveSessionAndHistory(selectedProjectId.value);
   sessionId.value = session.id;
   messages.value = getMessages(session.id);
   currentSessionTitle.value = session.title || 'New Chat';
   sessionReady.value = true;
-  
-  // Load chat history for this project/global
-  await loadChatHistory();
+  chatHistory.value = history;
 }
 
 async function loadChatHistory() {
@@ -2121,6 +2118,16 @@ function toggleCollapse() {
   emit('collapse-change', isCollapsed.value);
 }
 
+function focusChatInput() {
+  if (isCollapsed.value) {
+    isCollapsed.value = false;
+    emit('collapse-change', false);
+  }
+  nextTick(() => {
+    richInputRef.value?.focus();
+  });
+}
+
 function toggleToolLog() {
   isToolLogExpanded.value = !isToolLogExpanded.value;
 }
@@ -2502,7 +2509,7 @@ function insertSelection(selection: SelectionContext) {
   });
 }
 
-defineExpose({ selectProject, selectGlobalMode, insertSelection });
+defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput, sendMessage });
 </script>
 
 <style scoped>
