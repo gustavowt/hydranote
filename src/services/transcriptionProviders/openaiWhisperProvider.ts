@@ -7,6 +7,36 @@ import type { TranscriptionResult } from '../../types';
 import type { TranscriptionProviderInterface } from './base';
 import { loadSettings as loadLLMSettings } from '../llmService';
 
+function transcriptionResponseFormat(model: string): string {
+  if (model === 'whisper-1') return 'verbose_json';
+  if (model.includes('diarize')) return 'diarized_json';
+  return 'json';
+}
+
+function parseOpenAiTranscriptionJson(model: string, data: Record<string, unknown>): TranscriptionResult {
+  const topText = typeof data.text === 'string' ? data.text.trim() : '';
+  if (topText) {
+    return {
+      text: topText,
+      language: typeof data.language === 'string' ? data.language : undefined,
+      duration: typeof data.duration === 'number' ? data.duration : undefined,
+    };
+  }
+
+  const segments = data.segments;
+  if (model.includes('diarize') && Array.isArray(segments) && segments.length > 0) {
+    const lines = (segments as Array<{ speaker?: string; text?: string }>).map((s) => {
+      const t = (s.text ?? '').trim();
+      if (!t) return '';
+      const sp = typeof s.speaker === 'string' && s.speaker.trim() !== '' ? `${s.speaker.trim()}: ` : '';
+      return `${sp}${t}`;
+    }).filter(Boolean);
+    return { text: lines.join('\n') };
+  }
+
+  return { text: '' };
+}
+
 export class OpenAIWhisperProvider implements TranscriptionProviderInterface {
   readonly name = 'OpenAI Whisper';
   private model: string;
@@ -43,7 +73,10 @@ export class OpenAIWhisperProvider implements TranscriptionProviderInterface {
     const formData = new FormData();
     formData.append('file', audioBlob, `recording.${extension}`);
     formData.append('model', this.model);
-    formData.append('response_format', 'verbose_json');
+    formData.append('response_format', transcriptionResponseFormat(this.model));
+    if (this.model.includes('diarize')) {
+      formData.append('chunking_strategy', 'auto');
+    }
     if (language) {
       formData.append('language', language);
     }
@@ -61,16 +94,7 @@ export class OpenAIWhisperProvider implements TranscriptionProviderInterface {
       throw new Error(`OpenAI Whisper API error (${response.status}): ${errorBody}`);
     }
 
-    const data = await response.json() as {
-      text: string;
-      language?: string;
-      duration?: number;
-    };
-
-    return {
-      text: data.text,
-      language: data.language,
-      duration: data.duration,
-    };
+    const data = await response.json() as Record<string, unknown>;
+    return parseOpenAiTranscriptionJson(this.model, data);
   }
 }

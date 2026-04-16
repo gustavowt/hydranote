@@ -280,11 +280,16 @@
       white-space: normal;
       font-size: 1rem;
       position: relative;
+      aspect-ratio: 1024 / 570;
+      background: var(--bg-surface);
     }
 
     .carousel-slide img {
+      position: absolute;
+      inset: 0;
       width: 100%;
-      height: auto;
+      height: 100%;
+      object-fit: contain;
       display: block;
     }
 
@@ -293,6 +298,7 @@
       bottom: 0;
       left: 0;
       right: 0;
+      z-index: 1;
       padding: 16px 20px;
       background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
       font-size: 0.85rem;
@@ -734,6 +740,10 @@
             <img src="screenshot-mcp-server.png" alt="MCP server integration settings" loading="lazy" />
             <span class="slide-label">MCP Server — Expose workspace to external LLM tools</span>
           </div>
+          <div class="carousel-slide">
+            <img src="screenshot-dictation.png" alt="Dictation settings with push-to-talk, providers, and speech models" loading="lazy" />
+            <span class="slide-label">Dictation — Push-to-talk with cloud or local Whisper and model downloads</span>
+          </div>
         </div>
         <button class="carousel-btn prev" onclick="moveSlide(-1)" aria-label="Previous screenshot">&#8249;</button>
         <button class="carousel-btn next" onclick="moveSlide(1)" aria-label="Next screenshot">&#8250;</button>
@@ -801,6 +811,11 @@
         <div class="feature-icon teal">&#x1f517;</div>
         <h3>External Integrations</h3>
         <p>Connect Google Meet, Zoom, and Google Calendar to capture meeting notes, transcripts, and event-linked reminders.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon purple">&#x1f3a4;</div>
+        <h3>Push-to-Talk Dictation</h3>
+        <p>Hold a shortcut to transcribe with OpenAI Whisper, Deepgram, or offline local Whisper via Transformers.js. System tray controls, optional recording indicator, and downloadable speech models.</p>
       </div>
     </div>
   </div>

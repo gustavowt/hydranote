@@ -2547,6 +2547,20 @@ export const LOCAL_SPEECH_MODELS: SpeechModelInfo[] = [
   { id: 'large-v3',  name: 'Whisper large v3 turbo',    size: '~3 GB',   description: 'Best accuracy, multilingual', onnxModelId: 'onnx-community/whisper-large-v3-turbo' },
 ];
 
+/** OpenAI `/v1/audio/transcriptions` model IDs shown in Dictation settings (cloud). */
+export interface OpenAiTranscriptionModelInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export const OPENAI_TRANSCRIPTION_MODELS: OpenAiTranscriptionModelInfo[] = [
+  { id: 'whisper-1', name: 'Whisper 1', description: 'Original Whisper API model; supports verbose JSON with timing hints.' },
+  { id: 'gpt-4o-mini-transcribe', name: 'GPT-4o mini Transcribe', description: 'Lower latency and cost; good for clear speech.' },
+  { id: 'gpt-4o-transcribe', name: 'GPT-4o Transcribe', description: 'Higher accuracy on noisy or difficult audio.' },
+  { id: 'gpt-4o-transcribe-diarize', name: 'GPT-4o Transcribe (diarize)', description: 'Speaker segments; best for multi-speaker clips (labels appear in the transcript).' },
+];
+
 export interface TranscriptionProviderConfig {
   openaiWhisper: {
     model: string;

@@ -581,6 +581,8 @@ Global Shortcut (Electron) → IPC toggle → dictationService (mic capture)
 
 Providers implement `TranscriptionProviderInterface` from `transcriptionProviders/base.ts`.
 
+**OpenAI cloud transcription models:** The Dictation UI lists model IDs from `OPENAI_TRANSCRIPTION_MODELS` in `src/types/index.ts` (Whisper 1 plus GPT-4o transcribe variants). `openaiWhisperProvider.ts` picks a compatible `response_format` for each model (`verbose_json` for `whisper-1`, `json` for GPT-4o transcribe / mini, `diarized_json` with `chunking_strategy=auto` for `gpt-4o-transcribe-diarize`) and normalizes the JSON into plain text for the rest of the pipeline.
+
 ### Local Speech Models
 
 When using Local Whisper, users pick from a catalog of ONNX Whisper models (defined in `LOCAL_SPEECH_MODELS` in `src/types/index.ts`):
@@ -787,7 +789,7 @@ A static landing/marketing page is deployed to [gustavowt.github.io/hydranote](h
 1. Go to repository Settings → Pages
 2. Under "Build and deployment", set Source to **GitHub Actions**
 
-**Adding screenshots:** Place images in `landing/` and reference them in `index.html`. The screenshot placeholder in the hero section should be replaced with an actual `<img>` tag.
+**Adding screenshots:** Add PNGs under `landing/` and append a slide to the screenshot carousel in `landing/index.html` (same pattern as `screenshot-workspace.png`, `screenshot-dictation.png`, etc.).
 
 ---
 

@@ -90,7 +90,13 @@
               <div class="field-group">
                 <label>Model</label>
                 <select v-model="settings.providerConfig.openaiWhisper.model" @change="handleSave">
-                  <option value="whisper-1">whisper-1</option>
+                  <option
+                    v-for="m in openAiTranscriptionModels"
+                    :key="m.id"
+                    :value="m.id"
+                  >
+                    {{ m.name }} — {{ m.description }}
+                  </option>
                 </select>
                 <span class="field-hint">Uses your OpenAI API key from AI Providers settings.</span>
               </div>
@@ -328,6 +334,7 @@ import {
   DEFAULT_TRANSCRIPTION_PROVIDER_CONFIG,
   DEFAULT_CLEANUP_CONFIG,
   LOCAL_SPEECH_MODELS,
+  OPENAI_TRANSCRIPTION_MODELS,
 } from '@/types';
 import { loadDictationSettings, saveDictationSettings } from '@/services/dictationSettingsService';
 
@@ -346,6 +353,7 @@ const testing = ref(false);
 const statusMessage = ref<{ success: boolean; message: string } | null>(null);
 
 const speechModels = LOCAL_SPEECH_MODELS;
+const openAiTranscriptionModels = OPENAI_TRANSCRIPTION_MODELS;
 const modelStatuses = ref<Record<string, boolean>>({});
 const downloadingModelId = ref<string | null>(null);
 const downloadProgress = ref(0);
