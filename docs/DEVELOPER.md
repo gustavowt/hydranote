@@ -41,6 +41,12 @@ User Input → Router → Tool Selection → Tool Execution → LLM Response →
 
 The app initializes the database before mounting Vue. All services use `projectService` functions which call `ensureInitialized()` internally.
 
+**Workspace / DuckDB load patterns (performance):**
+
+- `WorkspacePage` loads the project list in `onIonViewWillEnter` only, so entering the workspace does not run the same `getAllProjects` work twice on first mount.
+- `getAllFilesForAutocomplete` uses one SQL query (files joined with projects) instead of one query per project; it backs the header search index and other autocomplete callers.
+- Chat scope changes use `loadActiveSessionAndHistory` so session list + active session load share one session-list query when the in-memory cache does not already hold the active session.
+
 ---
 
 ## Services
@@ -192,6 +198,7 @@ Manages chat sessions with persistent history in DuckDB.
 | `buildGlobalSystemPrompt(workingContext?)` | Build global system prompt with optional working context |
 | `createChatSession(projectId, title?)` | Create new session (max 20 per project) |
 | `getSessionHistory(projectId?)` | Get all sessions for project/global |
+| `loadActiveSessionAndHistory(projectId?)` | Resolve active session + history with minimal duplicate queries |
 | `switchToSession(sessionId)` | Load and switch to session |
 | `addMessage(sessionId, role, content)` | Add message (persisted) |
 
@@ -536,8 +543,141 @@ If a user still encounters the issue, recommend:
 `shell:openPath` - Open file in system default app
 `shell:openExternal` - Open URL in system default browser
 
+**Dictation:**
+`dictation:registerShortcut` - Register a global OS-level keyboard shortcut for push-to-talk
+`dictation:unregisterShortcut` - Unregister the current dictation shortcut
+`dictation:setCompanionTrayEnabled` - Show or hide the "Start dictation" item in the always-on system tray menu
+`dictation:getModelStatuses` - Get download status (`Record<string, boolean>`) for all speech models
+`dictation:downloadModel` - Pre-download a speech model by its ID (sends progress via `dictation:whisper-status`)
+`dictation:deleteModel` - Delete a downloaded speech model from disk
+`dictation:toggle` (event, main→renderer) - Notify renderer when the shortcut is pressed
+`dictation:whisper-status` (event, main→renderer) - Whisper model download/load progress (`{ status, speechModelId, progress? }`)
+`hydranote:tray-action` (event, main→renderer) - Tray menu: `dictation-toggle`, `new-note`, or `focus-chat`
+
 **External Links:**
 All clickable links (`<a href>`) and `window.open()` calls to external URLs (http/https) automatically open in the system's native browser instead of within the Electron app.
+
+---
+
+## Dictation (Speech-to-Text)
+
+Two-stage push-to-talk dictation: **Speech models** (transcription) and optional **Cleanup** (LLM post-processing), followed by configurable pipeline actions.
+
+### Architecture
+
+```
+Global Shortcut (Electron) → IPC toggle → dictationService (mic capture)
+  → Speech Model (transcribe audioBlob) → Cleanup with LLM (optional)
+  → Review Modal (user reviews/edits text) → Pipeline Actions (insert, create note, chat, clipboard)
+```
+
+### Transcription Providers
+
+| Provider | Type | Configuration |
+|----------|------|---------------|
+| OpenAI Whisper | Cloud | Uses OpenAI API key from AI Providers settings |
+| Deepgram | Cloud | Dedicated API key in Dictation settings |
+| Local Whisper | Local (Electron only) | Transformers.js in Electron main process |
+
+Providers implement `TranscriptionProviderInterface` from `transcriptionProviders/base.ts`.
+
+### Local Speech Models
+
+When using Local Whisper, users pick from a catalog of ONNX Whisper models (defined in `LOCAL_SPEECH_MODELS` in `src/types/index.ts`):
+
+| Model | Size | Best for |
+|-------|------|----------|
+| Whisper tiny.en | ~75 MB | Fastest, English only |
+| Whisper base.en | ~142 MB | Fast, English only |
+| Whisper small.en | ~466 MB | Best accuracy, English only |
+| Whisper tiny | ~75 MB | Fastest, multilingual |
+| Whisper base | ~142 MB | Fast, multilingual |
+| Whisper small | ~466 MB | Good accuracy, multilingual |
+| Whisper medium | ~1.5 GB | High accuracy, multilingual |
+| Whisper large v3 turbo | ~3 GB | Best accuracy, multilingual |
+
+Models are downloaded explicitly from Settings > Dictation and cached in `<userData>/whisper-models/`. The settings UI shows download status per model with progress bars, and allows deleting cached models. Runtime: `electron/src/whisperRuntime.ts`.
+
+### Cleanup (LLM Post-Processing)
+
+Optional stage between transcription and pipeline actions. Uses the configured LLM provider (OpenAI, Anthropic, local model, etc.) to clean up raw transcription: fix grammar, remove filler words, punctuation. Configured via `settings.cleanup` (toggle + custom instructions).
+
+### Review Modal
+
+After transcription and optional cleanup, a review modal (`DictationReviewModal.vue`) is shown so the user can inspect and edit the text before pipeline actions execute. The modal displays the raw transcription, the AI-cleaned version (when cleanup is enabled), and an editable textarea pre-filled with the final text. Confirming runs the pipeline actions; discarding cancels the flow.
+
+The pipeline service exposes `runCleanup(rawText)` and `runActions(text)` as separate functions so `App.vue` can insert the review step between them.
+
+### Pipeline Actions
+
+After the user confirms the review modal, enabled actions run in order:
+
+| Action | Description |
+|--------|-------------|
+| `insert_at_cursor` | Insert text at current editor cursor position |
+| `create_note` | Create a new note via `globalAddNote` |
+| `send_to_chat` | Send text to the active chat sidebar |
+| `copy_to_clipboard` | Copy text to system clipboard |
+
+`WorkspacePage.vue` registers listeners via `onPipelineAction()` / `offPipelineAction()` on mount to wire `insert_at_cursor` → `MarkdownEditor.insertAtCursor()` and `send_to_chat` → `ChatSidebar.sendMessage()`.
+
+### Services
+
+| Service | Purpose |
+|---------|---------|
+| `dictationSettingsService.ts` | Settings persistence (localStorage) |
+| `dictationService.ts` | Mic capture, recording lifecycle, provider dispatch |
+| `dictationPipelineService.ts` | Cleanup stage + pipeline action execution |
+| `transcriptionProviders/base.ts` | Provider interface |
+| `transcriptionProviders/openaiWhisperProvider.ts` | OpenAI Whisper API |
+| `transcriptionProviders/deepgramProvider.ts` | Deepgram API |
+| `transcriptionProviders/localWhisperProvider.ts` | Local Whisper via Electron IPC |
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `DictationSettings.vue` | Settings UI: provider selection, speech model picker, cleanup toggle, pipeline config |
+| `DictationIndicator.vue` | Floating status indicator (recording, transcribing, cleaning up, processing, error) |
+| `DictationReviewModal.vue` | Post-transcription review: shows raw text, cleaned text, editable final text, confirm/discard |
+
+### localStorage Keys
+
+| Key | Contents |
+|-----|----------|
+| `hydranote_dictation_settings` | Provider config, speech model, cleanup config, shortcut, pipeline actions, enabled state |
+
+### Electron Integration
+
+- **Global Shortcut**: Uses Electron's `globalShortcut` API for OS-level push-to-talk. The shortcut sends a `dictation:toggle` IPC event to the renderer.
+- **Preload Bridge**: Exposes `electronAPI.dictation` with `registerShortcut`, `unregisterShortcut`, `setCompanionTrayEnabled`, `onToggle`, `offToggle`, `onTrayAction`, `offTrayAction`, `transcribeLocal`, `getModelStatuses`, `downloadModel`, `deleteModel`, `onWhisperStatus`, `offWhisperStatus`.
+- **Local Whisper Runtime**: `electron/src/whisperRuntime.ts` loads ONNX Whisper models via `@huggingface/transformers` and runs transcription in the main process. Audio is sent as base64 via IPC.
+- **App.vue**: Initializes IPC listeners on mount, registers the saved shortcut, syncs the companion tray from dictation enabled state. On transcription complete, runs cleanup and opens the review modal; on confirm, dispatches pipeline actions.
+- **System tray dictation item**: When dictation is enabled (`saveDictationSettings` / app load), the always-on app tray menu is rebuilt to include a "Start dictation" item at the top. Disabling dictation removes that item from the menu but the tray itself remains. See System Tray section for full details.
+
+---
+
+## System Tray
+
+HydraNote keeps running when the main window is closed so background features (dictation global shortcuts, MCP server, sync services) can stay active.
+
+**Window close behavior:**
+- Closing the main window **hides** it instead of quitting (unless the user chooses Quit from a menu that sets the quitting flag).
+
+**Always-on app tray:**
+- Created automatically on `app.whenReady()` in `electron/src/index.ts`.
+- Context menu always includes: **Add a note**, **Open chat**, **Show HydraNote**, **Quit HydraNote**.
+- When dictation is enabled in settings, a **Start dictation** item is prepended to the menu.
+- Left-click opens the context menu (platform-consistent).
+- Menu actions focus the main window and send `hydranote:tray-action` to the renderer; `App.vue` routes workspace actions via `ELECTRON_TRAY_WORKSPACE_EVENT` to `WorkspacePage.vue`.
+
+**Optional Capacitor tray** (`trayIconAndMenuEnabled` in Capacitor Electron config):
+- If enabled in template setup, click toggles window visibility; context menu may include Show / Quit. This is independent of the always-on app tray.
+
+**Configuration:**
+- Always-on tray is created in `electron/src/index.ts` (`createAppTray()`)
+- Dictation item visibility toggled via `setDictationVisibleInTray()` (called from `dictation:setCompanionTrayEnabled` IPC)
+- Window close interception and tray show/hide logic in `electron/src/index.ts` and `electron/src/setup.ts`
 
 ---
 
@@ -684,12 +824,15 @@ src/
 │   ├── SearchAutocomplete.vue       # Global search bar
 │   ├── TimelineView.vue             # Date-based timeline view of notes + events
 │   ├── UpdateBanner.vue             # App update notification banner
+│   ├── DictationIndicator.vue       # Floating recording/transcribing status indicator
+│   ├── DictationReviewModal.vue     # Post-transcription review modal
 │   └── settings/                    # Reusable settings components
 │       ├── AIProviderSelector.vue
 │       ├── IndexerProviderSelector.vue
 │       ├── GoogleWorkspaceSettings.vue # Google Workspace integration (Meet + Calendar) config panel
 │       ├── IntegrationsStore.vue     # Store-like integrations browser
 │       ├── StorageSettings.vue
+│       ├── DictationSettings.vue    # Dictation provider, shortcut, pipeline config
 │       └── ZoomSettings.vue         # Zoom integration configuration panel
 ├── composables/
 │   └── useMarkdownShortcuts.ts      # Smart editing for markdown textareas
@@ -724,6 +867,14 @@ src/
 │   ├── updateService.ts             # GitHub version check
 │   ├── versionService.ts            # File version history
 │   ├── webSearchService.ts          # Web research
+│   ├── dictationService.ts          # Mic capture, recording lifecycle, provider dispatch
+│   ├── dictationSettingsService.ts  # Dictation settings persistence
+│   ├── dictationPipelineService.ts  # Pipeline execution after transcription
+│   ├── transcriptionProviders/      # Speech-to-text provider implementations
+│   │   ├── base.ts                  # Provider interface
+│   │   ├── openaiWhisperProvider.ts # OpenAI Whisper API
+│   │   ├── deepgramProvider.ts      # Deepgram API
+│   │   └── localWhisperProvider.ts  # Local whisper.cpp (Electron)
 │   └── index.ts                     # Service exports
 ├── types/
 │   └── index.ts                     # Type definitions
