@@ -221,6 +221,9 @@ import {
   base64ToArrayBuffer,
   createFile,
   loadImageGenerationSettings,
+  ELECTRON_TRAY_WORKSPACE_EVENT,
+  onPipelineAction,
+  offPipelineAction,
 } from '@/services';
 import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
@@ -345,10 +348,27 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
+function onElectronTrayWorkspaceAction(ev: Event) {
+  const ce = ev as CustomEvent<{ action: string }>;
+  const action = ce.detail?.action;
+  if (action === 'new-note') {
+    handleNewNote();
+  } else if (action === 'focus-chat') {
+    chatSidebarRef.value?.focusChatInput?.();
+  }
+}
+
+function handleDictationInsertAtCursor(text: string) {
+  markdownEditorRef.value?.insertAtCursor(text);
+}
+
+function handleDictationSendToChat(text: string) {
+  chatSidebarRef.value?.sendMessage(text);
+}
+
 onMounted(async () => {
   await initialize();
-  await loadProjects();
-  
+
   // Listen for sync events to refresh file tree when sync completes
   unsubscribeSyncEvent = onSyncEvent(async (event) => {
     if (event === 'complete') {
@@ -356,9 +376,14 @@ onMounted(async () => {
       await handleProjectsChanged();
     }
   });
-  
+
   // Add global keyboard shortcut listener
   document.addEventListener('keydown', handleGlobalKeydown);
+  window.addEventListener(ELECTRON_TRAY_WORKSPACE_EVENT, onElectronTrayWorkspaceAction);
+
+  // Dictation pipeline action listeners
+  onPipelineAction('insert_at_cursor', handleDictationInsertAtCursor);
+  onPipelineAction('send_to_chat', handleDictationSendToChat);
 });
 
 // Refresh projects and file trees when navigating back to this page
@@ -373,9 +398,14 @@ onUnmounted(() => {
     unsubscribeSyncEvent();
     unsubscribeSyncEvent = null;
   }
-  
+
   // Remove global keyboard shortcut listener
   document.removeEventListener('keydown', handleGlobalKeydown);
+  window.removeEventListener(ELECTRON_TRAY_WORKSPACE_EVENT, onElectronTrayWorkspaceAction);
+
+  // Clean up dictation pipeline listeners
+  offPipelineAction('insert_at_cursor', handleDictationInsertAtCursor);
+  offPipelineAction('send_to_chat', handleDictationSendToChat);
 
   // Clean up workspace resizer listeners
   stopWorkspaceResize();

@@ -41,6 +41,10 @@
             <ion-icon :icon="folderOutline" />
             <ion-label>Storage</ion-label>
           </ion-segment-button>
+          <ion-segment-button value="dictation">
+            <ion-icon :icon="micOutline" />
+            <ion-label>Dictation</ion-label>
+          </ion-segment-button>
           <ion-segment-button value="mcp" v-if="isMcpAvailable">
             <ion-icon :icon="serverOutline" />
             <ion-label>MCP Server</ion-label>
@@ -107,6 +111,14 @@
             >
               <ion-icon :icon="folderOutline" />
               <span>Storage</span>
+            </button>
+            <button 
+              class="nav-item" 
+              :class="{ active: activeSection === 'dictation' }"
+              @click="activeSection = 'dictation'"
+            >
+              <ion-icon :icon="micOutline" />
+              <span>Dictation</span>
             </button>
             <button 
               v-if="isMcpAvailable"
@@ -678,6 +690,14 @@
             </div>
           </section>
 
+          <!-- Dictation Section -->
+          <section v-if="activeSection === 'dictation'" class="content-section">
+            <h2 class="section-title">Dictation</h2>
+            <p class="section-description">Configure push-to-talk speech-to-text transcription with a customizable processing pipeline.</p>
+
+            <DictationSettings />
+          </section>
+
           <!-- MCP Server Section -->
           <section v-if="activeSection === 'mcp'" class="content-section">
             <h2 class="section-title">MCP Server</h2>
@@ -873,6 +893,7 @@ import {
   informationCircleOutline,
   imageOutline,
   extensionPuzzleOutline,
+  micOutline,
 } from 'ionicons/icons';
 import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider, IntegrationSettings, IntegrationId } from '@/types';
 import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS, DEFAULT_INTEGRATION_SETTINGS } from '@/types';
@@ -886,7 +907,7 @@ import {
   BraveIcon,
   DuckDuckGoIcon,
 } from '@/icons';
-import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleWorkspaceSettings } from '@/components/settings';
+import { AIProviderSelector, IndexerProviderSelector, IntegrationsStore, ZoomSettings, GoogleWorkspaceSettings, DictationSettings } from '@/components/settings';
 import { 
   loadSettings, 
   saveSettings, 
@@ -977,7 +998,7 @@ const providerConfigs: { id: LLMProvider; name: string; description: string; ico
   },
 ];
 
-const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'integrations' | 'storage' | 'mcp'>('providers');
+const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'integrations' | 'storage' | 'dictation' | 'mcp'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
 const testing = ref(false);
 const loadingModels = ref(false);
