@@ -368,6 +368,40 @@ interface ElectronAPI {
     /** Remove status listener */
     offStatusChange: () => void;
   };
+  // Dictation Operations (Global Shortcut Push-to-Talk + Local Whisper)
+  dictation: {
+    /** Register a global keyboard shortcut for push-to-talk */
+    registerShortcut: (accelerator: string) => Promise<{ success: boolean; error?: string }>;
+    /** Unregister the current dictation shortcut */
+    unregisterShortcut: () => Promise<{ success: boolean; error?: string }>;
+    /** Show or hide the dictation companion system tray (Electron main process) */
+    setCompanionTrayEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+    /** Listen for shortcut toggle events from main process */
+    onToggle: (callback: () => void) => void;
+    /** Remove toggle listener */
+    offToggle: () => void;
+    /** Tray menu actions: dictation-toggle | new-note | focus-chat */
+    onTrayAction: (callback: (action: string) => void) => void;
+    offTrayAction: () => void;
+    /** Transcribe audio locally using Whisper via Transformers.js */
+    transcribeLocal: (base64Audio: string, options: { speechModelId: string; language?: string }) => Promise<{
+      success: boolean;
+      text?: string;
+      language?: string;
+      duration?: number;
+      error?: string;
+    }>;
+    /** Get download status for all speech models */
+    getModelStatuses: () => Promise<{ success: boolean; statuses?: Record<string, boolean>; error?: string }>;
+    /** Download a speech model (pre-download before first use) */
+    downloadModel: (speechModelId: string) => Promise<{ success: boolean; error?: string }>;
+    /** Delete a downloaded speech model */
+    deleteModel: (speechModelId: string) => Promise<{ success: boolean; error?: string }>;
+    /** Listen for whisper model download/load status updates */
+    onWhisperStatus: (callback: (status: { status: string; speechModelId: string; progress?: number }) => void) => void;
+    /** Remove whisper status listener */
+    offWhisperStatus: () => void;
+  };
   // App info
   platform: string;
   isElectron: boolean;

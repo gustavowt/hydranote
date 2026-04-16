@@ -2520,3 +2520,123 @@ export interface DetectedDate {
   type: 'regular' | 'deadline';
   context?: string;
 }
+
+// ============================================
+// Dictation / Speech-to-Text Types
+// ============================================
+
+export type TranscriptionProvider = 'openai_whisper' | 'deepgram' | 'local_whisper';
+
+export interface SpeechModelInfo {
+  id: string;
+  name: string;
+  size: string;
+  description: string;
+  /** ONNX model ID for Transformers.js (local only) */
+  onnxModelId?: string;
+}
+
+export const LOCAL_SPEECH_MODELS: SpeechModelInfo[] = [
+  { id: 'tiny.en',   name: 'Whisper tiny.en',           size: '~75 MB',  description: 'Fastest, English only',       onnxModelId: 'onnx-community/whisper-tiny.en' },
+  { id: 'base.en',   name: 'Whisper base.en',           size: '~142 MB', description: 'Fast, English only',          onnxModelId: 'onnx-community/whisper-base.en' },
+  { id: 'small.en',  name: 'Whisper small.en',          size: '~466 MB', description: 'Best accuracy, English only', onnxModelId: 'onnx-community/whisper-small.en' },
+  { id: 'tiny',      name: 'Whisper tiny',              size: '~75 MB',  description: 'Fastest, multilingual',       onnxModelId: 'onnx-community/whisper-tiny' },
+  { id: 'base',      name: 'Whisper base',              size: '~142 MB', description: 'Fast, multilingual',          onnxModelId: 'onnx-community/whisper-base' },
+  { id: 'small',     name: 'Whisper small',             size: '~466 MB', description: 'Good accuracy, multilingual', onnxModelId: 'onnx-community/whisper-small' },
+  { id: 'medium',    name: 'Whisper medium',            size: '~1.5 GB', description: 'High accuracy, multilingual', onnxModelId: 'onnx-community/whisper-medium' },
+  { id: 'large-v3',  name: 'Whisper large v3 turbo',    size: '~3 GB',   description: 'Best accuracy, multilingual', onnxModelId: 'onnx-community/whisper-large-v3-turbo' },
+];
+
+export interface TranscriptionProviderConfig {
+  openaiWhisper: {
+    model: string;
+    language?: string;
+  };
+  deepgram: {
+    apiKey: string;
+    model: string;
+    language?: string;
+  };
+  localWhisper: {
+    /** ID from LOCAL_SPEECH_MODELS */
+    speechModelId: string;
+  };
+}
+
+export const DEFAULT_TRANSCRIPTION_PROVIDER_CONFIG: TranscriptionProviderConfig = {
+  openaiWhisper: {
+    model: 'whisper-1',
+    language: '',
+  },
+  deepgram: {
+    apiKey: '',
+    model: 'nova-3',
+    language: '',
+  },
+  localWhisper: {
+    speechModelId: 'small.en',
+  },
+};
+
+export interface CleanupConfig {
+  enabled: boolean;
+  instructions: string;
+}
+
+export const DEFAULT_CLEANUP_CONFIG: CleanupConfig = {
+  enabled: false,
+  instructions: 'Clean up this transcription: fix grammar, punctuation, remove filler words (um, uh, like), and incomplete sentences. Keep the original meaning and tone. Return only the cleaned text.',
+};
+
+export type DictationPipelineActionType =
+  | 'insert_at_cursor'
+  | 'create_note'
+  | 'send_to_chat'
+  | 'copy_to_clipboard';
+
+export interface DictationPipelineAction {
+  type: DictationPipelineActionType;
+  enabled: boolean;
+  label: string;
+}
+
+export interface DictationSettings {
+  enabled: boolean;
+  shortcut: string;
+  provider: TranscriptionProvider;
+  providerConfig: TranscriptionProviderConfig;
+  cleanup: CleanupConfig;
+  pipeline: DictationPipelineAction[];
+  showFloatingIndicator: boolean;
+}
+
+export const DEFAULT_DICTATION_PIPELINE: DictationPipelineAction[] = [
+  { type: 'insert_at_cursor', enabled: true, label: 'Insert at Cursor' },
+  { type: 'create_note', enabled: false, label: 'Create New Note' },
+  { type: 'send_to_chat', enabled: false, label: 'Send to Chat' },
+  { type: 'copy_to_clipboard', enabled: false, label: 'Copy to Clipboard' },
+];
+
+export const DEFAULT_DICTATION_SETTINGS: DictationSettings = {
+  enabled: false,
+  shortcut: 'CommandOrControl+Shift+Space',
+  provider: 'local_whisper',
+  providerConfig: { ...DEFAULT_TRANSCRIPTION_PROVIDER_CONFIG },
+  cleanup: { ...DEFAULT_CLEANUP_CONFIG },
+  pipeline: [...DEFAULT_DICTATION_PIPELINE],
+  showFloatingIndicator: true,
+};
+
+export type DictationStatus = 'idle' | 'recording' | 'transcribing' | 'cleaning_up' | 'processing' | 'error';
+
+export interface DictationState {
+  status: DictationStatus;
+  error?: string;
+  lastTranscription?: string;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  language?: string;
+  duration?: number;
+}
