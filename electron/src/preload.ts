@@ -271,6 +271,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeAllListeners('embeddings:status');
     },
   },
+  // Dictation Operations (Global Shortcut Push-to-Talk + Local Whisper)
+  dictation: {
+    registerShortcut: (accelerator: string) => ipcRenderer.invoke('dictation:registerShortcut', accelerator),
+    unregisterShortcut: () => ipcRenderer.invoke('dictation:unregisterShortcut'),
+    setCompanionTrayEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke('dictation:setCompanionTrayEnabled', enabled),
+    onToggle: (callback: () => void) => {
+      ipcRenderer.on('dictation:toggle', () => {
+        callback();
+      });
+    },
+    offToggle: () => {
+      ipcRenderer.removeAllListeners('dictation:toggle');
+    },
+    onTrayAction: (callback: (action: string) => void) => {
+      ipcRenderer.on('hydranote:tray-action', (_event, action: string) => {
+        callback(action);
+      });
+    },
+    offTrayAction: () => {
+      ipcRenderer.removeAllListeners('hydranote:tray-action');
+    },
+    transcribeLocal: (base64Audio: string, options: { speechModelId: string; language?: string }) =>
+      ipcRenderer.invoke('dictation:transcribeLocal', base64Audio, options),
+    getModelStatuses: () => ipcRenderer.invoke('dictation:getModelStatuses'),
+    downloadModel: (speechModelId: string) => ipcRenderer.invoke('dictation:downloadModel', speechModelId),
+    deleteModel: (speechModelId: string) => ipcRenderer.invoke('dictation:deleteModel', speechModelId),
+    onWhisperStatus: (callback: (status: { status: string; speechModelId: string; progress?: number }) => void) => {
+      ipcRenderer.on('dictation:whisper-status', (_event, status) => {
+        callback(status);
+      });
+    },
+    offWhisperStatus: () => {
+      ipcRenderer.removeAllListeners('dictation:whisper-status');
+    },
+  },
   // App info
   platform: process.platform,
   isElectron: true,

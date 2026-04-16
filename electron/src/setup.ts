@@ -138,26 +138,24 @@ export class ElectronCapacitorApp {
     // When the tray icon is enabled, setup the options.
     if (this.CapacitorFileConfig.electron?.trayIconAndMenuEnabled) {
       this.TrayIcon = new Tray(icon);
-      this.TrayIcon.on('double-click', () => {
+      const showOrHide = () => {
         if (this.MainWindow) {
           if (this.MainWindow.isVisible()) {
             this.MainWindow.hide();
+            if (process.platform === 'darwin') {
+              app.dock?.hide();
+            }
           } else {
             this.MainWindow.show();
             this.MainWindow.focus();
+            if (process.platform === 'darwin') {
+              app.dock?.show();
+            }
           }
         }
-      });
-      this.TrayIcon.on('click', () => {
-        if (this.MainWindow) {
-          if (this.MainWindow.isVisible()) {
-            this.MainWindow.hide();
-          } else {
-            this.MainWindow.show();
-            this.MainWindow.focus();
-          }
-        }
-      });
+      };
+      this.TrayIcon.on('double-click', showOrHide);
+      this.TrayIcon.on('click', showOrHide);
       this.TrayIcon.setToolTip(app.getName());
       this.TrayIcon.setContextMenu(Menu.buildFromTemplate(this.TrayMenuTemplate));
     }

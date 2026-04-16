@@ -1,7 +1,7 @@
 import type { CapacitorElectronConfig } from '@capacitor-community/electron';
 import { getCapacitorElectronConfig, setupElectronDeepLinking } from '@capacitor-community/electron';
 import type { MenuItemConstructorOptions } from 'electron';
-import { app, MenuItem, ipcMain, dialog, shell } from 'electron';
+import { app, Menu, MenuItem, Tray, ipcMain, dialog, shell, globalShortcut, nativeImage } from 'electron';
 import electronIsDev from 'electron-is-dev';
 import unhandled from 'electron-unhandled';
 import { autoUpdater } from 'electron-updater';
@@ -21,6 +21,7 @@ import {
 import { getModelManager, HFModelRef } from './modelManager';
 import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
 import { getEmbeddingRuntime, isEmbeddingRuntimeAvailable } from './embeddingRuntime';
+import { getWhisperRuntime } from './whisperRuntime';
 
 // Linux AppImage workaround: the Chromium sandbox can prevent child processes
 // (e.g. node-llama-cpp binary tests via utilityProcess.fork) from running
@@ -35,7 +36,20 @@ if (process.platform === 'linux') {
 unhandled();
 
 // Define our menu templates (these are optional)
-const trayMenuTemplate: (MenuItemConstructorOptions | MenuItem)[] = [new MenuItem({ label: 'Quit App', role: 'quit' })];
+const trayMenuTemplate: (MenuItemConstructorOptions | MenuItem)[] = [
+  new MenuItem({
+    label: 'Show HydraNote',
+    click: () => {
+      const win = myCapacitorApp.getMainWindow();
+      if (win && !win.isDestroyed()) {
+        win.show();
+        win.focus();
+      }
+    },
+  }),
+  new MenuItem({ type: 'separator' }),
+  new MenuItem({ label: 'Quit', role: 'quit' }),
+];
 const appMenuBarMenuTemplate: (MenuItemConstructorOptions | MenuItem)[] = [
   { role: process.platform === 'darwin' ? 'appMenu' : 'fileMenu' },
   { role: 'editMenu' },
@@ -91,21 +105,152 @@ if (electronIsDev) {
   }
 })();
 
-// Handle when all of our windows are close (platforms have their own expectations).
-app.on('window-all-closed', function () {
-  // On OS X it is common for applications and their menu bar
-  // to stay active until the user quits explicitly with Cmd + Q
-  if (process.platform !== 'darwin') {
-    app.quit();
+// Minimize to tray on window close (instead of quitting) so global shortcuts keep working.
+// The actual quit happens via the tray menu "Quit" or Cmd+Q on macOS.
+let isQuitting = false;
+
+// ============================================
+// Always-on System Tray
+// ============================================
+type TrayAction = 'dictation-toggle' | 'new-note' | 'focus-chat';
+
+let appTray: Tray | null = null;
+let dictationEnabledInTray = false;
+
+function showAndFocusMainWindow(): void {
+  const win = myCapacitorApp.getMainWindow();
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.focus();
+  if (process.platform === 'darwin') {
+    app.dock?.show();
+  }
+}
+
+function sendTrayActionToRenderer(action: TrayAction): void {
+  showAndFocusMainWindow();
+  const win = myCapacitorApp.getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('hydranote:tray-action', action);
+  }
+}
+
+function buildAppTrayMenu(): Menu {
+  const template: MenuItemConstructorOptions[] = [];
+
+  if (dictationEnabledInTray) {
+    template.push({
+      label: 'Start dictation',
+      click: () => sendTrayActionToRenderer('dictation-toggle'),
+    });
+    template.push({ type: 'separator' });
+  }
+
+  template.push(
+    {
+      label: 'Add a note',
+      click: () => sendTrayActionToRenderer('new-note'),
+    },
+    {
+      label: 'Open chat',
+      click: () => sendTrayActionToRenderer('focus-chat'),
+    },
+    { type: 'separator' },
+    {
+      label: 'Show HydraNote',
+      click: () => showAndFocusMainWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit HydraNote',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  );
+
+  return Menu.buildFromTemplate(template);
+}
+
+function createAppTray(): void {
+  if (appTray && !appTray.isDestroyed()) return;
+
+  const iconPath = path.join(
+    app.getAppPath(),
+    'assets',
+    process.platform === 'win32' ? 'appIcon.ico' : 'appIcon.png',
+  );
+  let icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) return;
+
+  // macOS menu bar expects ~18x18 pt icons (36x36 px on Retina).
+  // Windows/Linux system trays expect ~16x16 or ~32x32 px.
+  const traySize = process.platform === 'darwin' ? { width: 18, height: 18 } : { width: 32, height: 32 };
+  icon = icon.resize(traySize);
+  if (process.platform === 'darwin') {
+    icon.setTemplateImage(true);
+  }
+
+  appTray = new Tray(icon);
+  appTray.setToolTip(app.getName());
+  appTray.setContextMenu(buildAppTrayMenu());
+  appTray.on('click', () => {
+    if (!appTray || appTray.isDestroyed()) return;
+    appTray.popUpContextMenu(buildAppTrayMenu());
+  });
+}
+
+function rebuildAppTrayMenu(): void {
+  if (appTray && !appTray.isDestroyed()) {
+    appTray.setContextMenu(buildAppTrayMenu());
+  }
+}
+
+function setDictationVisibleInTray(enabled: boolean): void {
+  dictationEnabledInTray = !!enabled;
+  rebuildAppTrayMenu();
+}
+
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
+app.whenReady().then(() => {
+  // Create the always-on system tray
+  createAppTray();
+
+  const mainWindow = myCapacitorApp.getMainWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.on('close', (event) => {
+      if (!isQuitting) {
+        event.preventDefault();
+        mainWindow.hide();
+        if (process.platform === 'darwin') {
+          app.dock?.hide();
+        }
+      }
+    });
   }
 });
 
-// When the dock icon is clicked.
+// Keep the app running when all windows are closed (tray icon stays active).
+app.on('window-all-closed', function () {
+  // Don't quit — the tray keeps the app alive.
+  // User quits via tray menu or Cmd+Q / Alt+F4.
+});
+
+// When the dock icon is clicked (macOS) or the app is activated.
 app.on('activate', async function () {
-  // On OS X it's common to re-create a window in the app when the
-  // dock icon is clicked and there are no other windows open.
-  if (myCapacitorApp.getMainWindow().isDestroyed()) {
+  const mainWindow = myCapacitorApp.getMainWindow();
+  if (mainWindow.isDestroyed()) {
     await myCapacitorApp.init();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+  if (process.platform === 'darwin') {
+    app.dock?.show();
   }
 });
 
@@ -810,6 +955,7 @@ ipcMain.handle('mcp:stop', async () => {
 const modelManager = getModelManager();
 const inferenceRuntime = getInferenceRuntime();
 const embeddingRuntime = getEmbeddingRuntime();
+const whisperRuntime = getWhisperRuntime();
 
 // Set main window reference after app is ready
 app.whenReady().then(() => {
@@ -817,6 +963,7 @@ app.whenReady().then(() => {
   modelManager.setMainWindow(mainWindow);
   inferenceRuntime.setMainWindow(mainWindow);
   embeddingRuntime.setMainWindow(mainWindow);
+  whisperRuntime.setMainWindow(mainWindow);
 });
 
 // Get model catalog
@@ -1161,5 +1308,125 @@ ipcMain.handle('embeddings:clearCache', async (_event, modelId?: string) => {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to clear cache',
     };
+  }
+});
+
+// ============================================
+// Dictation IPC Handlers (Global Shortcut + Local Whisper)
+// ============================================
+
+// Local Whisper model management
+ipcMain.handle('dictation:getModelStatuses', async () => {
+  try {
+    const statuses = whisperRuntime.getAllModelStatuses();
+    return { success: true, statuses };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to get model statuses' };
+  }
+});
+
+ipcMain.handle('dictation:downloadModel', async (_event, speechModelId: string) => {
+  try {
+    await whisperRuntime.downloadModel(speechModelId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Download failed' };
+  }
+});
+
+ipcMain.handle('dictation:deleteModel', async (_event, speechModelId: string) => {
+  try {
+    await whisperRuntime.deleteModel(speechModelId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Delete failed' };
+  }
+});
+
+// Local Whisper transcription via Transformers.js
+ipcMain.handle('dictation:transcribeLocal', async (_event, base64Audio: string, options: { speechModelId: string; language?: string }) => {
+  try {
+    const result = await whisperRuntime.transcribe(base64Audio, options);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Local transcription failed',
+    };
+  }
+});
+
+let dictationShortcutRegistered = false;
+let currentDictationShortcut = '';
+
+ipcMain.handle('dictation:registerShortcut', async (_event, accelerator: string) => {
+  try {
+    // Unregister previous shortcut if any
+    if (dictationShortcutRegistered && currentDictationShortcut) {
+      globalShortcut.unregister(currentDictationShortcut);
+      dictationShortcutRegistered = false;
+    }
+
+    if (!accelerator) {
+      return { success: true };
+    }
+
+    const mainWindow = myCapacitorApp.getMainWindow();
+
+    const registered = globalShortcut.register(accelerator, () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send('dictation:toggle');
+    });
+
+    if (!registered) {
+      return { success: false, error: `Failed to register shortcut: ${accelerator}` };
+    }
+
+    dictationShortcutRegistered = true;
+    currentDictationShortcut = accelerator;
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to register shortcut',
+    };
+  }
+});
+
+ipcMain.handle('dictation:unregisterShortcut', async () => {
+  try {
+    if (dictationShortcutRegistered && currentDictationShortcut) {
+      globalShortcut.unregister(currentDictationShortcut);
+      dictationShortcutRegistered = false;
+      currentDictationShortcut = '';
+    }
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to unregister shortcut',
+    };
+  }
+});
+
+ipcMain.handle('dictation:setCompanionTrayEnabled', async (_event, enabled: boolean) => {
+  try {
+    setDictationVisibleInTray(!!enabled);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to update tray menu',
+    };
+  }
+});
+
+// Cleanup on app quit
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (appTray && !appTray.isDestroyed()) {
+    appTray.removeAllListeners();
+    appTray.destroy();
+    appTray = null;
   }
 });
