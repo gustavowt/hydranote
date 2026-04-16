@@ -483,6 +483,34 @@ export {
   isSyncRunning as isGoogleCalendarSyncRunning,
 } from './googleCalendarSyncService';
 
+// Dictation Services
+export {
+  ELECTRON_TRAY_WORKSPACE_EVENT,
+  loadDictationSettings,
+  saveDictationSettings,
+  isDictationConfigured,
+  syncElectronDictationCompanionTray,
+} from './dictationSettingsService';
+
+export {
+  dictationState,
+  startRecording,
+  stopRecording,
+  cancelRecording,
+  isRecording,
+  onTranscriptionComplete,
+  offTranscriptionComplete,
+  initDictationIPC,
+} from './dictationService';
+
+export {
+  runPipeline as runDictationPipeline,
+  runCleanup as runDictationCleanup,
+  runActions as runDictationActions,
+  onPipelineAction,
+  offPipelineAction,
+} from './dictationPipelineService';
+
 // Update Service (GitHub version check)
 export {
   currentVersion,
