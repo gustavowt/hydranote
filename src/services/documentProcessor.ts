@@ -291,7 +291,6 @@ export function chunkMarkdownText(
   const headingPattern = /^(#{1,6})\s+(.+)$/gm;
   const sections: { heading: string; content: string; startOffset: number }[] = [];
   
-  let lastIndex = 0;
   let match: RegExpExecArray | null;
   
   // Find all headings and their positions
@@ -633,7 +632,7 @@ export function findSectionByPath(
   path: string
 ): DocumentSection | null {
   // Normalize separators
-  const parts = path.split(/[\/>\-]/).map(p => normalizeTitle(p.trim())).filter(p => p.length > 0);
+  const parts = path.split(/[/>-]/).map(p => normalizeTitle(p.trim())).filter(p => p.length > 0);
   
   if (parts.length === 0) {
     return null;

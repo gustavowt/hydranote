@@ -137,7 +137,7 @@ import { getCalendarEventsByDateRange } from '@/services/database';
 import { detectDates } from '@/services/dateDetectionService';
 import { get_project_files, getAllProjects } from '@/services/projectService';
 import type { DBCalendarEvent } from '@/services/database';
-import type { DetectedDate, ProjectFile, Project } from '@/types';
+import type { ProjectFile, Project } from '@/types';
 
 interface NoteReference {
   fileId: string;
@@ -164,7 +164,7 @@ const props = defineProps<{
   projectId?: string | null;
 }>();
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'close'): void;
   (e: 'open-file', fileId: string, projectId: string): void;
 }>();
@@ -276,7 +276,7 @@ async function loadData() {
 
     const refMap = new Map<string, NoteReference[]>();
     let projects: Project[];
-    let filesByProject: Map<string, ProjectFile[]> = new Map();
+    const filesByProject: Map<string, ProjectFile[]> = new Map();
 
     if (props.projectId) {
       const files = await get_project_files(props.projectId);

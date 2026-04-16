@@ -131,7 +131,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
     const { timeMin, timeMax } = buildDateRange(pastDays, futureDays);
 
     let calendarIds = selectedCalendarIds;
-    let calendarNameMap: Map<string, string> = new Map();
+    const calendarNameMap: Map<string, string> = new Map();
 
     if (calendarIds.length === 0) {
       const calendars = await listCalendars(wsSettings);
@@ -163,7 +163,7 @@ export async function syncNow(): Promise<{ synced: number; errors: number }> {
       return { synced: 0, errors: 0 };
     }
 
-    let allNewEvents: Array<{ event: GoogleCalendarEvent; calendarId: string; calendarName?: string }> = [];
+    const allNewEvents: Array<{ event: GoogleCalendarEvent; calendarId: string; calendarName?: string }> = [];
 
     for (const calId of calendarIds) {
       try {

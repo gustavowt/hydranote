@@ -65,7 +65,7 @@ const CLOSE_SKIP: Record<string, string> = {
 };
 
 function getLineAt(text: string, pos: number): { line: string; lineStart: number; lineEnd: number } {
-  let lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
   let lineEnd = text.indexOf('\n', pos);
   if (lineEnd === -1) lineEnd = text.length;
   return { line: text.substring(lineStart, lineEnd), lineStart, lineEnd };
@@ -407,7 +407,7 @@ function handleDuplicateLine(e: KeyboardEvent, textarea: HTMLTextAreaElement): b
 function handleDeleteLine(e: KeyboardEvent, textarea: HTMLTextAreaElement): boolean {
   const { selectionStart, selectionEnd, value } = textarea;
   const firstLineStart = value.lastIndexOf('\n', selectionStart - 1) + 1;
-  let lastLineEnd = value.indexOf('\n', selectionEnd);
+  const lastLineEnd = value.indexOf('\n', selectionEnd);
 
   if (lastLineEnd === -1) {
     // Last line in document — also remove the preceding newline if it exists

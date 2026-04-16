@@ -15,8 +15,8 @@ const reloadWatcher = {
 
 ///*
 function runBuild() {
-  return new Promise((resolve, _reject) => {
-    let tempChild = cp.spawn(npmCmd, ['run', 'build']);
+  return new Promise((resolve) => {
+    const tempChild = cp.spawn(npmCmd, ['run', 'build']);
     tempChild.once('exit', () => {
       resolve();
     });
@@ -50,7 +50,7 @@ function setupReloadWatcher() {
     .on('ready', () => {
       reloadWatcher.ready = true;
     })
-    .on('all', (_event, _path) => {
+    .on('all', () => {
       if (reloadWatcher.ready) {
         clearTimeout(reloadWatcher.debouncer);
         reloadWatcher.debouncer = setTimeout(async () => {
