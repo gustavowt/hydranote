@@ -10,7 +10,7 @@ Technical documentation for HydraNote - an AI-powered document indexing and inte
 - **AI Providers**: OpenAI, Anthropic (Claude), Google (Gemini), Ollama, Hugging Face Local
 - **Embedding Providers**: OpenAI, Gemini, Ollama, Hugging Face Local (independent from LLM provider)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
-- **Markdown**: marked + highlight.js + Mermaid (diagrams)
+- **Markdown**: marked + highlight.js + Mermaid (diagrams); **Live** mode is a Tiptap (ProseMirror) WYSIWYG editor — markdown is rendered to HTML via `marked` on load and serialized back to markdown via `turndown` + `turndown-plugin-gfm` on edit, so the editing surface looks identical to the reading view
 - **Rich Text Editor**: Tiptap (ProseMirror-based) for DOCX editing
 - **File System Sync**: File System Access API (bidirectional sync with local directories)
 
@@ -22,7 +22,7 @@ Technical documentation for HydraNote - an AI-powered document indexing and inte
 ├──────────────┬─────────────────────────────┬────────────────────┤
 │   Projects   │                             │                    │
 │     Tree     │      Markdown Editor        │    Chat Sidebar    │
-│   Sidebar    │    (edit/split/preview)     │                    │
+│   Sidebar    │  (edit/split/live/preview)  │                    │
 │  (280px)     │         (flex)              │      (360px)       │
 │              │                             │                    │
 │  Collapsible │                             │     Collapsible    │
@@ -322,7 +322,22 @@ Checks for new app releases by fetching the latest tag from the GitHub repositor
 Main layout orchestrating three-panel workspace. Routes files to appropriate editor based on type.
 
 ### MarkdownEditor (`MarkdownEditor.vue`)
-Full markdown editor with edit/split/preview modes, Mermaid diagram support, inline saving, version history access.
+Full markdown editor with edit, split, **Live** (hybrid), and preview modes, Mermaid diagram support, inline saving, version history access.
+
+**Default mode:** Existing `.md` files open in **Live** (`viewMode === 'hybrid'`); brand-new notes start in `edit` so the user can type raw markdown.
+
+**Live mode:** `MarkdownLiveEditor.vue` mounts a Tiptap editor with the same extensions as `RichTextEditor.vue` (StarterKit, Link, Image, Table*, TaskList/Item, CodeBlockLowlight) plus a custom **`MermaidBlock`** node (`MermaidBlockNodeView.vue`) that renders the diagram inline and toggles to a textarea on click for source editing (⌘/Ctrl+Enter to apply, Esc to cancel). YAML frontmatter (`---\n…\n---`) is split off via `splitFrontmatter` (in `services/markdownConverter.ts`) before sending the body to Tiptap and re-prepended on every emit, so it round-trips losslessly.
+
+Markdown ↔ HTML conversion lives in `services/markdownConverter.ts`:
+
+- `markdownToHtml(md)` uses the same `marked` instance as the reading view.
+- `htmlToMarkdown(html)` uses `turndown` + GFM (tables / strikethrough / task lists), with extra rules to preserve fenced-code language attributes and to round-trip the `<div data-mermaid-source>` produced by the Mermaid node back into a ` ```mermaid ` block.
+
+**Live mode caveats** (round-trip is HTML-based, not source-preserving):
+
+- HTML comments (`<!-- … -->`) and Obsidian-style wikilinks (`[[…]]`) are not preserved through the round-trip — use `edit` / `split` to author them.
+- Project-relative images and date chips are still rendered by the `marked` preview path used by `edit` / `split` / `view`; in Live they appear as plain `<img>` / text.
+- Format Studio, AI updates, and version restore continue to operate on the markdown string; Live just re-renders when `content` changes externally.
 
 **Features:**
 - Send selected text to chat (`@selection:file:lines` reference)
@@ -332,7 +347,7 @@ Full markdown editor with edit/split/preview modes, Mermaid diagram support, inl
 - Smart editing predictions via `useMarkdownShortcuts` composable (see below)
 
 **Smart Editing (`src/composables/useMarkdownShortcuts.ts`):**
-Composable that attaches to the textarea(s) and provides markdown-aware keyboard behavior:
+Composable that attaches to the **plain textarea** in edit and split modes (not Live mode). Live mode uses Tiptap's built-in keymaps (e.g. `Cmd/Ctrl+B` bold, `Cmd/Ctrl+I` italic, list continuation, etc.). It provides markdown-aware keyboard behavior for the textarea modes:
 - **List continuation (Enter)**: Auto-inserts the next list marker for unordered (`-`, `*`, `+`), ordered (`1.`, `2.`), and checkbox (`- [ ]`) lists. Preserves indentation level. Empty marker + Enter removes the marker and exits the list.
 - **Blockquote continuation (Enter)**: Auto-inserts `> ` prefix on new lines inside blockquotes. Empty blockquote + Enter exits the blockquote.
 - **Fenced code block auto-close (Enter)**: Typing ` ``` ` or `~~~` (with optional language) and pressing Enter inserts a closing fence and positions cursor inside the block.
@@ -721,10 +736,12 @@ Each platform has a dedicated workflow triggered by version tags (`v*`), manual 
 | Workflow | Runner | Output | GPU Backend |
 |----------|--------|--------|-------------|
 | `.github/workflows/build-windows.yml` | `windows-latest` | NSIS `.exe` installer | CUDA / Vulkan |
-| `.github/workflows/build-macos.yml` | `macos-14` (ARM64) | `.dmg` | Metal |
+| `.github/workflows/build-macos.yml` | `macos-14` (ARM64) | `.dmg` + `.zip` | Metal |
 | `.github/workflows/build-linux.yml` | `ubuntu-latest` | `.AppImage` | Vulkan |
 
 The macOS workflow uses `macos-14` (Apple Silicon) so `npm ci` installs `@node-llama-cpp/mac-arm64-metal` with Metal GPU support.
+
+macOS releases publish both a `.dmg` and a `.zip`: the DMG is the manual installer linked from the landing page, while the ZIP is required by `electron-updater` for native in-app auto-updates via `latest-mac.yml`.
 
 **Release Workflow (`.github/workflows/release.yml`):**
 
