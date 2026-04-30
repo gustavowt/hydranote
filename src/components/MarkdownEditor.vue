@@ -104,6 +104,13 @@
             <ion-icon :icon="gridOutline" />
           </button>
           <button 
+            :class="['mode-btn', { active: viewMode === 'hybrid' }]" 
+            @click="viewMode = 'hybrid'"
+            title="Live (rendered + markdown at cursor)"
+          >
+            <ion-icon :icon="layersOutline" />
+          </button>
+          <button 
             :class="['mode-btn', { active: viewMode === 'view' }]" 
             @click="viewMode = 'view'"
             title="Preview"
@@ -491,8 +498,19 @@
         <div class="split-preview markdown-preview" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent" @click="handlePreviewClick"></div>
       </div>
 
+      <!-- Live Preview Mode (Tiptap WYSIWYG; markdown round-tripped via turndown) -->
+      <MarkdownLiveEditor
+        v-else-if="viewMode === 'hybrid'"
+        ref="hybridEditorRef"
+        class="editor-pane full"
+        v-model="content"
+        :disabled="saving"
+        @update:modelValue="handleInput"
+        @selection-snapshot="onHybridSelectionSnapshot"
+      />
+
       <!-- View Mode -->
-      <div v-else class="preview-pane full markdown-preview" v-html="renderedContent" @click="handlePreviewClick"></div>
+      <div v-else-if="viewMode === 'view'" class="preview-pane full markdown-preview" v-html="renderedContent" @click="handlePreviewClick"></div>
     </div>
 
     <!-- Date Chip Popover -->
@@ -550,7 +568,6 @@ import {
   IonInput,
   IonSelect,
   IonSelectOption,
-  IonNote,
   toastController,
 } from '@ionic/vue';
 import {
@@ -559,6 +576,7 @@ import {
   codeOutline,
   codeSlashOutline,
   gridOutline,
+  layersOutline,
   eyeOutline,
   saveOutline,
   textOutline,
@@ -580,7 +598,6 @@ import {
   chevronForwardOutline,
   chatbubbleOutline,
   readerOutline,
-  downloadOutline,
   addOutline,
   keypadOutline,
   clipboardOutline,
@@ -615,13 +632,13 @@ import {
   updateProjectStatus,
   flushDatabase,
   findFileByPath,
-  getFile,
   chatCompletion,
   detectDates,
 } from '@/services';
 import type { DocumentFormat, DetectedDate } from '@/types';
 import FormatStudio from '@/components/FormatStudio.vue';
 import DateChipPopover from '@/components/DateChipPopover.vue';
+import MarkdownLiveEditor from '@/components/MarkdownLiveEditor.vue';
 
 interface Props {
   currentFile?: ProjectFile | null;
@@ -728,10 +745,11 @@ marked.use({ renderer: imageRenderer });
 
 const content = ref('');
 const originalContent = ref('');
-const viewMode = ref<'edit' | 'split' | 'view'>('edit');
+const viewMode = ref<'edit' | 'split' | 'hybrid' | 'view'>('edit');
 const saving = ref(false);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
+const hybridEditorRef = ref<InstanceType<typeof MarkdownLiveEditor> | null>(null);
 const executionSteps = ref<NoteExecutionStep[]>([]);
 
 // Date chip popover state
@@ -1082,12 +1100,12 @@ watch(() => props.currentFile, (newFile, oldFile) => {
   if (newFile) {
     content.value = newFile.content || '';
     originalContent.value = newFile.content || '';
-    // Open existing files in preview mode
+    // Open existing markdown files in Live (WYSIWYG) mode by default
     if (newFile.id !== oldFile?.id) {
-      viewMode.value = 'view';
+      viewMode.value = 'hybrid';
     }
   } else {
-    // New note - use edit mode
+    // New note - use edit mode (raw markdown textarea)
     viewMode.value = 'edit';
   }
 }, { immediate: true });
@@ -1102,20 +1120,26 @@ watch(() => props.initialContent, (newContent) => {
 
 // Watch for content changes to render mermaid diagrams
 watch(renderedContent, () => {
-  if (viewMode.value === 'view' || viewMode.value === 'split') {
+  if (viewMode.value === 'view' || viewMode.value === 'split' || viewMode.value === 'hybrid') {
     debouncedRenderMermaid();
   }
 });
 
 // Watch for view mode changes to render mermaid diagrams
 watch(viewMode, (newMode) => {
-  if (newMode === 'view' || newMode === 'split') {
+  if (newMode === 'view' || newMode === 'split' || newMode === 'hybrid') {
     debouncedRenderMermaid();
   }
 });
 
 function handleInput() {
   emit('content-change', content.value);
+}
+
+function onHybridSelectionSnapshot() {
+  setTimeout(() => {
+    handleSelectionChange();
+  }, 10);
 }
 
 // ============================================
@@ -1182,6 +1206,23 @@ function handleSelectionChange() {
             y: rect.top,
           };
         }
+      }
+    }
+  } else if (viewMode.value === 'hybrid') {
+    const sel = hybridEditorRef.value?.getSelectionText?.();
+    if (sel && sel.text.trim()) {
+      selectedText = sel.text;
+      // Tiptap selection is HTML-DOM based; map text back into the markdown
+      // source by string search so chat can show file:line references.
+      const idx = content.value.indexOf(selectedText);
+      if (idx !== -1) {
+        startLine = getLineNumberFromOffset(content.value, idx);
+        endLine = getLineNumberFromOffset(content.value, idx + selectedText.length);
+      }
+      const winSel = window.getSelection();
+      if (winSel && winSel.rangeCount > 0) {
+        const rect = winSel.getRangeAt(0).getBoundingClientRect();
+        position = { x: rect.right + 10, y: rect.top };
       }
     }
   } else if (viewMode.value === 'view') {
@@ -1258,8 +1299,7 @@ function handleEditorMouseUp() {
 }
 
 function handleDocumentSelectionChange() {
-  // Only process if we're in view or split mode (for preview selection)
-  if (viewMode.value === 'view' || viewMode.value === 'split') {
+  if (viewMode.value === 'view' || viewMode.value === 'split' || viewMode.value === 'hybrid') {
     handleSelectionChange();
   }
 }
@@ -1419,7 +1459,6 @@ async function saveNewNoteHybrid(autoFormat: boolean, autoProject: boolean, auto
     let aiProjectName = '';
     let aiDirectory = '';
     let formattedText = content.value;
-    let newProjectCreated = false;
 
     // Build parallel AI tasks
     const titlePromise = generateNoteTitle(content.value).then(t => { aiTitle = t; });
@@ -2164,6 +2203,10 @@ function clearContent() {
 }
 
 function focusEditor() {
+  if (viewMode.value === 'hybrid') {
+    hybridEditorRef.value?.focusEditor();
+    return;
+  }
   const editor = editorRef.value || splitEditorRef.value;
   editor?.focus();
 }
@@ -2175,6 +2218,11 @@ function insertAtCursor(text: string) {
   }
 
   nextTick(() => {
+    if (viewMode.value === 'hybrid') {
+      hybridEditorRef.value?.insertAtCursor(text);
+      emit('content-change', content.value);
+      return;
+    }
     const editor = editorRef.value || splitEditorRef.value;
     if (!editor) {
       const needsNewline = content.value.length > 0 && !content.value.endsWith('\n');
