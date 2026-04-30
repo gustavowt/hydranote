@@ -36,6 +36,7 @@
     "@tiptap/extension-underline": "^3.14.0",
     "@tiptap/starter-kit": "^3.14.0",
     "@tiptap/vue-3": "^3.14.0",
+    "@types/turndown": "^5.0.6",
     "chrono-node": "^2.9.0",
     "diff-match-patch": "^1.0.5",
     "docx": "^9.5.1",
@@ -52,6 +53,8 @@
     "node-llama-cpp": "^3.15.0",
     "pdfjs-dist": "^5.4.394",
     "tesseract.js": "^6.0.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
     "vue": "^3.3.0",
     "vue-router": "^4.2.0"
   },
