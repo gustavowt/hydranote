@@ -24,7 +24,7 @@
   },
   "mac": {
     "category": "public.app-category.productivity",
-    "target": "dmg",
+    "target": ["dmg", "zip"],
     "icon": "resources/icon.icns",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
