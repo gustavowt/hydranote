@@ -1483,7 +1483,6 @@ async function saveNewNoteHybrid(autoFormat: boolean, autoProject: boolean, auto
           );
           aiProjectId = newProject.id;
           aiProjectName = newProject.name;
-          newProjectCreated = true;
         } else if (decision.targetProjectId) {
           aiProjectId = decision.targetProjectId;
           const projects = await getAllProjects();
