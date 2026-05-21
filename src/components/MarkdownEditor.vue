@@ -498,15 +498,19 @@
         <div class="split-preview markdown-preview" :style="{ width: (100 - splitLeftWidth) + '%' }" v-html="renderedContent" @click="handlePreviewClick"></div>
       </div>
 
-      <!-- Live Preview Mode (Tiptap WYSIWYG; markdown round-tripped via turndown) -->
+      <!-- Live Preview Mode (Tiptap WYSIWYG; markdown round-tripped via turndown).
+           NOTE: do not pass `class="editor-pane full"` here. The live editor's
+           own `.live-editor-host` styling owns its layout and scrolling
+           (`overflow-y: auto`); applying the parent's `editor-pane`
+           `overflow: hidden` would clip the content and disable scrolling. -->
       <MarkdownLiveEditor
         v-else-if="viewMode === 'hybrid'"
         ref="hybridEditorRef"
-        class="editor-pane full"
         v-model="content"
         :disabled="saving"
         @update:modelValue="handleInput"
         @selection-snapshot="onHybridSelectionSnapshot"
+        @date-chip-click="onHybridDateChipClick"
       />
 
       <!-- View Mode -->
@@ -786,6 +790,28 @@ function handlePreviewClick(event: MouseEvent) {
       anchorRect: rect,
     };
   }
+}
+
+/**
+ * Hybrid (Live) mode emits a structured payload from MarkdownLiveEditor when a
+ * date chip is clicked, so we can reuse the same popover state without
+ * touching the DOM directly.
+ */
+function onHybridDateChipClick(payload: {
+  date: string;
+  type: string;
+  original: string;
+  context: string;
+  anchorRect: DOMRect | null;
+}) {
+  datePopover.value = {
+    visible: true,
+    date: payload.date,
+    type: payload.type,
+    original: payload.original,
+    context: payload.context,
+    anchorRect: payload.anchorRect,
+  };
 }
 
 function closeDatePopover() {

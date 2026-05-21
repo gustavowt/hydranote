@@ -7,8 +7,8 @@ Technical documentation for HydraNote - an AI-powered document indexing and inte
 **Tech Stack:**
 - **Frontend**: Ionic Vue (Vue 3 + TypeScript)
 - **Database**: DuckDB (in-browser WASM with OPFS persistence)
-- **AI Providers**: OpenAI, Anthropic (Claude), Google (Gemini), Ollama, Hugging Face Local
-- **Embedding Providers**: OpenAI, Gemini, Ollama, Hugging Face Local (independent from LLM provider)
+- **AI Providers**: OpenAI, Anthropic (Claude), Google (Gemini), Ollama (local daemon or Ollama Cloud), Hugging Face Local
+- **Embedding Providers**: OpenAI, Gemini, Ollama (local daemon or Ollama Cloud), Hugging Face Local (independent from LLM provider)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
 - **Markdown**: marked + highlight.js + Mermaid (diagrams); **Live** mode is a Tiptap (ProseMirror) WYSIWYG editor — markdown is rendered to HTML via `marked` on load and serialized back to markdown via `turndown` + `turndown-plugin-gfm` on edit, so the editing surface looks identical to the reading view
 - **Rich Text Editor**: Tiptap (ProseMirror-based) for DOCX editing
@@ -211,7 +211,7 @@ Multi-provider embedding generation, independent from LLM provider.
 |----------|--------|
 | OpenAI | text-embedding-3-small, text-embedding-3-large |
 | Gemini | text-embedding-004 |
-| Ollama | nomic-embed-text, mxbai-embed-large, all-minilm |
+| Ollama | nomic-embed-text, mxbai-embed-large, all-minilm (local daemon or Ollama Cloud) |
 | Hugging Face Local | Xenova/all-MiniLM-L6-v2, etc. (Electron only, offline) |
 
 **Key Functions:**
@@ -336,8 +336,12 @@ Markdown ↔ HTML conversion lives in `services/markdownConverter.ts`:
 **Live mode caveats** (round-trip is HTML-based, not source-preserving):
 
 - HTML comments (`<!-- … -->`) and Obsidian-style wikilinks (`[[…]]`) are not preserved through the round-trip — use `edit` / `split` to author them.
-- Project-relative images and date chips are still rendered by the `marked` preview path used by `edit` / `split` / `view`; in Live they appear as plain `<img>` / text.
+- Project-relative images are still rendered by the `marked` preview path used by `edit` / `split` / `view`; in Live they appear as plain `<img>`.
 - Format Studio, AI updates, and version restore continue to operate on the markdown string; Live just re-renders when `content` changes externally.
+
+**Live mode date chips:** dates detected by `dateDetectionService` are rendered in Live mode via a Tiptap inline-decoration plugin (`DateChipExtension` in `MarkdownLiveEditor.vue`) that mirrors the `injectDateChips` post-processing used by the `marked` preview path. Chip clicks bubble up as a `date-chip-click` event on `MarkdownLiveEditor` and are routed into the same `DateChipPopover` flow used by `view` / `split`.
+
+**Live mode scrolling:** `MarkdownLiveEditor`'s root `.live-editor-host` owns its own scroll container (`overflow-y: auto`). The parent `MarkdownEditor.vue` must not pass `class="editor-pane full"` to it, because `.editor-pane`'s `overflow: hidden` would clip the editor and prevent scrolling on long documents. The component already declares `flex: 1; width: 100%; height: 100%` on its host, so it fills the flex parent without the extra class.
 
 **Features:**
 - Send selected text to chat (`@selection:file:lines` reference)
@@ -408,8 +412,191 @@ Global fuzzy search across all projects (files and content).
 | File Type | Editor | Storage |
 |-----------|--------|---------|
 | `.md`, `.txt` | MarkdownEditor | `content` (synced to FS) |
-| `.pdf` | PDFViewer (readonly) | `content` (extracted text) + `systemFilePath` |
+| `.pdf` | PDFViewer (readonly) | `content` (extracted text, joined per page) + `systemFilePath`; chunks + embeddings produced via the page-aware ingestion pipeline (see "PDF Ingestion") |
 | `.docx` | RichTextEditor | `content` + `binaryData` (base64) + `htmlContent` |
+
+---
+
+## PDF Ingestion
+
+PDFs are ingested via a page-aware pipeline that extracts text, detects visual pages, runs the configured AI provider's vision model on those pages, and embeds everything for semantic search. The pipeline is invoked automatically by `syncService` after `createFile(... 'pdf' ...)` and by `reindexFile('pdf', ...)`.
+
+### Pipeline Stages
+
+```
+syncService.createFile(pdf)
+       ↓
+pdfIngestionService.ingestPdfForSearch
+       ↓
+Per page (CPU queue, parallel):
+   • PDF.js getTextContent()          → page text
+   • PDF.js getOperatorList()         → image XObjects + path-density check
+   • PDF.js getOutline() / getPageIndex → nearest section title
+       ↓
+For pages flagged "visual" (Vision queue, parallel):
+   • render to in-memory PNG (OffscreenCanvas-style HTMLCanvasElement)
+   • visionService.describeImage(provider, base64, prompt)
+   • bitmap discarded immediately after
+       ↓
+Chunks (text + visual_description) → embeddings → DuckDB
+```
+
+### Visual Page Detection
+
+A page counts as "visual" if either is true:
+- Its operator list contains any image XObject op (`OPS.paintImageXObject`, `OPS.paintInlineImageXObject`, `OPS.paintImageMaskXObject`, plus the `*Repeat` variants).
+- Its text is sparse (< 200 trimmed characters) **and** its operator list has a high concentration of vector-drawing ops (`OPS.constructPath` / `fill` / `stroke` ≥ 80). This catches charts and diagrams drawn with vector paths rather than raster images.
+
+### Vision Provider Mapping (auto, no settings UI)
+
+| Active LLM provider | Vision model used | API shape |
+|---|---|---|
+| OpenAI | `gpt-4o` | `chat/completions` with `image_url` content parts |
+| Anthropic | `claude-3-5-sonnet-latest` | `messages` with base64 `image` blocks |
+| Google | `gemini-3.1-flash` | `generateContent` with `inlineData` parts |
+| Ollama (local or Cloud) | first installed match from `OLLAMA_VISION_CANDIDATES` (`llama3.2-vision`, `llava`, `llava-llama3`, `bakllava`, `minicpm-v`, …); skipped if none installed. Uses the same `mode`/`apiKey` resolution as chat — local hits the configured URL, cloud hits `https://ollama.com` with a bearer token. | `/api/chat` with `images: [base64]` |
+| Hugging Face Local | not supported — pages are text-only | — |
+
+The vision prompt is fixed: it asks for plain-prose description of charts, diagrams, images, axes, labels and key values, with a small page+section context block appended.
+
+### Storage
+
+- Extracted per-page text is joined with blank lines and persisted on `files.content` (kept identical to the previous behavior so the existing `read` tool keeps working unchanged).
+- Each page produces 0–N text chunks (via the existing `chunkText` helper) plus at most one `visual_description` chunk.
+- All chunks carry `page_number` and (when the PDF has a bookmark outline) `section`. The `kind` column is `'text'` or `'visual_description'`.
+- Rendered page bitmaps are **never persisted**: they exist only in memory long enough to call the vision model, then are dropped. There is no on-disk image cache.
+
+### Concurrency
+
+Two bounded queues isolate CPU work from network/local-LLM work:
+- **Render/extract queue**: `getCpuConcurrency()` = `max(2, min(navigator.hardwareConcurrency / 2, 6))`.
+- **Vision queue**: hardcoded to 3 (override via `PdfIngestionOptions.visionConcurrency` in tests).
+
+Both come from `src/utils/concurrencyQueue.ts` (`runWithLimit`, in-order results, propagates the first error).
+
+### Re-Indexing
+
+`reindexAllFiles` and `reindexStaleFiles` (in `embeddingService.ts`) include `pdf` rows. Re-indexing a PDF re-renders every visual page and re-asks the vision model, which can be expensive — switching embedding providers on a knowledge base of large PDFs may take a long time and consume tokens. The pipeline reads the binary back from disk via `electronAPI.fs.readBinaryFile` using the file's `systemFilePath`. PDFs without a `systemFilePath` (purely in-DB rows) cannot be re-indexed and are skipped with a recorded error.
+
+### Chat Retrieval
+
+The `search` tool's output is annotated with the matched chunk's page and section: `(Source: report.pdf, p. 7 — Methodology, Score: 82.4%)`. Visual chunks get an additional `[visual]` tag so the LLM and the user can tell when the snippet came from the vision model rather than the document text. The existing `read` tool path is unchanged — it returns `files.content` (joined per-page text).
+
+### Schema
+
+The `chunks` table gained three columns (idempotently added on app start via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`):
+
+| Column | Type | Notes |
+|---|---|---|
+| `page_number` | INTEGER | NULL for non-paginated sources (md, txt) |
+| `section` | VARCHAR | Outline title for the nearest enclosing PDF section, NULL when unknown |
+| `kind` | VARCHAR | `'text'` (default) or `'visual_description'` |
+
+Plus an index `idx_chunks_file_page (file_id, page_number)` for per-page lookups.
+
+### Files
+
+| File | Role |
+|---|---|
+| `src/services/pdfIngestionService.ts` | Page-aware ingestion pipeline (entry point: `ingestPdfForSearch`) |
+| `src/services/visionService.ts` | Provider-aware vision adapter (`describeImage`, `isVisionAvailable`) |
+| `src/utils/concurrencyQueue.ts` | `runWithLimit`, `getCpuConcurrency` |
+
+---
+
+## External File Drop (Drag & Drop Import)
+
+Files and folders dragged onto the project tree from the OS file manager are imported in-place using the same pipelines as the FS sync, with live per-row progress.
+
+### Drop Targets
+
+| Drop target row | Resolved destination |
+|---|---|
+| Project header | Project root |
+| Directory row | That directory |
+| File row | The file's parent directory |
+
+The OS drag is recognized whenever `dataTransfer.types` contains `'Files'`. While such a drag is over a row, the row gets a distinct `os-drag-over` outline (purple-tinged, falling back to teal on themes without `--hn-purple-muted`). Both `ProjectsTreeSidebar.vue` (project header) and `FileTreeNode.vue` (rows) are wired to this branch; the file-tree node forwards the raw `DragEvent` up via the new `os-files-drop` Vue event so the sidebar can call the ingestion service.
+
+### Folder Recursion
+
+Folder drops use `DataTransferItem.webkitGetAsEntry()` to walk the dropped tree, so a dropped folder preserves its full subdirectory structure under the drop target. Files where `webkitGetAsEntry` is unavailable (older browsers, some Linux DEs) fall back to a flat list via `dataTransfer.files`.
+
+### Per-File Routing
+
+`fileIngestionService.ingestExternalFiles` runs imports sequentially (one file at a time, ordered by drop list) and routes each file by `detectFileType`:
+
+| Type | Path |
+|---|---|
+| `md`, `txt` | `createFile` → `indexFileForSearch` (synchronous text indexing) |
+| `pdf` | `extractFullPdfText` → `createFile` (with joined text **and** raw bytes persisted to `binary_data_base64` so `PDFViewer` can re-render the document later) → `ingestPdfForSearch` (page-aware vision pipeline) |
+| `docx` | `getFileBinaryData` + `convertDOCXToHTML` → `createFile` with binary + HTML body |
+| `png`, `jpg`, `jpeg`, `webp` | `createFile` with raw bytes |
+
+Unsupported types are recorded in the `failed[]` of the result and surfaced via an Ionic alert at the end of the batch. PDFs imported by drop have **no** `systemFilePath` — they live in the DB only. Their raw bytes are persisted on the `files` row (`binary_data_base64`) so `PDFViewer` can render them by reading the column back through `getFile`, but they still cannot be re-indexed via `reindexFile` without supplying the `File` again (the re-index pipeline reads from `systemFilePath`).
+
+### Live Per-Row Progress
+
+`fileIngestionService` exposes two reactive Vue refs that drive the live tree UI:
+
+| Ref | Key | Purpose |
+|---|---|---|
+| `ingestionProgress: Ref<Map<string, IngestionProgressEntry>>` | transient `drop:...` id, then `files.id` after createFile | percent + stage for the progress bar / suffix |
+| `pendingDrops: Ref<Map<string, PendingDropEntry>>` | transient `drop:...` id | ghost rows rendered before `createFile` returns |
+
+#### Ghost rows (immediate visibility on drop)
+
+When the user drops a file, the ingestion pipeline doesn't have a `files.id` to attach UI to until `createFile` returns — which for PDFs is *after* `extractFullPdfText` blocks for several seconds. To avoid a long invisible gap, the service publishes a `PendingDropEntry` to `pendingDrops` **before** any work starts and clears it the moment `createFile` resolves.
+
+`ProjectsTreeSidebar.vue` exposes `renderedNodesFor(projectId)`, a helper that merges ghosts into the project's real tree:
+
+- Ghosts grouped by their `targetDirectory`.
+- A group whose target directory already exists in the tree is injected as that directory's children (the directory is forced `expanded: true` so the activity is visible).
+- A group whose target either is the project root or doesn't yet exist in the tree (e.g. a folder drop whose intermediate dirs `createFile` hasn't materialized yet) surfaces at the top of the project's root level so the user still sees the file activity.
+
+The transient drop id is reused as the ghost node's `id`, so `FileTreeNode.vue`'s existing `ingestionProgress.get(node.id)` lookup picks up the progress bar without any special-casing for ghosts.
+
+#### Per-file tree refresh
+
+`ingestExternalFiles(entries, projectId, targetDirectory, onFileCreated?)` accepts an optional callback invoked synchronously after each `createFile` resolves. The sidebar passes a callback that drops the cached file tree for the project and calls `loadProjectFiles(projectId)`. Net effect:
+
+1. Drop hits sidebar → ghost row appears immediately (with shimmer + 0% bar).
+2. Pre-`createFile` work runs (PDF extract, docx mammoth, etc.) — bar advances within its stage band.
+3. `createFile` returns → ghost cleared, callback fires, tree reloads, real row appears at its correct nested path with progress continuing under the new `files.id` key.
+4. Post-`createFile` work (indexing, vision, embedding) → bar finishes within 85..100% band.
+5. Settle delay of ~600 ms at 100%, then `ingestionProgress` entry is dropped.
+
+A final batch-level tree refresh runs after `ingestExternalFiles` returns as a safety net.
+
+#### Bar + shimmer
+
+`FileTreeNode.vue` reads `ingestionProgress` by `node.id` and renders three layered cues while a row is being processed:
+
+- A small `NN%` suffix to the right of the filename
+- A 2px progress bar at the bottom of the row
+- A CSS-only moving sheen (`.node-row.ingesting::after`) — purely an "actively working" signal; disabled under `prefers-reduced-motion: reduce`
+
+Cursor switches to `progress`, text is slightly dimmed, and click + context menu + dragstart are disabled while a row is ingesting (its content may be incomplete).
+
+#### Stage → percent bands
+
+For PDFs the three internal ingestion stages are mapped onto a single 0..100 band so the bar always advances forward:
+
+| Stage | Percent band |
+|---|---|
+| extracting (text + visual detection) | 20..50 |
+| visual_describe (vision per visual page) | 50..85 |
+| embedding (chunk + embedding write) | 85..100 |
+
+After ingestion the entry is held at 100% for ~600 ms (so the user sees the bar fill) and then cleared.
+
+### Files
+
+| File | Role |
+|---|---|
+| `src/services/fileIngestionService.ts` | Orchestrator: folder recursion, per-type routing, `ingestionProgress` + `pendingDrops` reactive stores, `onFileCreated` per-file hook |
+| `src/components/ProjectsTreeSidebar.vue` | Project-level OS drop handler, `renderedNodesFor()` ghost merge, per-file tree refresh, alerts |
+| `src/components/FileTreeNode.vue` | Row-level OS drop handler, progress bar + percent suffix + shimmer overlay (reads `ingestionProgress` by `node.id` — works for ghosts and persisted rows alike) |
 
 ---
 
@@ -430,7 +617,7 @@ Global fuzzy search across all projects (files and content).
 {
   provider: 'openai' | 'ollama' | 'anthropic' | 'google' | 'huggingface_local';
   openai: { apiKey, model, baseUrl? };
-  ollama: { baseUrl, model };
+  ollama: { mode: 'local' | 'cloud', baseUrl, apiKey, model };
   anthropic: { apiKey, model };
   google: { apiKey, model };
   huggingfaceLocal: { modelId, contextLength, gpuLayers };
@@ -438,13 +625,15 @@ Global fuzzy search across all projects (files and content).
 }
 ```
 
+The Ollama indexer config in `IndexerSettings.ollama` mirrors this shape (`mode`, `baseUrl`, `apiKey`, `model`).
+
 ### Supported AI Providers
 | Provider | Models |
 |----------|--------|
 | OpenAI | GPT-5.2, GPT-5, GPT-5 Mini/Nano, o4-mini, o3, GPT-4.1 series |
 | Anthropic | Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4 series |
 | Google | Gemini 3 Pro/Flash, Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0 |
-| Ollama | Local models (Llama, Mistral, etc.) |
+| Ollama | Local daemon (Llama, Mistral, etc.) or Ollama Cloud (`*-cloud` tags like `gpt-oss:120b-cloud`) |
 | Hugging Face Local | GGUF models via node-llama-cpp (Electron only) |
 
 **OpenAI reasoning model request behavior:**
@@ -454,6 +643,13 @@ Global fuzzy search across all projects (files and content).
 **Anthropic request behavior:**
 - HydraNote sends `anthropic-version: "2023-06-01"` for both regular and streaming Claude requests.
 - Keep this header on a valid Anthropic API version; unsupported versions are rejected before model execution.
+
+**Ollama (local and Ollama Cloud):**
+- `OllamaConfig` carries an explicit `mode: 'local' | 'cloud'` discriminator. The settings UI shows the URL input in `local` mode and the API key input in `cloud` mode (URL is hidden because the cloud base URL is fixed in code).
+- `local` mode hits the configured `baseUrl` with no auth header — identical to the previous behavior so existing local-only users see no change.
+- `cloud` mode hits the constant `OLLAMA_CLOUD_BASE_URL` (`https://ollama.com`) and attaches `Authorization: Bearer <apiKey>` to every request. Get a key at <https://ollama.com/settings/keys>.
+- The same auth handling applies uniformly to chat (`/api/chat`), embeddings (`/api/embeddings`), tag discovery (`/api/tags`), and the vision-pipeline call. A single helper `getOllamaRequestConfig(config)` in `llmService.ts` returns `{ baseUrl, headers }` and is reused by `embeddingService` and `visionService`.
+- Cloud LLM models use a `:<size>-cloud` suffix on `ollama.com` (e.g. `gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud`, `kimi-k2:1t-cloud`). The suggested set lives in `SUGGESTED_OLLAMA_CLOUD_MODELS` (`src/types/index.ts`); the model picker also exposes the "Fetch Models" button that calls `/api/tags` against the cloud account.
 
 ---
 
@@ -504,6 +700,7 @@ Supports running GGUF models from Hugging Face locally via node-llama-cpp.
 - Downloads models to user data directory
 - GPU acceleration with automatic backend detection
 - Offline inference
+- Split GGUF files are downloaded as complete shard groups (for example, all `00001-of-00002` and `00002-of-00002` files)
 
 **GPU Acceleration:**
 | Platform | Backend | Hardware |
@@ -562,6 +759,8 @@ If a user still encounters the issue, recommend:
 `dictation:registerShortcut` - Register a global OS-level keyboard shortcut for push-to-talk
 `dictation:unregisterShortcut` - Unregister the current dictation shortcut
 `dictation:setCompanionTrayEnabled` - Show or hide the "Start dictation" item in the always-on system tray menu
+`dictation:ensureMicrophoneAccess` - Check (and prompt if needed) the OS-level microphone permission. Returns `{ granted, status }`. On macOS uses `systemPreferences.getMediaAccessStatus` / `askForMediaAccess`; on other platforms returns `granted: true`.
+`dictation:getMicrophoneAccessStatus` - Read the current OS-level microphone permission status without prompting. Returns `{ status }`. Used by the UI (e.g. the chat input dictation button) to grey itself out when access is denied.
 `dictation:getModelStatuses` - Get download status (`Record<string, boolean>`) for all speech models
 `dictation:downloadModel` - Pre-download a speech model by its ID (sends progress via `dictation:whisper-status`)
 `dictation:deleteModel` - Delete a downloaded speech model from disk
@@ -667,10 +866,43 @@ After the user confirms the review modal, enabled actions run in order:
 ### Electron Integration
 
 - **Global Shortcut**: Uses Electron's `globalShortcut` API for OS-level push-to-talk. The shortcut sends a `dictation:toggle` IPC event to the renderer.
-- **Preload Bridge**: Exposes `electronAPI.dictation` with `registerShortcut`, `unregisterShortcut`, `setCompanionTrayEnabled`, `onToggle`, `offToggle`, `onTrayAction`, `offTrayAction`, `transcribeLocal`, `getModelStatuses`, `downloadModel`, `deleteModel`, `onWhisperStatus`, `offWhisperStatus`.
+- **Preload Bridge**: Exposes `electronAPI.dictation` with `registerShortcut`, `unregisterShortcut`, `setCompanionTrayEnabled`, `ensureMicrophoneAccess`, `getMicrophoneAccessStatus`, `onToggle`, `offToggle`, `onTrayAction`, `offTrayAction`, `transcribeLocal`, `getModelStatuses`, `downloadModel`, `deleteModel`, `onWhisperStatus`, `offWhisperStatus`.
 - **Local Whisper Runtime**: `electron/src/whisperRuntime.ts` loads ONNX Whisper models via `@huggingface/transformers` and runs transcription in the main process. Audio is sent as base64 via IPC.
 - **App.vue**: Initializes IPC listeners on mount, registers the saved shortcut, syncs the companion tray from dictation enabled state. On transcription complete, runs cleanup and opens the review modal; on confirm, dispatches pipeline actions.
 - **System tray dictation item**: When dictation is enabled (`saveDictationSettings` / app load), the always-on app tray menu is rebuilt to include a "Start dictation" item at the top. Disabling dictation removes that item from the menu but the tray itself remains. See System Tray section for full details.
+
+### Microphone Permissions
+
+`getUserMedia` for an Electron renderer running under a custom URL scheme is denied by default unless the session explicitly grants the `media` permission, and on macOS the OS-level TCC prompt only fires when the app is properly declared. Without these pieces dictation can appear to run end-to-end while capturing a silent stream. HydraNote handles all of this:
+
+1. **Electron session permission** (`electron/src/setup.ts` → `setupMediaPermissions()`): registers `setPermissionRequestHandler` and `setPermissionCheckHandler` on `session.defaultSession` to allow `media` and `mediaKeySystem`. Wired into the bootstrap from `electron/src/index.ts` right after `setupContentSecurityPolicy()`.
+2. **macOS preflight IPC** (`dictation:ensureMicrophoneAccess` in `electron/src/index.ts`): on `darwin`, calls `systemPreferences.getMediaAccessStatus('microphone')` and, when status is `not-determined`, triggers `systemPreferences.askForMediaAccess('microphone')`. Other platforms short-circuit to `granted: true`.
+3. **No-prompt status IPC** (`dictation:getMicrophoneAccessStatus` in `electron/src/index.ts`): on `darwin`, returns the current `systemPreferences.getMediaAccessStatus('microphone')` value without ever prompting. UI elements call this on mount to render disabled controls when access is denied.
+4. **Renderer preflight** (`src/services/dictationService.ts`): `startRecording()` calls `electronAPI.dictation.ensureMicrophoneAccess()` before `getUserMedia`. If access is denied/restricted, `dictationState` is set to a friendly error pointing the user at System Settings → Privacy & Security → Microphone, and the reactive `micPermissionState` is updated.
+5. **Reactive permission state** (`micPermissionState` + `refreshMicPermissionState()` in `dictationService.ts`): `'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown'`. Primed once from `App.vue` on mount and again from `ChatSidebar.vue` so the chat dictation button can disable itself without forcing a prompt. Browser fallback uses `navigator.permissions.query({ name: 'microphone' })` when available; otherwise stays at `'unknown'` (treated as enabled).
+6. **macOS packaging metadata**:
+   - `electron/electron-builder.config.json` → `mac.extendInfo.NSMicrophoneUsageDescription` provides the Info.plist usage string required for the OS prompt and for the app to appear under Privacy & Security → Microphone.
+   - `electron/resources/entitlements.mac.plist` includes `com.apple.security.device.audio-input`, which is required at runtime under Hardened Runtime for notarized builds.
+
+### Chat Push-to-Talk (raw)
+
+In addition to the global push-to-talk shortcut (which runs the full pipeline: cleanup → review modal → pipeline actions), the chat input has its own click-to-toggle dictation flow that bypasses cleanup and review entirely and inserts the raw transcribed text straight into the chat input.
+
+- **API** (`src/services/dictationService.ts`):
+  - `startPushToTalk(onComplete)` — sets a one-shot raw handler and calls `startRecording()`.
+  - `stopPushToTalk()` — alias for `stopRecording()` to make caller intent explicit.
+  - When a raw handler is set, `emit()` delivers the result *only* to that handler and does **not** broadcast to the `onTranscriptionComplete` listeners that `App.vue` uses for cleanup + review. The handler is cleared after one delivery (or on cancel/failure).
+- **UI** — unified primary-action button in `src/components/ChatSidebar.vue`:
+  - A single trailing button in `.input-container` replaces the previous separate mic + send buttons, giving the rich input full horizontal width.
+  - The button's icon, color, click handler, and `disabled` state are driven by `primaryActionMode` (`'mic' | 'stop' | 'send'`):
+    | Mode | When | Icon | Click |
+    |------|------|------|-------|
+    | `mic` | Idle, input is empty | `micOutline` | `startChatDictation()` |
+    | `stop` | Currently dictating | `stop` (filled square, red + pulse) | `stopChatDictation()` |
+    | `send` | Idle, input has content | `sendOutline` | `sendMessage()` |
+  - `mic` is disabled when `micPermissionState` is `'denied'`/`'restricted'` (greyed out, tooltip points the user at System Settings → Privacy & Security → Microphone) or when another caller is already dictating. `send` is disabled while `isTyping`. `stop` is never disabled.
+  - On stop, the transcription is appended to the existing `inputMessage` (with a leading space when needed) via `appendDictatedText()`, mirroring the rich-input update pattern used by `insertSelection`.
+  - Send is intentionally hidden while dictation is active to prevent accidentally firing off a half-baked message; the user must click stop first.
 
 ---
 
@@ -918,6 +1150,25 @@ src/
 | `web_search_cache` | Web search result cache |
 | `web_search_chunks` | Web search content chunks |
 | `calendar_events` | Google Calendar events synced to DuckDB |
+
+### Startup WAL Recovery
+
+The DuckDB instance lives in OPFS as `hydranote.duckdb` (data) + `hydranote.duckdb.wal` (write-ahead log). After an unclean shutdown (page closed mid-write, OS sleep killed the worker, crashed migration) the orphan WAL can fail to replay because it references a catalog the data file no longer has. DuckDB surfaces this as a `Binder` exception with the phrase `Failure while replaying WAL`.
+
+`doInitializeDatabase` detects this exact error (`isWalReplayError`) and runs a three-step recovery cycle:
+
+1. **Tear down the failed worker** (`teardownFailedConnection`) — closes the connection if any, calls `db.terminate()`, nulls module state, revokes the worker blob URL. This is critical: until the worker dies it still holds the OPFS access handle on the WAL, which would make step 2 throw `NoModificationAllowedError`.
+2. **Clear the WAL sidecar files** (`clearOrphanWal`) — removes `hydranote.duckdb.wal` and (defensively) `hydranote.duckdb.wal-shm` from the OPFS root via `navigator.storage.getDirectory().removeEntry`. Missing entries and lock errors are tolerated; the function returns `true` if any entry was removed.
+3. **Spin up a brand new connection** (`openFreshConnection`) — creates a fresh worker, fresh `AsyncDuckDB`, fresh `db.open()` against the now WAL-less data file.
+
+If the second `openFreshConnection` also fails the error propagates unchanged to the normal init error path. Every other init failure (network, wasm load, schema migration) also propagates unchanged — only the WAL-replay signature triggers recovery.
+
+| File / symbol | Role |
+|---|---|
+| `isWalReplayError(err)` | Exported matcher for the canonical `Failure while replaying WAL` and Binder-on-`.wal` error shapes |
+| `clearOrphanWal()` | Exported best-effort OPFS sidecar deletion (returns `true` iff at least one entry was removed) |
+| `teardownFailedConnection(workerUrl)` | Internal cleanup: close connection, terminate worker, revoke blob URL |
+| `openFreshConnection()` | Internal: build worker + `AsyncDuckDB`, instantiate, open, connect. Reused for both the initial attempt and the post-recovery retry |
 
 ---
 

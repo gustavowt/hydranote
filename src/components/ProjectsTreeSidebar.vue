@@ -97,10 +97,10 @@
                 <span>No files</span>
               </div>
 
-              <!-- File tree nodes -->
+              <!-- File tree nodes (ghosts merged in for in-flight drops) -->
               <template v-else>
                 <FileTreeNode
-                  v-for="node in projectFileTrees[project.id].nodes"
+                  v-for="node in renderedNodesFor(project.id)"
                   :key="node.id"
                   :node="node"
                   :depth="1"
@@ -110,6 +110,7 @@
                   @context-menu="(payload) => handleNodeContextMenu(project.id, payload)"
                   @drag-start="(node) => handleDragStart(project.id, node)"
                   @drop="(payload) => handleNodeDrop(project.id, payload)"
+                  @os-files-drop="(payload) => handleOsFilesDrop(project.id, payload)"
                 />
               </template>
             </div>
@@ -146,7 +147,14 @@ import {
 } from 'ionicons/icons';
 import type { Project, ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
 import { getProjectFileTree, deleteProject, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory, renameProject } from '@/services';
-import FileTreeNode from './FileTreeNode.vue';
+import {
+  ingestExternalFiles,
+  collectDroppedEntries,
+  flatFilesToEntries,
+  pendingDrops,
+  type PendingDropEntry,
+} from '@/services/fileIngestionService';
+import FileTreeNode, { type OsFilesDropPayload } from './FileTreeNode.vue';
 import FileTreeContextMenu from './FileTreeContextMenu.vue';
 
 interface Props {
@@ -175,7 +183,6 @@ const projectFileTrees = ref<Record<string, ProjectFileTree>>({});
 const draggingNode = ref<FileTreeNodeType | null>(null);
 const draggingSourceProjectId = ref<string | null>(null);
 const dragOverProjectId = ref<string | null>(null);
-const treeContentRef = ref<HTMLElement | null>(null);
 
 // Context menu state
 const contextMenu = reactive({
@@ -195,6 +202,100 @@ const projectFileCounts = computed(() => {
   }
   return counts;
 });
+
+/**
+ * Convert a pending drop entry into a tree node so it can be rendered as a
+ * placeholder row alongside real files. The id is the transient drop id, so
+ * the existing `FileTreeNode` lookup into `ingestionProgress` works without
+ * any special-casing.
+ */
+function ghostToNode(entry: PendingDropEntry): FileTreeNodeType {
+  return {
+    id: entry.transientId,
+    name: entry.fileName,
+    path: entry.displayPath,
+    type: 'file',
+    fileType: entry.fileType,
+  } as FileTreeNodeType;
+}
+
+/**
+ * Recursively inject ghost nodes into the tree at the directory whose path
+ * matches `targetDir`. Returns the original `nodes` reference when no
+ * insertion happens, so downstream `key` reactivity stays stable.
+ */
+function injectGhostsAtDir(
+  nodes: FileTreeNodeType[],
+  ghostNodes: FileTreeNodeType[],
+  targetDir: string,
+): { nodes: FileTreeNodeType[]; inserted: boolean } {
+  let inserted = false;
+  const next = nodes.map((node) => {
+    if (inserted) return node;
+    if (node.type !== 'directory') return node;
+    if (node.path === targetDir) {
+      inserted = true;
+      return {
+        ...node,
+        expanded: true,
+        children: [...ghostNodes, ...(node.children ?? [])],
+      } as FileTreeNodeType;
+    }
+    if (node.children && node.children.length > 0) {
+      const recurse = injectGhostsAtDir(node.children, ghostNodes, targetDir);
+      if (recurse.inserted) {
+        inserted = true;
+        return { ...node, children: recurse.nodes } as FileTreeNodeType;
+      }
+    }
+    return node;
+  });
+  return { nodes: inserted ? next : nodes, inserted };
+}
+
+/**
+ * Merge pending drop ghosts into the rendered tree for `projectId`. Ghosts
+ * are grouped by their `targetDirectory` — those whose target directory
+ * already exists in the tree nest inside it (and the directory is forced
+ * `expanded` so the user can see them appear). Ghosts whose target either is
+ * the project root or has no matching node yet (e.g. a freshly dropped
+ * folder whose intermediate dirs `createFile` hasn't materialized) surface
+ * at the project root so the user still sees activity.
+ */
+function renderedNodesFor(projectId: string): FileTreeNodeType[] {
+  const realNodes = projectFileTrees.value[projectId]?.nodes ?? [];
+  const ghosts = Array.from(pendingDrops.value.values()).filter(
+    (g) => g.projectId === projectId,
+  );
+  if (ghosts.length === 0) return realNodes;
+
+  const byDir = new Map<string | undefined, PendingDropEntry[]>();
+  for (const ghost of ghosts) {
+    const key = ghost.targetDirectory || undefined;
+    if (!byDir.has(key)) byDir.set(key, []);
+    byDir.get(key)!.push(ghost);
+  }
+
+  let current = realNodes;
+  const rootGhostNodes: FileTreeNodeType[] = [];
+  for (const [dir, group] of byDir.entries()) {
+    const groupNodes = group.map(ghostToNode);
+    if (!dir) {
+      rootGhostNodes.push(...groupNodes);
+      continue;
+    }
+    const result = injectGhostsAtDir(current, groupNodes, dir);
+    if (result.inserted) {
+      current = result.nodes;
+    } else {
+      // Target directory doesn't exist in the tree yet — fall back to root
+      // so the activity is still visible.
+      rootGhostNodes.push(...groupNodes);
+    }
+  }
+
+  return rootGhostNodes.length > 0 ? [...rootGhostNodes, ...current] : current;
+}
 
 // Watch for external project selection to auto-expand
 watch(() => props.selectedProjectId, (newId) => {
@@ -621,8 +722,27 @@ function handleDragStart(projectId: string, node: FileTreeNodeType) {
   draggingSourceProjectId.value = projectId;
 }
 
+/**
+ * Returns true when the drag carries OS files (external import) rather than
+ * an in-app move payload.
+ */
+function dragCarriesOsFiles(event: DragEvent): boolean {
+  const dt = event.dataTransfer;
+  if (!dt) return false;
+  if (dt.types && Array.from(dt.types).includes('Files')) return true;
+  return (dt.files?.length ?? 0) > 0;
+}
+
 function handleProjectDragOver(event: DragEvent, projectId: string) {
-  // Only show drag-over effect if dragging a file to a different project
+  // External OS files: always highlight the project as a drop target.
+  if (dragCarriesOsFiles(event)) {
+    dragOverProjectId.value = projectId;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    return;
+  }
+  // In-app moves: only highlight when dragging across projects.
   if (draggingNode.value && draggingSourceProjectId.value !== projectId) {
     dragOverProjectId.value = projectId;
     if (event.dataTransfer) {
@@ -639,20 +759,29 @@ function handleProjectDragLeave(projectId: string) {
 
 async function handleProjectDrop(event: DragEvent, targetProjectId: string) {
   dragOverProjectId.value = null;
-  
+
+  // OS file drop — route to the new external-ingestion path. Any in-app drag
+  // state still hanging around is cleared too.
+  if (dragCarriesOsFiles(event)) {
+    draggingNode.value = null;
+    draggingSourceProjectId.value = null;
+    await handleOsFilesDrop(targetProjectId, { event, targetDirectory: undefined });
+    return;
+  }
+
   // Use stored dragging state (more reliable than dataTransfer)
   const sourceNode = draggingNode.value;
   const sourceProjectId = draggingSourceProjectId.value;
-  
+
   // Clear dragging state
   draggingNode.value = null;
   draggingSourceProjectId.value = null;
-  
+
   // Validate we have what we need
   if (!sourceNode || sourceNode.type !== 'file') {
     return;
   }
-  
+
   if (!sourceProjectId || sourceProjectId === targetProjectId) {
     return;
   }
@@ -724,6 +853,81 @@ async function handleNodeDrop(targetProjectId: string, payload: DragDropEvent) {
     const alert = await alertController.create({
       header: 'Error',
       message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      buttons: ['OK'],
+    });
+    await alert.present();
+  }
+}
+
+/**
+ * External OS file/folder drop. Resolves the dropped DataTransferItemList
+ * (recurses into folders, preserving subdirectory structure under
+ * `targetDirectory`), then runs ingestion sequentially via
+ * `fileIngestionService`. Per-file progress is published to the reactive
+ * `ingestionProgress` map and consumed by `FileTreeNode`.
+ */
+async function handleOsFilesDrop(targetProjectId: string, payload: OsFilesDropPayload) {
+  const { event, targetDirectory } = payload;
+  const dt = event.dataTransfer;
+  if (!dt) return;
+
+  // Prefer the items API (folder support); fall back to the flat files list.
+  const entries = dt.items && dt.items.length > 0
+    ? await collectDroppedEntries(dt.items)
+    : flatFilesToEntries(dt.files ?? []);
+
+  if (entries.length === 0) return;
+
+  // Make sure the target project is expanded so the user sees rows light up.
+  if (!expandedProjects.value.has(targetProjectId)) {
+    expandedProjects.value.add(targetProjectId);
+    expandedProjects.value = new Set(expandedProjects.value);
+  }
+  if (!projectFileTrees.value[targetProjectId]) {
+    await loadProjectFiles(targetProjectId);
+  }
+
+  let result;
+  try {
+    result = await ingestExternalFiles(
+      entries,
+      targetProjectId,
+      targetDirectory,
+      // Per-file refresh: as soon as `createFile` lands a row in the DB, drop
+      // the cached tree and reload it. The ghost row for this file disappears
+      // automatically (cleared by the service before this callback fires) and
+      // the real row takes its place, with the progress bar continuing via
+      // the persisted `files.id` key in `ingestionProgress`.
+      async () => {
+        delete projectFileTrees.value[targetProjectId];
+        await loadProjectFiles(targetProjectId);
+      },
+    );
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Import failed',
+      message: error instanceof Error ? error.message : 'Failed to import files',
+      buttons: ['OK'],
+    });
+    await alert.present();
+    return;
+  }
+
+  // Final refresh as a safety net — covers files whose per-file refresh was
+  // raced past by a later one. Cheap because `loadProjectFiles` is just a DB
+  // query plus a tree build.
+  delete projectFileTrees.value[targetProjectId];
+  await loadProjectFiles(targetProjectId);
+
+  for (const file of result.created) {
+    emit('file-created', targetProjectId, file);
+  }
+
+  if (result.failed.length > 0) {
+    const lines = result.failed.map((f) => `\u2022 ${f.name}: ${f.error}`).join('\n');
+    const alert = await alertController.create({
+      header: result.created.length > 0 ? 'Some files were skipped' : 'Import failed',
+      message: lines,
       buttons: ['OK'],
     });
     await alert.present();

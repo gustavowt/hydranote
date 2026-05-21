@@ -1,12 +1,12 @@
 <template>
-  <div class="live-editor-host markdown-preview">
+  <div class="live-editor-host markdown-preview" @click="handleHostClick">
     <editor-content v-if="editor" :editor="editor" class="live-editor-surface" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, shallowRef, watch, onMounted, onBeforeUnmount, computed } from 'vue';
-import { Editor, EditorContent, Node, mergeAttributes, VueNodeViewRenderer } from '@tiptap/vue-3';
+import { Editor, EditorContent, Extension, Node, mergeAttributes, VueNodeViewRenderer } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
@@ -18,6 +18,9 @@ import TableHeader from '@tiptap/extension-table-header';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { common, createLowlight } from 'lowlight';
 import {
   splitFrontmatter,
@@ -25,6 +28,7 @@ import {
   markdownToHtml,
   htmlToMarkdown,
 } from '@/services/markdownConverter';
+import { detectDates } from '@/services/dateDetectionService';
 import MermaidBlockNodeView from './MermaidBlockNodeView.vue';
 
 const lowlight = createLowlight(common);
@@ -38,9 +42,18 @@ const props = withDefaults(
   { disabled: false, placeholder: 'Start writing...' },
 );
 
+export interface DateChipClickPayload {
+  date: string;
+  type: string;
+  original: string;
+  context: string;
+  anchorRect: DOMRect | null;
+}
+
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void;
   (e: 'selection-snapshot'): void;
+  (e: 'date-chip-click', payload: DateChipClickPayload): void;
 }>();
 
 const editor = shallowRef<Editor | null>(null);
@@ -80,6 +93,75 @@ const MermaidBlock = Node.create({
   },
   addNodeView() {
     return VueNodeViewRenderer(MermaidBlockNodeView);
+  },
+});
+
+/**
+ * Inline ProseMirror decoration plugin that mirrors `injectDateChips` from
+ * `MarkdownEditor.vue`: walks the doc's text nodes, runs `detectDates` on
+ * each, and wraps recognized date ranges in `<span class="date-chip">`
+ * decorations carrying the same `data-*` attributes the marked path emits.
+ *
+ * Click handling is delegated via an `onChipClick` option so the parent Vue
+ * component can route into the existing `DateChipPopover` flow.
+ */
+const dateChipPluginKey = new PluginKey('dateChipDecorations');
+
+function buildDateChipDecorations(doc: ProseMirrorNode): DecorationSet {
+  const decorations: Decoration[] = [];
+  const now = new Date();
+
+  doc.descendants((node, pos) => {
+    if (!node.isText) return;
+    const text = node.text || '';
+    if (text.length < 3) return;
+
+    const dates = detectDates(text);
+    for (const d of dates) {
+      const from = pos + d.index;
+      const to = from + d.length;
+      const isoDate = d.date.toISOString().split('T')[0];
+      const isPast = d.type === 'deadline' && d.date < now;
+      const chipClass = d.type === 'deadline'
+        ? (isPast ? 'date-chip deadline overdue' : 'date-chip deadline')
+        : 'date-chip';
+
+      decorations.push(
+        Decoration.inline(from, to, {
+          nodeName: 'span',
+          class: chipClass,
+          'data-date': isoDate,
+          'data-type': d.type,
+          'data-original': d.text,
+          'data-context': d.context || '',
+        }),
+      );
+    }
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
+const DateChipExtension = Extension.create({
+  name: 'dateChip',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: dateChipPluginKey,
+        state: {
+          init: (_, { doc }) => buildDateChipDecorations(doc),
+          apply: (tr, oldSet) => {
+            if (!tr.docChanged) return oldSet.map(tr.mapping, tr.doc);
+            return buildDateChipDecorations(tr.doc);
+          },
+        },
+        props: {
+          decorations(state) {
+            return dateChipPluginKey.getState(state) as DecorationSet | undefined;
+          },
+        },
+      }),
+    ];
   },
 });
 
@@ -131,6 +213,7 @@ function buildEditor(): Editor {
       TaskItem.configure({ nested: true }),
       CodeBlockLowlight.configure({ lowlight }),
       MermaidBlock,
+      DateChipExtension,
     ],
     content: html,
     editable: !props.disabled,
@@ -187,6 +270,29 @@ watch(
     editor.value?.setEditable(!disabled);
   },
 );
+
+/**
+ * Handle clicks on the host element. If the click landed on a `.date-chip`
+ * decoration, emit `date-chip-click` so the parent can open the popover.
+ * We handle it here (Vue level) rather than via ProseMirror's `handleClickOn`
+ * because the latter relies on `posAtCoords` which doesn't work in jsdom and
+ * isn't needed for a chip click — the decoration's DOM is already the target.
+ */
+function handleHostClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+  const chip = target.closest('.date-chip') as HTMLElement | null;
+  if (!chip) return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit('date-chip-click', {
+    date: chip.dataset.date || '',
+    type: chip.dataset.type || 'regular',
+    original: chip.dataset.original || '',
+    context: chip.dataset.context || '',
+    anchorRect: chip.getBoundingClientRect(),
+  });
+}
 
 function focusEditor() {
   editor.value?.commands.focus();
