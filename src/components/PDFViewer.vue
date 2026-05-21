@@ -396,10 +396,29 @@ watch(
   ([newPath, newData]) => {
     if (newPath || newData) {
       loadPDF();
+      return;
     }
+    // No source available — surface an explicit empty state so the editor
+    // area doesn't appear silently blank (e.g. a row whose binary was never
+    // persisted and isn't on the synced filesystem).
+    resetViewerToEmptyState(
+      'No PDF data available. The file may have been moved or deleted.',
+    );
   },
   { immediate: true }
 );
+
+function resetViewerToEmptyState(message: string) {
+  loading.value = false;
+  error.value = message;
+  pdfDoc.value?.destroy();
+  pdfDoc.value = null;
+  totalPages.value = 0;
+  currentPage.value = 1;
+  pageInput.value = 1;
+  renderedPages.value = [];
+  canvasRefs.value.clear();
+}
 
 // Watch for scale changes
 watch(scale, () => {
@@ -420,6 +439,7 @@ onBeforeUnmount(() => {
 });
 
 // Expose methods
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function setPDFData(data: ArrayBuffer | Uint8Array) {
   // This will trigger the watcher
 }

@@ -5,8 +5,9 @@
  * Provider configuration is independent from LLM settings
  */
 
-import type { Chunk, Embedding, IndexerSettings, HFEmbeddingRuntimeStatus } from "../types";
+import type { Chunk, Embedding, IndexerSettings, HFEmbeddingRuntimeStatus, OllamaEmbeddingConfig } from "../types";
 import { DEFAULT_INDEXER_SETTINGS } from "../types";
+import { getOllamaRequestConfig } from "./llmService";
 
 const INDEXER_STORAGE_KEY = "hydranote_indexer_settings";
 
@@ -56,7 +57,9 @@ export function isIndexerConfigured(): boolean {
     case "gemini":
       return !!settings.gemini.apiKey;
     case "ollama":
-      return !!settings.ollama.baseUrl && !!settings.ollama.model;
+      if (!settings.ollama.model) return false;
+      if (settings.ollama.mode === "cloud") return !!settings.ollama.apiKey;
+      return !!settings.ollama.baseUrl;
     case "huggingface_local":
       // Hugging Face local requires Electron and a selected model
       return isHuggingFaceLocalAvailable() && !!settings.huggingfaceLocal.model;
@@ -169,22 +172,20 @@ async function generateEmbeddingGemini(
 // ============================================
 
 /**
- * Generate embedding using Ollama API
+ * Generate embedding using Ollama API (local daemon or Ollama Cloud).
  */
 async function generateEmbeddingOllama(
   text: string,
-  baseUrl: string,
-  model: string
+  config: OllamaEmbeddingConfig
 ): Promise<number[]> {
+  const { baseUrl, headers } = getOllamaRequestConfig(config);
   const url = `${baseUrl.replace(/\/$/, "")}/api/embeddings`;
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
-      model: model,
+      model: config.model,
       prompt: text,
     }),
   });
@@ -363,12 +364,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
       break;
 
     case "ollama":
-      if (settings.ollama.baseUrl && settings.ollama.model) {
-        return generateEmbeddingOllama(
-          text,
-          settings.ollama.baseUrl,
-          settings.ollama.model
-        );
+      if (
+        settings.ollama.model &&
+        (settings.ollama.mode === "cloud"
+          ? !!settings.ollama.apiKey
+          : !!settings.ollama.baseUrl)
+      ) {
+        return generateEmbeddingOllama(text, settings.ollama);
       }
       break;
 
@@ -479,8 +481,6 @@ export async function testIndexerConnection(): Promise<{
   message: string;
   provider: string;
 }> {
-  const settings = loadIndexerSettings();
-
   try {
     // Generate a test embedding
     const testText = "This is a test sentence for embedding generation.";
@@ -625,24 +625,30 @@ export async function reindexStaleFiles(
     }
 
     try {
-      // Get file content
+      // Get file content + type so we can route PDFs through the page-aware
+      // ingestion pipeline.
       const contentResult = await conn.query(
-        `SELECT content FROM files WHERE id = '${file.fileId}'`
+        `SELECT content, type FROM files WHERE id = '${file.fileId}'`
       );
       const contentRows = contentResult.toArray();
       if (contentRows.length === 0) continue;
 
-      const content = contentRows[0].content as string;
+      const content = (contentRows[0].content as string) ?? "";
+      const fileType = String(contentRows[0].type ?? "").toLowerCase();
+      const reindexType = fileType === "pdf"
+        ? "pdf"
+        : file.fileName.endsWith(".md") ? "md" : "txt";
 
-      // Re-index the file
-      await reindexFile(
-        file.fileId,
-        content,
-        file.fileName.endsWith(".md") ? "md" : "txt"
+      await reindexFile(file.fileId, content, reindexType);
+
+      // Update the content_hash. For PDFs the canonical hash input is the
+      // joined per-page text now stored on the row by the ingestion pipeline,
+      // so re-read the column rather than reusing the pre-ingest content.
+      const hashSourceRow = await conn.query(
+        `SELECT content FROM files WHERE id = '${file.fileId}'`
       );
-
-      // Update the content_hash
-      const newHash = computeContentHash(content);
+      const hashSource = (hashSourceRow.toArray()[0]?.content as string) ?? content;
+      const newHash = computeContentHash(hashSource);
       await conn.query(
         `UPDATE files SET content_hash = '${newHash}' WHERE id = '${file.fileId}'`
       );
@@ -672,11 +678,12 @@ export async function reindexAllFiles(
   const { reindexFile } = await import("./projectService");
   const conn = getConnection();
 
-  // Get all text-based files
+  // Get all indexable files (md, txt, pdf). PDFs are re-rendered + re-embedded
+  // via the page-aware pipeline; this can be expensive on large documents.
   const result = await conn.query(`
-    SELECT id, name, content
+    SELECT id, name, content, type
     FROM files
-    WHERE type IN ('md', 'txt')
+    WHERE type IN ('md', 'txt', 'pdf')
     AND content IS NOT NULL
   `);
 
@@ -689,22 +696,27 @@ export async function reindexAllFiles(
     const row = rows[i];
     const fileId = row.id as string;
     const fileName = row.name as string;
-    const content = row.content as string;
+    const content = (row.content as string) ?? "";
+    const fileType = String(row.type ?? "").toLowerCase();
 
     if (onProgress) {
       onProgress(i + 1, rows.length, fileName);
     }
 
     try {
-      // Re-index the file
-      await reindexFile(
-        fileId,
-        content,
-        fileName.endsWith(".md") ? "md" : "txt"
-      );
+      const reindexType = fileType === "pdf"
+        ? "pdf"
+        : fileName.endsWith(".md") ? "md" : "txt";
 
-      // Update the content_hash
-      const newHash = computeContentHash(content);
+      await reindexFile(fileId, content, reindexType);
+
+      // For PDFs the joined per-page text on the row may have been refreshed
+      // by the ingestion pipeline, so re-read it for the hash.
+      const hashSourceRow = await conn.query(
+        `SELECT content FROM files WHERE id = '${fileId}'`
+      );
+      const hashSource = (hashSourceRow.toArray()[0]?.content as string) ?? content;
+      const newHash = computeContentHash(hashSource);
       await conn.query(
         `UPDATE files SET content_hash = '${newHash}' WHERE id = '${fileId}'`
       );

@@ -17,7 +17,6 @@ import type {
   ProjectFile,
   Chunk,
   DocumentFormat,
-  NoteContextMetadata,
   UpdateFileToolParams,
   UpdateFilePreview,
   DiffLine,
@@ -66,8 +65,6 @@ import { generateImage as generateImageAPI, isImageGenerationConfigured } from "
 import {
   listEvents as listCalendarEvents,
   createEvent as createCalendarEvent,
-  getUpcomingEventsForContext,
-  listCalendars,
 } from "./googleCalendarService";
 import { loadGoogleWorkspaceSettings } from "./googleWorkspaceAuthService";
 import { isGoogleAppEnabled } from "./integrationService";
@@ -299,11 +296,23 @@ export async function executeSearchTool(
       };
     }
 
-    // Format results with source references
+    // Format results with source references. PDF chunks carry page/section
+    // metadata that we surface inline so the LLM can cite "p. N — Section",
+    // and visual_description chunks are tagged so the model knows the snippet
+    // came from a vision model rather than from the document text.
     const formattedResults = results
       .map((result, index) => {
         const scorePercent = (result.score * 100).toFixed(1);
-        return `[Result ${index + 1}] (Source: ${result.fileName}, Score: ${scorePercent}%)\n${result.text}`;
+        const locationParts: string[] = [];
+        if (typeof result.pageNumber === "number") {
+          locationParts.push(`p. ${result.pageNumber}`);
+        }
+        if (result.section) {
+          locationParts.push(result.section);
+        }
+        const location = locationParts.length > 0 ? `, ${locationParts.join(" \u2014 ")}` : "";
+        const kindTag = result.kind === "visual_description" ? " [visual]" : "";
+        return `[Result ${index + 1}] (Source: ${result.fileName}${location}, Score: ${scorePercent}%)${kindTag}\n${result.text}`;
       })
       .join("\n\n---\n\n");
 
@@ -526,16 +535,12 @@ export async function executeSummarizeTool(
       params.maxDirectTokens || DEFAULT_SUMMARIZE_CONFIG.maxDirectTokens;
 
     let summary: string;
-    let method: "direct" | "hierarchical";
 
     if (tokenCount <= maxDirect) {
       // Direct summarization for smaller documents
-      method = "direct";
       summary = await summarizeText(textContent, `Document: ${file.name}`);
     } else {
       // Hierarchical summarization for larger documents
-      method = "hierarchical";
-
       // Filter to text chunks only (in case of mixed content)
       let textChunks = chunks.filter((c) => c.text.trim().length > 50);
 
@@ -666,7 +671,8 @@ Guidelines:
 /**
  * Convert title to a safe filename
  */
-function titleToFileName(title: string): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _titleToFileName(title: string): string {
   return title
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "") // Remove special characters
@@ -679,7 +685,8 @@ function titleToFileName(title: string): string {
 /**
  * Helper to build full file path
  */
-function buildFilePath(fileName: string, directory: string): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _buildFilePath(fileName: string, directory: string): string {
   return directory ? `${directory}/${fileName}` : fileName;
 }
 
@@ -1626,7 +1633,8 @@ function generateDiffLines(original: string, updated: string): DiffLine[] {
   const diffLines: DiffLine[] = [];
 
   // Simple line-by-line diff
-  const maxLines = Math.max(originalLines.length, updatedLines.length);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _maxLines = Math.max(originalLines.length, updatedLines.length);
   let oldLineNum = 1;
   let newLineNum = 1;
 
@@ -2462,7 +2470,8 @@ export async function executeTool(
   onProgress?: (status: string) => void,
 ): Promise<ToolResult> {
   let result: ToolResult;
-  const startTime = Date.now();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _startTime = Date.now();
   
   try {
     result = await executeToolInternal(projectId, call, userMessage, onProgress);
@@ -2887,7 +2896,6 @@ import type {
   FailedStep,
   ExecutionResult,
   CompletionCheck,
-  PlanStepCallback,
   ExecutePlanOptions,
   PlannerFlowState,
 } from "../types";
@@ -3757,7 +3765,10 @@ export async function executePlan(
   projectId: string | undefined,
   options: ExecutePlanOptions = {},
 ): Promise<ExecutionResult> {
-  const { onStepUpdate, onStreamChunk, stopOnFailure = false, onToolChildUpdate, recentImageAttachments } = options;
+  const { onStepUpdate, 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    onStreamChunk: _onStreamChunk, 
+    stopOnFailure = false, onToolChildUpdate, recentImageAttachments } = options;
 
   const startTime = Date.now();
   const completedSteps: CompletedStep[] = [];
@@ -4015,7 +4026,8 @@ function generateFinalResponse(
   plan: ExecutionPlan,
   completedSteps: CompletedStep[],
   failedSteps: FailedStep[],
-  _context: Record<string, unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  __context: Record<string, unknown>,
 ): string {
   const parts: string[] = [];
 
@@ -4199,7 +4211,8 @@ export interface PlannerFlowResult {
 /**
  * Create a tool log entry for a step
  */
-function createToolLogEntry(
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _createToolLogEntry(
   step: PlanStep,
   status: ToolLogStatus,
   result?: ToolResult,

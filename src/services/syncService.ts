@@ -38,9 +38,29 @@ import {
 } from "./database";
 import {
   extractText,
-  getFileBinaryData,
   convertDOCXToHTML,
 } from "./documentProcessor";
+import { ingestPdfForSearch } from "./pdfIngestionService";
+
+/**
+ * Best-effort PDF page-aware indexing. Runs the full text extraction + visual
+ * detection + vision-description pipeline. Errors are logged but do not block
+ * sync — the file is still created with its extracted text content.
+ */
+async function indexPdfFile(
+  projectId: string,
+  fileId: string,
+  file: File,
+): Promise<void> {
+  try {
+    await ingestPdfForSearch(projectId, fileId, file);
+  } catch (error) {
+    console.warn(
+      `PDF ingestion failed for file ${fileId} (${file.name}); text-only fallback retained:`,
+      error,
+    );
+  }
+}
 
 // Supported file extensions for sync
 const SUPPORTED_TEXT_EXTENSIONS = ['.md', '.txt'];
@@ -311,7 +331,7 @@ export async function syncProject(projectId: string): Promise<SyncResult> {
                 }
                 
                 if (change.type === "created") {
-                  await createFile(
+                  const created = await createFile(
                     projectId,
                     change.filePath,
                     textContent,
@@ -319,10 +339,16 @@ export async function syncProject(projectId: string): Promise<SyncResult> {
                     binaryData,
                     htmlContent,
                   );
+                  if (fileType === 'pdf') {
+                    await indexPdfFile(projectId, created.id, file);
+                  }
                 } else if (change.fileId) {
                   // For binary file updates, we need to update with new binary data
                   // For now, just update the text content
                   await updateFile(change.fileId, textContent);
+                  if (fileType === 'pdf') {
+                    await indexPdfFile(projectId, change.fileId, file);
+                  }
                 }
                 result.filesRead++;
               }
@@ -432,8 +458,8 @@ async function importProjectFromFileSystem(
               // For PDF files: store system file path for readonly viewing
               const rootPath = getRootPath();
               const systemFilePath = `${rootPath}/${directoryName}/${fsFile.relativePath}`.replace(/\/+/g, '/');
-              
-              await createFile(
+
+              const createdPdf = await createFile(
                 project.id,
                 fsFile.relativePath,
                 textContent,
@@ -442,11 +468,11 @@ async function importProjectFromFileSystem(
                 undefined, // no html content for PDFs
                 systemFilePath,
               );
+              await indexPdfFile(project.id, createdPdf.id, file);
             } else {
               // For DOCX files: store binary data and HTML content
-              let htmlContent: string | undefined;
               const docxResult = await convertDOCXToHTML(file);
-              htmlContent = docxResult.html;
+              const htmlContent = docxResult.html;
               
               await createFile(
                 project.id,
@@ -630,19 +656,20 @@ export async function syncFileFromFileSystem(
         // For PDF files: store system file path for readonly viewing
         const rootPath = getRootPath();
         const systemFilePath = `${rootPath}/${projectName}/${filePath}`.replace(/\/+/g, '/');
-        
+
         if (existingFile) {
           // Update existing file - just update text content for embeddings
           await updateFile(existingFile.id, textContent);
+          await indexPdfFile(projectId, existingFile.id, file);
         } else {
           // Create new file with system file path
-          await createFile(projectId, filePath, textContent, 'pdf', undefined, undefined, systemFilePath);
+          const createdPdf = await createFile(projectId, filePath, textContent, 'pdf', undefined, undefined, systemFilePath);
+          await indexPdfFile(projectId, createdPdf.id, file);
         }
       } else {
         // For DOCX files: store binary data and HTML content
-        let htmlContent: string | undefined;
         const docxResult = await convertDOCXToHTML(file);
-        htmlContent = docxResult.html;
+        const htmlContent = docxResult.html;
 
         if (existingFile) {
           // Update existing file

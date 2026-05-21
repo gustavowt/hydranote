@@ -424,6 +424,9 @@ export async function get_file_chunks(fileId: string): Promise<Chunk[]> {
     text: row.text as string,
     startOffset: row.start_offset as number,
     endOffset: row.end_offset as number,
+    pageNumber: row.page_number != null ? Number(row.page_number) : undefined,
+    section: row.section != null ? String(row.section) : undefined,
+    kind: row.kind != null ? (String(row.kind) as Chunk['kind']) : undefined,
     createdAt: new Date(row.created_at as string),
   }));
 }
@@ -474,6 +477,9 @@ export async function vector_search(
       fileName: file?.name || 'Unknown',
       text: result.text,
       score: result.score,
+      pageNumber: result.pageNumber,
+      section: result.section,
+      kind: result.kind as SearchResult['kind'],
     });
   }
   
@@ -593,19 +599,32 @@ export async function createFile(
 /**
  * Index a file for semantic search (create chunks and embeddings)
  * Call this after createFile() if the file should be searchable.
+ *
+ * Note: this helper is intentionally limited to `md` / `txt`. PDFs use the
+ * page-aware pipeline in `pdfIngestionService.ingestPdfForSearch`, which is
+ * invoked directly by `syncService` after `createFile(...,'pdf',...)` and by
+ * `reindexFile('pdf', ...)`. We keep `'pdf'` in the signature so callers can
+ * use one accept-list with the file type, but route it to a no-op here.
  */
 export async function indexFileForSearch(
   projectId: string,
   fileId: string,
   content: string,
-  fileType: 'md' | 'txt' = 'md'
+  fileType: 'md' | 'txt' | 'pdf' = 'md'
 ): Promise<void> {
   await ensureInitialized();
-  
+
+  if (fileType === 'pdf') {
+    // PDFs cannot be indexed from a plain `content` string — they need the
+    // original binary so we can render visual pages. Callers with a `File`
+    // should use `pdfIngestionService.ingestPdfForSearch` directly.
+    return;
+  }
+
   const { chunkText, chunkMarkdownText } = await import('./documentProcessor');
   const { generateEmbeddingsForChunks } = await import('./embeddingService');
   const conn = getConnection();
-  
+
   // Chunk the content based on file type
   const chunks = fileType === 'md'
     ? chunkMarkdownText(content, fileId, projectId)
@@ -639,12 +658,20 @@ export async function indexFileForSearch(
 
 /**
  * Re-index a file: delete old chunks/embeddings and create new ones
- * Use this when file content has been updated to keep search results accurate
+ * Use this when file content has been updated to keep search results accurate.
+ *
+ * - For `'md'` / `'txt'`: chunks the new `content` string and re-embeds.
+ * - For `'pdf'`: re-runs the page-aware ingestion pipeline (text extraction,
+ *   visual detection, vision-model description for visual pages, then chunk +
+ *   embed). The caller must pass either a fresh `File` object or the file must
+ *   have a `systemFilePath` so the binary can be re-read from disk. The
+ *   `content` argument is ignored for PDFs.
  */
 export async function reindexFile(
   fileId: string,
   content: string,
-  fileType: 'md' | 'txt' = 'md'
+  fileType: 'md' | 'txt' | 'pdf' = 'md',
+  pdfFile?: File,
 ): Promise<void> {
   await ensureInitialized();
   
@@ -655,6 +682,18 @@ export async function reindexFile(
   if (!file) {
     throw new Error(`File not found: ${fileId}`);
   }
+
+  if (fileType === 'pdf') {
+    // Source the binary either from the caller or from the system file path.
+    // The PDF ingestion pipeline takes care of deleting prior chunks/embeddings.
+    const source = pdfFile ?? (await loadPdfFileFromSystem(file));
+    if (!source) {
+      throw new Error(`Cannot re-index PDF "${file.name}": no binary source available`);
+    }
+    const { ingestPdfForSearch } = await import('./pdfIngestionService');
+    await ingestPdfForSearch(file.projectId, fileId, source);
+    return;
+  }
   
   // Delete old embeddings first (foreign key on chunks)
   await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
@@ -664,6 +703,28 @@ export async function reindexFile(
   
   // Re-index with new content
   await indexFileForSearch(file.projectId, fileId, content, fileType);
+}
+
+/**
+ * Read a PDF binary back from disk (via Electron IPC) and rebuild a `File`
+ * object the ingestion pipeline can consume. Returns `null` when the file has
+ * no `systemFilePath` (e.g. a pure in-DB PDF) or the read fails.
+ */
+async function loadPdfFileFromSystem(file: ProjectFile): Promise<File | null> {
+  if (!file.systemFilePath) return null;
+  try {
+    const electronAPI = (window as unknown as {
+      electronAPI?: {
+        fs?: { readBinaryFile?: (path: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }> };
+      };
+    }).electronAPI;
+    if (!electronAPI?.fs?.readBinaryFile) return null;
+    const result = await electronAPI.fs.readBinaryFile(file.systemFilePath);
+    if (!result.success || !result.data) return null;
+    return new File([new Uint8Array(result.data)], file.name, { type: 'application/pdf' });
+  } catch {
+    return null;
+  }
 }
 
 /**
