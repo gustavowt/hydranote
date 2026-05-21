@@ -4,8 +4,8 @@ export interface SelectableModelFile {
   isPrimary?: boolean;
 }
 
-interface ModelFileGroup {
-  files: SelectableModelFile[];
+interface ModelFileGroup<T extends SelectableModelFile> {
+  files: T[];
   firstIndex: number;
   complete: boolean;
   preferredRank: number;
@@ -34,9 +34,9 @@ export function selectDownloadableModelFiles<T extends SelectableModelFile>(file
   return groups[0].files;
 }
 
-function buildModelFileGroups<T extends SelectableModelFile>(files: T[]): ModelFileGroup[] {
+function buildModelFileGroups<T extends SelectableModelFile>(files: T[]): ModelFileGroup<T>[] {
   const groups = new Map<string, {
-    entries: Array<{ file: SelectableModelFile; shardIndex: number }>;
+    entries: Array<{ file: T; shardIndex: number }>;
     expectedShardCount: number;
     firstIndex: number;
   }>();
