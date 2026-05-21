@@ -171,7 +171,39 @@
       <!-- Ollama Indexer Config -->
       <div v-if="modelValue.provider === 'ollama'" class="config-panel" :class="{ compact }">
         <div class="config-fields">
+          <!-- Local / Cloud mode switch -->
           <div class="field-group">
+            <label>Mode</label>
+            <div class="mode-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                class="mode-tab"
+                :class="{ selected: (modelValue.ollama.mode ?? 'local') === 'local' }"
+                :aria-selected="(modelValue.ollama.mode ?? 'local') === 'local'"
+                @click="updateField('ollama', 'mode', 'local')"
+              >
+                Local
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="mode-tab"
+                :class="{ selected: modelValue.ollama.mode === 'cloud' }"
+                :aria-selected="modelValue.ollama.mode === 'cloud'"
+                @click="updateField('ollama', 'mode', 'cloud')"
+              >
+                Cloud
+              </button>
+            </div>
+            <span class="field-hint">
+              Local: a daemon you run yourself. Cloud: hosted models on
+              <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>.
+            </span>
+          </div>
+
+          <!-- Local URL (local mode only) -->
+          <div v-if="(modelValue.ollama.mode ?? 'local') === 'local'" class="field-group">
             <label>Ollama URL</label>
             <input
               :value="modelValue.ollama.baseUrl"
@@ -180,6 +212,26 @@
               placeholder="http://localhost:11434"
             />
           </div>
+
+          <!-- Cloud API key (cloud mode only) -->
+          <div v-if="modelValue.ollama.mode === 'cloud'" class="field-group">
+            <label>API Key</label>
+            <div class="input-wrapper">
+              <input
+                :value="modelValue.ollama.apiKey"
+                @input="updateField('ollama', 'apiKey', ($event.target as HTMLInputElement).value)"
+                :type="showApiKey ? 'text' : 'password'"
+                placeholder="ollama_..."
+              />
+              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+                <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
+              </button>
+            </div>
+            <span class="field-hint">
+              Get your key at <a href="https://ollama.com/settings/keys" target="_blank" rel="noopener">ollama.com/settings/keys</a>
+            </span>
+          </div>
+
           <div class="field-group">
             <label>Embedding Model</label>
             <input
@@ -837,6 +889,38 @@ function copyFromAIProvider(provider: 'openai' | 'gemini') {
 
 .toggle-visibility:hover {
   color: var(--hn-text-primary);
+}
+
+/* Local / Cloud mode switch */
+.mode-tabs {
+  display: inline-flex;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  padding: 4px;
+  gap: 4px;
+  width: fit-content;
+}
+
+.mode-tab {
+  padding: 8px 20px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mode-tab:hover:not(.selected) {
+  color: var(--hn-text-primary);
+}
+
+.mode-tab.selected {
+  background: var(--hn-purple);
+  color: #ffffff;
 }
 
 /* Connection Status */

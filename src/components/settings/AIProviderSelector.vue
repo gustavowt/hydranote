@@ -13,7 +13,10 @@
           <component :is="provider.iconComponent" />
         </div>
         <div class="provider-info">
-          <h3>{{ provider.name }}</h3>
+          <div class="provider-name-row">
+            <h3>{{ provider.name }}</h3>
+            <span v-if="provider.id === 'openai'" class="recommended-badge">Recommended</span>
+          </div>
           <p>{{ provider.description }}</p>
         </div>
         <div class="selected-indicator" v-if="modelValue.provider === provider.id">
@@ -222,7 +225,39 @@
     <div v-if="modelValue.provider === 'ollama'" class="config-panel">
       <h3 v-if="!compact" class="config-title">Ollama Configuration</h3>
       <div class="config-fields">
+        <!-- Local / Cloud mode switch -->
         <div class="field-group">
+          <label>Mode</label>
+          <div class="mode-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              class="mode-tab"
+              :class="{ selected: (modelValue.ollama.mode ?? 'local') === 'local' }"
+              :aria-selected="(modelValue.ollama.mode ?? 'local') === 'local'"
+              @click="updateNestedField('ollama', 'mode', 'local')"
+            >
+              Local
+            </button>
+            <button
+              type="button"
+              role="tab"
+              class="mode-tab"
+              :class="{ selected: modelValue.ollama.mode === 'cloud' }"
+              :aria-selected="modelValue.ollama.mode === 'cloud'"
+              @click="updateNestedField('ollama', 'mode', 'cloud')"
+            >
+              Cloud
+            </button>
+          </div>
+          <span class="field-hint">
+            Local: a daemon you run yourself. Cloud: hosted models on
+            <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>.
+          </span>
+        </div>
+
+        <!-- Local URL (local mode only) -->
+        <div v-if="(modelValue.ollama.mode ?? 'local') === 'local'" class="field-group">
           <label>Ollama URL</label>
           <input
             :value="modelValue.ollama.baseUrl"
@@ -233,6 +268,25 @@
           <span class="field-hint">Local Ollama server address</span>
         </div>
 
+        <!-- Cloud API key (cloud mode only) -->
+        <div v-if="modelValue.ollama.mode === 'cloud'" class="field-group">
+          <label>API Key</label>
+          <div class="input-wrapper">
+            <input
+              :value="modelValue.ollama.apiKey"
+              @input="updateNestedField('ollama', 'apiKey', ($event.target as HTMLInputElement).value)"
+              :type="showApiKey ? 'text' : 'password'"
+              placeholder="ollama_..."
+            />
+            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+              <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
+            </button>
+          </div>
+          <span class="field-hint">
+            Get your key at <a href="https://ollama.com/settings/keys" target="_blank" rel="noopener">ollama.com/settings/keys</a>
+          </span>
+        </div>
+
         <div class="field-group">
           <label>Model</label>
           <div v-if="!compact" class="model-input-row">
@@ -240,7 +294,7 @@
               :value="modelValue.ollama.model"
               @input="updateNestedField('ollama', 'model', ($event.target as HTMLInputElement).value)"
               type="text"
-              placeholder="llama3.2"
+              :placeholder="modelValue.ollama.mode === 'cloud' ? 'gpt-oss:120b-cloud' : 'llama3.2'"
             />
             <button 
               class="fetch-models-btn" 
@@ -257,11 +311,37 @@
             :value="modelValue.ollama.model"
             @input="updateNestedField('ollama', 'model', ($event.target as HTMLInputElement).value)"
             type="text"
-            placeholder="llama3.2"
+            :placeholder="modelValue.ollama.mode === 'cloud' ? 'gpt-oss:120b-cloud' : 'llama3.2'"
           />
         </div>
 
-        <!-- Available Models (full mode only) -->
+        <!-- Suggested cloud models (cloud mode, full UI only) -->
+        <div v-if="!compact && modelValue.ollama.mode === 'cloud'" class="field-group">
+          <label>Suggested Cloud Models</label>
+          <div class="models-list">
+            <button
+              v-for="suggestion in SUGGESTED_OLLAMA_CLOUD_MODELS"
+              :key="suggestion.name"
+              class="model-item"
+              :class="{ selected: modelValue.ollama.model === suggestion.name }"
+              @click="updateNestedField('ollama', 'model', suggestion.name)"
+              type="button"
+            >
+              <ion-icon :icon="cubeOutline" />
+              <div class="model-item-info">
+                <span>{{ suggestion.name }}</span>
+                <span class="field-hint">{{ suggestion.description }}</span>
+              </div>
+              <ion-icon
+                v-if="modelValue.ollama.model === suggestion.name"
+                :icon="checkmarkOutline"
+                class="check-icon"
+              />
+            </button>
+          </div>
+        </div>
+
+        <!-- Available Models from the daemon (full mode only) -->
         <div v-if="!compact && ollamaModels.length > 0" class="field-group">
           <label>Available Models</label>
           <div class="models-list">
@@ -633,6 +713,7 @@ import {
   lockClosedOutline,
 } from 'ionicons/icons';
 import type { LLMSettings, LLMProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HardwareInfo } from '@/types';
+import { SUGGESTED_OLLAMA_CLOUD_MODELS } from '@/types';
 import type { CustomModelValidationResult } from '@/services';
 import { OpenAiIcon, ClaudeIcon, GeminiIcon, OllamaIcon, HuggingFaceIcon } from '@/icons';
 import { formatFileSize, validateCustomModel } from '@/services';
@@ -766,7 +847,10 @@ const hasApiKey = computed(() => {
   if (provider === 'openai') return !!props.modelValue.openai.apiKey;
   if (provider === 'anthropic') return !!props.modelValue.anthropic.apiKey;
   if (provider === 'google') return !!props.modelValue.google.apiKey;
-  if (provider === 'ollama') return !!props.modelValue.ollama.baseUrl;
+  if (provider === 'ollama') {
+    if (props.modelValue.ollama.mode === 'cloud') return !!props.modelValue.ollama.apiKey;
+    return !!props.modelValue.ollama.baseUrl;
+  }
   if (provider === 'huggingface_local') return props.localModelsAvailable && props.installedModels.length > 0;
   return false;
 });
@@ -1050,6 +1134,37 @@ function formatHardwareInfo(info: HardwareInfo): string {
 
 .field-hint a:hover {
   text-decoration: underline;
+}
+
+.mode-tabs {
+  display: inline-flex;
+  background: var(--hn-bg-deep);
+  border: 1px solid var(--hn-border-default);
+  border-radius: 8px;
+  padding: 4px;
+  gap: 4px;
+  width: fit-content;
+}
+
+.mode-tab {
+  padding: 8px 20px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mode-tab:hover:not(.selected) {
+  color: var(--hn-text-primary);
+}
+
+.mode-tab.selected {
+  background: var(--hn-purple);
+  color: #ffffff;
 }
 
 .optional {
@@ -1773,6 +1888,21 @@ function formatHardwareInfo(info: HardwareInfo): string {
   border: 1px solid rgba(210, 153, 34, 0.4);
   border-radius: 4px;
   color: var(--hn-warning);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Recommended Badge */
+.recommended-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--hn-green-muted);
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  border-radius: 4px;
+  color: var(--hn-green-light);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;

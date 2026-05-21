@@ -849,7 +849,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import {
   IonPage,
   IonHeader,
@@ -866,12 +866,9 @@ import {
   toastController,
 } from '@ionic/vue';
 import {
-  flashOutline,
   saveOutline,
   checkmarkCircleOutline,
   closeCircleOutline,
-  cubeOutline,
-  checkmarkOutline,
   checkmarkCircle,
   cloudOutline,
   documentTextOutline,
@@ -890,19 +887,15 @@ import {
   serverOutline,
   copyOutline,
   downloadOutline,
-  informationCircleOutline,
   imageOutline,
   extensionPuzzleOutline,
   micOutline,
 } from 'ionicons/icons';
-import type { LLMSettings, LLMProvider, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, EmbeddingProvider, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider, IntegrationSettings, IntegrationId } from '@/types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, SUGGESTED_HF_LOCAL_EMBEDDING_MODELS, DEFAULT_INTEGRATION_SETTINGS } from '@/types';
+import type { LLMSettings, FileSystemSettings, WebSearchSettings, WebSearchProvider, IndexerSettings, LocalModel, HFModelRef, ModelDownloadProgress, RuntimeStatus, HFEmbeddingRuntimeStatus, HardwareInfo, ImageGenProvider, IntegrationSettings, IntegrationId } from '@/types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_FILESYSTEM_SETTINGS, DEFAULT_WEB_SEARCH_SETTINGS, DEFAULT_INDEXER_SETTINGS, DEFAULT_INTEGRATION_SETTINGS } from '@/types';
 import { 
   OpenAiIcon, 
-  ClaudeIcon, 
   GeminiIcon, 
-  OllamaIcon,
-  HuggingFaceIcon,
   SearxngIcon,
   BraveIcon,
   DuckDuckGoIcon,
@@ -954,49 +947,9 @@ import {
   getRuntimeStatus,
   getHardwareInfo,
   loadLocalModelSettings,
-  saveLocalModelSettings,
   loadModel,
-  unloadModel,
-  formatFileSize,
-  formatSpeed,
-  formatEta,
-  getProgressPercent,
 } from '@/services';
 import type { MCPSettings } from '@/services';
-
-// Provider configurations for modularity
-const providerConfigs: { id: LLMProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    description: 'GPT-4.1, o3, GPT-4o series',
-    iconComponent: OpenAiIcon,
-  },
-  {
-    id: 'anthropic',
-    name: 'Claude',
-    description: 'Claude 4 Opus, Sonnet, 3.5 series',
-    iconComponent: ClaudeIcon,
-  },
-  {
-    id: 'google',
-    name: 'Gemini',
-    description: 'Gemini 2.5 Pro, Flash, 2.0 series',
-    iconComponent: GeminiIcon,
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama',
-    description: 'Local LLMs: Llama, Mistral, etc.',
-    iconComponent: OllamaIcon,
-  },
-  {
-    id: 'huggingface_local',
-    name: 'Local Model',
-    description: 'Run Hugging Face GGUF models locally',
-    iconComponent: HuggingFaceIcon,
-  },
-];
 
 const activeSection = ref<'providers' | 'indexer' | 'instructions' | 'webresearch' | 'imagegen' | 'integrations' | 'storage' | 'dictation' | 'mcp'>('providers');
 const settings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
@@ -1004,9 +957,6 @@ const testing = ref(false);
 const loadingModels = ref(false);
 const ollamaModels = ref<string[]>([]);
 const connectionStatus = ref<{ success: boolean; message: string } | null>(null);
-const showApiKey = ref(false);
-const showAnthropicApiKey = ref(false);
-const showGoogleApiKey = ref(false);
 
 // Storage section state
 const fsSettings = ref<FileSystemSettings>({ ...DEFAULT_FILESYSTEM_SETTINGS });
@@ -1076,46 +1026,8 @@ const hfLocalStatus = ref<HFEmbeddingRuntimeStatus | null>(null);
 const downloadedEmbeddingModels = ref<Set<string>>(new Set());
 let unsubscribeHFStatus: (() => void) | null = null;
 
-// Indexer (embedding) provider configurations - computed to include HF local conditionally
-const indexerProviders = computed(() => {
-  const providers: { id: EmbeddingProvider; name: string; description: string; iconComponent: typeof OpenAiIcon }[] = [
-    {
-      id: 'openai',
-      name: 'OpenAI',
-      description: 'text-embedding-3-small/large',
-      iconComponent: OpenAiIcon,
-    },
-    {
-      id: 'gemini',
-      name: 'Gemini',
-      description: 'text-embedding-004 (768 dims)',
-      iconComponent: GeminiIcon,
-    },
-    {
-      id: 'ollama',
-      name: 'Ollama',
-      description: 'Local: nomic-embed-text, mxbai, etc.',
-      iconComponent: OllamaIcon,
-    },
-  ];
-
-  // Add Hugging Face local if available (Electron only)
-  if (hfLocalAvailable.value) {
-    providers.push({
-      id: 'huggingface_local',
-      name: 'Hugging Face',
-      description: 'Local models (no API)',
-      iconComponent: HuggingFaceIcon,
-    });
-  }
-
-  return providers;
-});
-
 // Indexer section state
 const indexerSettings = ref<IndexerSettings>({ ...DEFAULT_INDEXER_SETTINGS });
-const showIndexerOpenAIKey = ref(false);
-const showIndexerGeminiKey = ref(false);
 const loadingEmbeddingModels = ref(false);
 const ollamaEmbeddingModels = ref<string[]>([]);
 const testingIndexer = ref(false);
@@ -1147,7 +1059,6 @@ const downloadProgress = ref<ModelDownloadProgress | null>(null);
 const runtimeStatus = ref<RuntimeStatus | null>(null);
 const installingModel = ref<string | null>(null);
 const loadingModel = ref(false);
-const showHfToken = ref(false);
 const hardwareInfo = ref<HardwareInfo | null>(null);
 let progressUnsubscribe: (() => void) | null = null;
 
@@ -1268,14 +1179,17 @@ async function handleTestConnection() {
 
 async function fetchOllamaModels() {
   loadingModels.value = true;
-  
+
   try {
-    const models = await getOllamaModels(settings.value.ollama.baseUrl);
+    const models = await getOllamaModels(settings.value.ollama);
     ollamaModels.value = models;
-    
+
     if (models.length === 0) {
       const toast = await toastController.create({
-        message: 'No models found. Make sure Ollama is running.',
+        message:
+          settings.value.ollama.mode === 'cloud'
+            ? 'No models found. Check your Ollama Cloud API key.'
+            : 'No models found. Make sure Ollama is running.',
         duration: 3000,
         color: 'warning',
         position: 'top',
@@ -1284,7 +1198,10 @@ async function fetchOllamaModels() {
     }
   } catch (error) {
     const toast = await toastController.create({
-      message: 'Failed to fetch models. Check Ollama URL.',
+      message:
+        settings.value.ollama.mode === 'cloud'
+          ? 'Failed to fetch models. Check your Ollama Cloud API key.'
+          : 'Failed to fetch models. Check Ollama URL.',
       duration: 3000,
       color: 'danger',
       position: 'top',
@@ -1295,6 +1212,7 @@ async function fetchOllamaModels() {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function selectOllamaModel(model: string) {
   settings.value.ollama.model = model;
 }
@@ -1442,6 +1360,7 @@ function formatLastSyncTime(isoString: string): string {
 }
 
 // Integrations handler
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function handleIntegrationToggle(id: IntegrationId, enabled: boolean) {
   saveIntegrationSettings(integrationSettings.value);
 }
@@ -1587,14 +1506,17 @@ async function handleTestIndexer() {
 
 async function fetchOllamaEmbeddingModels() {
   loadingEmbeddingModels.value = true;
-  
+
   try {
-    const models = await getOllamaModels(indexerSettings.value.ollama.baseUrl);
+    const models = await getOllamaModels(indexerSettings.value.ollama);
     ollamaEmbeddingModels.value = models;
-    
+
     if (models.length === 0) {
       const toast = await toastController.create({
-        message: 'No models found. Make sure Ollama is running and has embedding models installed.',
+        message:
+          indexerSettings.value.ollama.mode === 'cloud'
+            ? 'No models found. Check your Ollama Cloud API key.'
+            : 'No models found. Make sure Ollama is running and has embedding models installed.',
         duration: 3000,
         color: 'warning',
         position: 'top',
@@ -1603,7 +1525,10 @@ async function fetchOllamaEmbeddingModels() {
     }
   } catch (error) {
     const toast = await toastController.create({
-      message: 'Failed to fetch models. Check Ollama URL.',
+      message:
+        indexerSettings.value.ollama.mode === 'cloud'
+          ? 'Failed to fetch models. Check your Ollama Cloud API key.'
+          : 'Failed to fetch models. Check Ollama URL.',
       duration: 3000,
       color: 'danger',
       position: 'top',
@@ -1614,11 +1539,13 @@ async function fetchOllamaEmbeddingModels() {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function selectOllamaEmbeddingModel(model: string) {
   indexerSettings.value.ollama.model = model;
 }
 
 // Hugging Face local embedding model functions
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function isEmbeddingModelReady(modelId: string): boolean {
   // Model is ready if it's been successfully downloaded (status is ready with this model)
   // or if we've tracked it as downloaded in this session
@@ -1626,6 +1553,7 @@ function isEmbeddingModelReady(modelId: string): boolean {
     (hfLocalStatus.value?.status === 'ready' && hfLocalStatus.value?.loadedModel === modelId);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function selectEmbeddingModel(modelId: string) {
   indexerSettings.value.huggingfaceLocal.model = modelId;
 }
@@ -1668,6 +1596,7 @@ async function handleDownloadEmbeddingModel(modelId: string) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function handleRetryEmbeddingDownload() {
   if (!hfLocalAvailable.value || !hfLocalStatus.value?.loadedModel) {
     return;
@@ -1969,15 +1898,18 @@ async function selectLocalModel(model: LocalModel) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function isModelInstalled(huggingFaceId: string): boolean {
   return installedModels.value.some(m => m.huggingFaceId === huggingFaceId && m.state === 'installed');
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getInstalledModelId(huggingFaceId: string): string | null {
   const model = installedModels.value.find(m => m.huggingFaceId === huggingFaceId && m.state === 'installed');
   return model?.id || null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function selectLocalModelById(huggingFaceId: string) {
   const model = installedModels.value.find(m => m.huggingFaceId === huggingFaceId && m.state === 'installed');
   if (model) {
@@ -1990,6 +1922,7 @@ function handleSelectLocalModel(model: LocalModel) {
   selectLocalModel(model);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function handleRemoveModelByHfId(huggingFaceId: string) {
   const model = installedModels.value.find(m => m.huggingFaceId === huggingFaceId);
   if (model) {

@@ -14,8 +14,9 @@ import type {
   AnthropicConfig,
   GoogleConfig,
   HuggingFaceLocalConfig,
+  OllamaConfig,
 } from '../types';
-import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS, DEFAULT_IMAGE_GENERATION_SETTINGS } from '../types';
+import { DEFAULT_LLM_SETTINGS, DEFAULT_NOTE_SETTINGS, DEFAULT_IMAGE_GENERATION_SETTINGS, OLLAMA_CLOUD_BASE_URL } from '../types';
 import { isLocalModelsAvailable, runInference, getRuntimeStatus, loadModel } from './localModelService';
 
 const STORAGE_KEY = 'hydranote_llm_settings';
@@ -77,7 +78,9 @@ export function isConfigured(): boolean {
     case 'openai':
       return !!settings.openai.apiKey;
     case 'ollama':
-      return !!settings.ollama.baseUrl && !!settings.ollama.model;
+      if (!settings.ollama.model) return false;
+      if (settings.ollama.mode === 'cloud') return !!settings.ollama.apiKey;
+      return !!settings.ollama.baseUrl;
     case 'anthropic':
       return !!settings.anthropic.apiKey;
     case 'google':
@@ -307,15 +310,34 @@ async function callOpenAI(
 // Ollama API
 // ============================================
 
+/**
+ * Resolve the effective base URL + auth headers for an Ollama request.
+ *
+ * - `local`: uses the configured `baseUrl`, no auth header.
+ * - `cloud`: uses the fixed `OLLAMA_CLOUD_BASE_URL` and attaches
+ *   `Authorization: Bearer <apiKey>`.
+ *
+ * Exported for the embedding/vision services that share the same daemon.
+ */
+export function getOllamaRequestConfig(
+  config: Pick<OllamaConfig, 'mode' | 'baseUrl' | 'apiKey'>
+): { baseUrl: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.mode === 'cloud') {
+    if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+    return { baseUrl: OLLAMA_CLOUD_BASE_URL, headers };
+  }
+  return { baseUrl: config.baseUrl, headers };
+}
+
 async function callOllama(
   request: LLMCompletionRequest,
   config: LLMSettings['ollama']
 ): Promise<LLMCompletionResponse> {
-  const response = await fetch(`${config.baseUrl}/api/chat`, {
+  const { baseUrl, headers } = getOllamaRequestConfig(config);
+  const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       model: config.model,
       messages: request.messages,
@@ -541,9 +563,13 @@ async function streamOpenAI(
   let buffer = '';
 
   try {
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        hasMore = false;
+        continue;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -587,11 +613,10 @@ async function streamOllama(
   config: LLMSettings['ollama'],
   onChunk: LLMStreamCallback
 ): Promise<LLMCompletionResponse> {
-  const response = await fetch(`${config.baseUrl}/api/chat`, {
+  const { baseUrl, headers } = getOllamaRequestConfig(config);
+  const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       model: config.model,
       messages: request.messages,
@@ -618,9 +643,13 @@ async function streamOllama(
   let buffer = '';
 
   try {
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        hasMore = false;
+        continue;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -742,9 +771,13 @@ async function streamAnthropic(
   let buffer = '';
 
   try {
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        hasMore = false;
+        continue;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -872,9 +905,13 @@ async function streamGoogle(
   let debugChunkCount = 0;
 
   try {
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        hasMore = false;
+        continue;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -1029,7 +1066,10 @@ export async function chatCompletion(
       return callOpenAI(request, settings.openai);
     
     case 'ollama':
-      if (!settings.ollama.baseUrl) {
+      if (settings.ollama.mode === 'cloud' && !settings.ollama.apiKey) {
+        throw new Error('Ollama Cloud API key not configured. Please add your API key in Settings.');
+      }
+      if (settings.ollama.mode !== 'cloud' && !settings.ollama.baseUrl) {
         throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
       }
       return callOllama(request, settings.ollama);
@@ -1075,7 +1115,10 @@ export async function chatCompletionStreaming(
       return streamOpenAI(request, settings.openai, onChunk);
     
     case 'ollama':
-      if (!settings.ollama.baseUrl) {
+      if (settings.ollama.mode === 'cloud' && !settings.ollama.apiKey) {
+        throw new Error('Ollama Cloud API key not configured. Please add your API key in Settings.');
+      }
+      if (settings.ollama.mode !== 'cloud' && !settings.ollama.baseUrl) {
         throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
       }
       return streamOllama(request, settings.ollama, onChunk);
@@ -1161,11 +1204,21 @@ export async function testConnection(): Promise<{ success: boolean; message: str
 }
 
 /**
- * Get available Ollama models
+ * Get available Ollama models for the given daemon.
+ *
+ * Accepts either a plain base URL (legacy local-only call sites) or a full
+ * Ollama config object (used when the caller knows whether the daemon is
+ * local or Ollama Cloud and needs auth headers).
  */
-export async function getOllamaModels(baseUrl: string): Promise<string[]> {
+export async function getOllamaModels(
+  configOrBaseUrl: string | Pick<OllamaConfig, 'mode' | 'baseUrl' | 'apiKey'>
+): Promise<string[]> {
+  const { baseUrl, headers } =
+    typeof configOrBaseUrl === 'string'
+      ? { baseUrl: configOrBaseUrl, headers: { 'Content-Type': 'application/json' } as Record<string, string> }
+      : getOllamaRequestConfig(configOrBaseUrl);
   try {
-    const response = await fetch(`${baseUrl}/api/tags`);
+    const response = await fetch(`${baseUrl}/api/tags`, { headers });
     if (!response.ok) {
       throw new Error(`Failed to fetch models: ${response.status}`);
     }

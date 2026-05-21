@@ -376,6 +376,25 @@ interface ElectronAPI {
     unregisterShortcut: () => Promise<{ success: boolean; error?: string }>;
     /** Show or hide the dictation companion system tray (Electron main process) */
     setCompanionTrayEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+    /**
+     * Ensure the OS-level microphone permission is granted before recording.
+     * On macOS this checks/prompts the system permission; on other platforms it returns granted=true.
+     */
+    ensureMicrophoneAccess: () => Promise<{
+      success: boolean;
+      granted: boolean;
+      status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'not-applicable' | 'unknown';
+      error?: string;
+    }>;
+    /**
+     * Read the current OS-level microphone permission status without prompting.
+     * On macOS uses systemPreferences.getMediaAccessStatus; other platforms return 'granted'.
+     */
+    getMicrophoneAccessStatus: () => Promise<{
+      success: boolean;
+      status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+      error?: string;
+    }>;
     /** Listen for shortcut toggle events from main process */
     onToggle: (callback: () => void) => void;
     /** Remove toggle listener */
