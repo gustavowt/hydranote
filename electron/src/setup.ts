@@ -27,6 +27,7 @@ export function setupReloadWatcher(electronCapacitorApp: ElectronCapacitorApp): 
     .on('ready', () => {
       reloadWatcher.ready = true;
     })
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     .on('all', (_event, _path) => {
       if (reloadWatcher.ready) {
         clearTimeout(reloadWatcher.debouncer);
@@ -228,6 +229,22 @@ export class ElectronCapacitorApp {
       }, 400);
     });
   }
+}
+
+// Grant microphone (and related media) permissions to the renderer.
+// In Electron, getUserMedia for custom-scheme origins is denied by default unless
+// the session explicitly approves the `media` permission. Without this, dictation
+// can appear to work end-to-end while the captured stream is silent.
+export function setupMediaPermissions(): void {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media' || permission === 'mediaKeySystem') {
+      return callback(true);
+    }
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return permission === 'media' || permission === 'mediaKeySystem';
+  });
 }
 
 // Set a CSP up for our application based on the custom scheme

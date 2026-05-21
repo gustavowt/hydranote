@@ -29,7 +29,10 @@
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "resources/entitlements.mac.plist",
-    "entitlementsInherit": "resources/entitlements.mac.plist"
+    "entitlementsInherit": "resources/entitlements.mac.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "HydraNote needs access to your microphone to capture dictation."
+    }
   },
   "afterSign": "resources/notarize.js",
   "linux": {

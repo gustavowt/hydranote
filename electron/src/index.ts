@@ -1,14 +1,14 @@
 import type { CapacitorElectronConfig } from '@capacitor-community/electron';
 import { getCapacitorElectronConfig, setupElectronDeepLinking } from '@capacitor-community/electron';
 import type { MenuItemConstructorOptions } from 'electron';
-import { app, Menu, MenuItem, Tray, ipcMain, dialog, shell, globalShortcut, nativeImage } from 'electron';
+import { app, Menu, MenuItem, Tray, ipcMain, dialog, shell, globalShortcut, nativeImage, systemPreferences } from 'electron';
 import electronIsDev from 'electron-is-dev';
 import unhandled from 'electron-unhandled';
 import { autoUpdater } from 'electron-updater';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { ElectronCapacitorApp, setupContentSecurityPolicy, setupReloadWatcher } from './setup';
+import { ElectronCapacitorApp, setupContentSecurityPolicy, setupMediaPermissions, setupReloadWatcher } from './setup';
 import {
   loadMCPSettings,
   saveMCPSettings,
@@ -16,7 +16,6 @@ import {
   initializeMCPServer,
   getMCPServer,
   MCPSettings,
-  DEFAULT_MCP_SETTINGS,
 } from './mcpServer';
 import { getModelManager, HFModelRef } from './modelManager';
 import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
@@ -81,6 +80,8 @@ if (electronIsDev) {
   await app.whenReady();
   // Security - Set Content-Security-Policy based on whether or not we are in dev mode.
   setupContentSecurityPolicy(myCapacitorApp.getCustomURLScheme());
+  // Allow getUserMedia (microphone) requests from the renderer for dictation.
+  setupMediaPermissions();
   // Initialize our app, build windows, and load content.
   await myCapacitorApp.init();
   // Check for updates if we are in a packaged app.
@@ -572,9 +573,13 @@ ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<We
     const chunks: Uint8Array[] = [];
     let totalSize = 0;
 
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        hasMore = false;
+        continue;
+      }
 
       totalSize += value.length;
       if (totalSize > WEB_FETCH_MAX_SIZE_BYTES) {
@@ -1314,6 +1319,59 @@ ipcMain.handle('embeddings:clearCache', async (_event, modelId?: string) => {
 // ============================================
 // Dictation IPC Handlers (Global Shortcut + Local Whisper)
 // ============================================
+
+// Read the current OS-level microphone permission status without prompting.
+// Used by the UI to grey out the chat dictation button when access is denied.
+ipcMain.handle('dictation:getMicrophoneAccessStatus', async () => {
+  try {
+    if (process.platform !== 'darwin') {
+      return { success: true, status: 'granted' as const };
+    }
+    const status = systemPreferences.getMediaAccessStatus('microphone');
+    return { success: true, status };
+  } catch (error) {
+    return {
+      success: false,
+      status: 'unknown' as const,
+      error: error instanceof Error ? error.message : 'Failed to read microphone status',
+    };
+  }
+});
+
+// Ensure the OS-level microphone permission is granted before recording.
+// On macOS, getUserMedia can return a silent stream if TCC has not authorized
+// the app for the microphone, so we explicitly check and prompt the user.
+// Windows/Linux don't expose a per-app gate here, so we treat them as granted.
+ipcMain.handle('dictation:ensureMicrophoneAccess', async () => {
+  try {
+    if (process.platform !== 'darwin') {
+      return { success: true, granted: true, status: 'not-applicable' };
+    }
+
+    const status = systemPreferences.getMediaAccessStatus('microphone');
+    if (status === 'granted') {
+      return { success: true, granted: true, status };
+    }
+    if (status === 'denied' || status === 'restricted') {
+      return { success: true, granted: false, status };
+    }
+
+    // status === 'not-determined' (or 'unknown'): trigger the system prompt.
+    const granted = await systemPreferences.askForMediaAccess('microphone');
+    return {
+      success: true,
+      granted,
+      status: granted ? 'granted' : 'denied',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      granted: false,
+      status: 'unknown',
+      error: error instanceof Error ? error.message : 'Failed to check microphone access',
+    };
+  }
+});
 
 // Local Whisper model management
 ipcMain.handle('dictation:getModelStatuses', async () => {

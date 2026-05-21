@@ -92,13 +92,6 @@ interface HFEmbeddingRuntimeStatus {
   progress?: number;
 }
 
-interface SuggestedEmbeddingModel {
-  id: string;
-  name: string;
-  description: string;
-  dimensions: number;
-}
-
 // Expose Electron APIs to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // File System Operations
@@ -277,6 +270,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     unregisterShortcut: () => ipcRenderer.invoke('dictation:unregisterShortcut'),
     setCompanionTrayEnabled: (enabled: boolean) =>
       ipcRenderer.invoke('dictation:setCompanionTrayEnabled', enabled),
+    ensureMicrophoneAccess: () => ipcRenderer.invoke('dictation:ensureMicrophoneAccess'),
+    getMicrophoneAccessStatus: () => ipcRenderer.invoke('dictation:getMicrophoneAccessStatus'),
     onToggle: (callback: () => void) => {
       ipcRenderer.on('dictation:toggle', () => {
         callback();
