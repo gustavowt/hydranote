@@ -448,13 +448,21 @@
               :data-placeholder="isGlobalMode ? 'Ask across all projects... (@ to reference files)' : 'Ask about your documents... (@ to reference files)'"
             ></div>
           </div>
-          <ion-button 
-            fill="clear" 
-            :disabled="!inputMessage.trim() || isTyping"
-            @click="sendMessage()"
+          <button
+            type="button"
+            class="primary-btn"
+            :class="[
+              `mode-${primaryActionMode}`,
+              { denied: primaryActionMode === 'mic' && isMicDenied },
+            ]"
+            :disabled="primaryActionDisabled"
+            :title="primaryActionTitle"
+            :aria-label="primaryActionTitle"
+            :aria-pressed="primaryActionMode === 'stop'"
+            @click="handlePrimaryAction"
           >
-            <ion-icon slot="icon-only" :icon="sendOutline" />
-          </ion-button>
+            <ion-icon :icon="primaryActionIcon" />
+          </button>
         </div>
       </div>
 
@@ -509,14 +517,11 @@ import hljs from 'highlight.js';
 import {
   IonIcon,
   IonButton,
-  IonSelect,
-  IonSelectOption,
   IonTextarea,
   IonSpinner,
 } from '@ionic/vue';
 import {
   chatbubbleOutline,
-  chatbubblesOutline,
   chevronBackOutline,
   chevronForwardOutline,
   sendOutline,
@@ -532,6 +537,8 @@ import {
   listOutline,
   playOutline,
   saveOutline,
+  micOutline,
+  stop as stopIcon,
 } from 'ionicons/icons';
 import type { Project, ChatMessage, ChatSession, SupportedFileType, UpdateFilePreview, DiffLine, ExecutionPlan, PlanStep, ToolLogEntry, ToolExecutionRecord, ToolAttachment, WorkingContext, ToolResult, ProjectFile } from '@/types';
 import type { ExecutionStep } from '@/services';
@@ -546,7 +553,6 @@ import {
   get_project_files,
   applyFileUpdate,
   removePendingPreview,
-  getAllProjects,
   getAllFilesForAutocomplete,
   ensureFileSystemPermission,
   createFile,
@@ -561,7 +567,15 @@ import {
   startNewSession,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
-import { folderOutline, addOutline, addCircleOutline, timeOutline, chevronDownOutline, chevronUpOutline } from 'ionicons/icons';
+import { folderOutline, addOutline, addCircleOutline, timeOutline, chevronDownOutline } from 'ionicons/icons';
+import {
+  dictationState,
+  micPermissionState,
+  refreshMicPermissionState,
+  startPushToTalk,
+  stopPushToTalk,
+  cancelRecording,
+} from '@/services/dictationService';
 
 // Special value for "All Projects" scope
 const ALL_PROJECTS_SCOPE = '__all__';
@@ -618,6 +632,60 @@ const textareaRef = ref<InstanceType<typeof IonTextarea> | null>(null);
 const richInputRef = ref<HTMLElement | null>(null);
 const inputContainerRef = ref<HTMLElement | null>(null);
 const isInputFocused = ref(false);
+
+// Unified primary-action button (mic / stop / send)
+const isChatDictating = ref(false);
+const isMicDenied = computed(
+  () => micPermissionState.value === 'denied' || micPermissionState.value === 'restricted',
+);
+// Another caller (e.g. the global shortcut) is using the mic — block our button.
+const isOtherDictationActive = computed(() => {
+  if (isChatDictating.value) return false;
+  return dictationState.value.status === 'recording' || dictationState.value.status === 'transcribing';
+});
+
+type PrimaryActionMode = 'stop' | 'send' | 'mic';
+const primaryActionMode = computed<PrimaryActionMode>(() => {
+  if (isChatDictating.value) return 'stop';
+  if (inputMessage.value.trim().length > 0) return 'send';
+  return 'mic';
+});
+
+const primaryActionIcon = computed(() => {
+  switch (primaryActionMode.value) {
+    case 'stop': return stopIcon;
+    case 'send': return sendOutline;
+    default: return micOutline;
+  }
+});
+
+const primaryActionTitle = computed(() => {
+  switch (primaryActionMode.value) {
+    case 'stop':
+      return 'Stop dictation';
+    case 'send':
+      return 'Send message';
+    default:
+      if (isMicDenied.value) {
+        return 'Microphone access is blocked. Enable HydraNote under System Settings → Privacy & Security → Microphone.';
+      }
+      if (isOtherDictationActive.value) {
+        return 'Dictation is already in progress';
+      }
+      return 'Start dictation';
+  }
+});
+
+const primaryActionDisabled = computed(() => {
+  switch (primaryActionMode.value) {
+    case 'stop':
+      return false;
+    case 'send':
+      return isTyping.value;
+    default:
+      return isMicDenied.value || isOtherDictationActive.value;
+  }
+});
 
 // Working context for global mode - tracks recently created projects/files
 // Resets when starting a new chat session
@@ -784,11 +852,19 @@ onMounted(async () => {
   // Listen for selection toggle events from rendered HTML
   window.addEventListener('toggle-selection', handleToggleSelection as EventListener);
   window.addEventListener('keydown', handleEscapeKey);
+
+  // Read the current OS-level mic permission so the dictation button can
+  // grey itself out without forcing a system prompt on first paint.
+  void refreshMicPermissionState();
 });
 
 onUnmounted(() => {
   window.removeEventListener('toggle-selection', handleToggleSelection as EventListener);
   window.removeEventListener('keydown', handleEscapeKey);
+  if (isChatDictating.value) {
+    cancelRecording();
+    isChatDictating.value = false;
+  }
 });
 
 watch(() => props.initialProjectId, async (newId) => {
@@ -886,6 +962,7 @@ function formatSessionDate(date: Date): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function handleScopeChange(event: CustomEvent) {
   const scope = event.detail.value;
   selectedScope.value = scope;
@@ -2128,10 +2205,12 @@ function focusChatInput() {
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function toggleToolLog() {
   isToolLogExpanded.value = !isToolLogExpanded.value;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getToolLogStatusClass(status: ToolLogEntry['status']): string {
   switch (status) {
     case 'running':
@@ -2507,6 +2586,79 @@ function insertSelection(selection: SelectionContext) {
       }
     }
   });
+}
+
+/**
+ * Append raw dictated text to the chat input, preserving any existing content
+ * and any @-references already entered. Mirrors the rich-input update pattern
+ * used by `insertSelection`.
+ */
+function appendDictatedText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+
+  const existing = inputMessage.value;
+  const needsSpace = existing.length > 0 && !/\s$/.test(existing);
+  inputMessage.value = existing + (needsSpace ? ' ' : '') + trimmed;
+
+  nextTick(() => {
+    if (richInputRef.value) {
+      richInputRef.value.innerHTML = renderInputReferences(inputMessage.value);
+      richInputRef.value.focus();
+
+      const range = document.createRange();
+      range.selectNodeContents(richInputRef.value);
+      range.collapse(false);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+  });
+}
+
+async function startChatDictation() {
+  if (isMicDenied.value || isOtherDictationActive.value || isChatDictating.value) return;
+  isChatDictating.value = true;
+  try {
+    await startPushToTalk((result) => {
+      if (result.text) appendDictatedText(result.text);
+    });
+    // If startRecording surfaced an error (e.g. permission newly denied),
+    // reset the local flag so the button doesn't get stuck in stop state.
+    if (dictationState.value.status === 'error') {
+      isChatDictating.value = false;
+      void refreshMicPermissionState();
+    }
+  } catch {
+    isChatDictating.value = false;
+  }
+}
+
+async function stopChatDictation() {
+  if (!isChatDictating.value) return;
+  isChatDictating.value = false;
+  try {
+    await stopPushToTalk();
+  } catch {
+    cancelRecording();
+  }
+}
+
+async function handlePrimaryAction() {
+  if (primaryActionDisabled.value) return;
+  switch (primaryActionMode.value) {
+    case 'stop':
+      await stopChatDictation();
+      break;
+    case 'send':
+      await sendMessage();
+      break;
+    default:
+      await startChatDictation();
+      break;
+  }
 }
 
 defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput, sendMessage });
@@ -3264,11 +3416,67 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput,
   border-color: rgba(186, 104, 200, 0.8);
 }
 
-.input-container ion-button {
-  --padding-start: 8px;
-  --padding-end: 8px;
-  --color: var(--hn-purple);
+/* Unified primary-action button (mic / stop / send) */
+.primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   margin-bottom: 4px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--hn-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.primary-btn ion-icon {
+  font-size: 18px;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: var(--hn-bg-hover);
+  color: var(--hn-text-primary);
+}
+
+.primary-btn:disabled,
+.primary-btn.denied {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.primary-btn.mode-send {
+  color: var(--hn-purple);
+}
+
+.primary-btn.mode-send:hover:not(:disabled) {
+  background: rgba(138, 180, 248, 0.15);
+  color: var(--hn-purple);
+}
+
+.primary-btn.mode-stop {
+  color: #fff;
+  background: rgba(244, 67, 54, 0.85);
+  animation: primary-pulse 1.2s ease-in-out infinite;
+}
+
+.primary-btn.mode-stop:hover:not(:disabled) {
+  background: rgba(244, 67, 54, 1);
+  color: #fff;
+}
+
+@keyframes primary-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(244, 67, 54, 0);
+  }
 }
 
 /* Scrollbar styling */

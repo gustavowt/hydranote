@@ -30,6 +30,7 @@ import {
   isRecording,
   onTranscriptionComplete,
   offTranscriptionComplete,
+  refreshMicPermissionState,
 } from '@/services/dictationService';
 import { runCleanup, runActions } from '@/services/dictationPipelineService';
 import {
@@ -135,6 +136,10 @@ function initDictation() {
   }
 
   onTranscriptionComplete(handleTranscription);
+
+  // Prime the reactive mic permission state so UI elements (e.g. the chat
+  // input dictation button) can grey themselves out without prompting the OS.
+  void refreshMicPermissionState();
 }
 
 onMounted(() => {

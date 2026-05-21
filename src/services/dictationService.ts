@@ -15,12 +15,28 @@ import type { TranscriptionProviderInterface } from './transcriptionProviders/ba
 // Reactive state visible to the UI
 export const dictationState = ref<DictationState>({ status: 'idle' });
 
+export type MicPermissionStatus =
+  | 'granted'
+  | 'denied'
+  | 'restricted'
+  | 'not-determined'
+  | 'unknown';
+
+// Reactive snapshot of the OS-level microphone permission. Used by UI elements
+// (e.g. the chat dictation button) to disable themselves when access is denied.
+export const micPermissionState = ref<MicPermissionStatus>('unknown');
+
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
 let mediaStream: MediaStream | null = null;
 
 type DictationEventCallback = (result: TranscriptionResult) => void;
 const listeners: DictationEventCallback[] = [];
+
+// One-shot raw handler used by push-to-talk callers (e.g. the chat input mic
+// button). When set, the next transcription bypasses the normal listener
+// broadcast and is delivered only to this handler — no cleanup, no review.
+let rawTranscriptionHandler: DictationEventCallback | null = null;
 
 export function onTranscriptionComplete(callback: DictationEventCallback): void {
   listeners.push(callback);
@@ -32,6 +48,16 @@ export function offTranscriptionComplete(callback: DictationEventCallback): void
 }
 
 function emit(result: TranscriptionResult): void {
+  if (rawTranscriptionHandler) {
+    const handler = rawTranscriptionHandler;
+    rawTranscriptionHandler = null;
+    try {
+      handler(result);
+    } catch (err) {
+      console.error('[Dictation] Raw handler error:', err);
+    }
+    return;
+  }
   for (const cb of listeners) {
     try {
       cb(result);
@@ -39,6 +65,50 @@ function emit(result: TranscriptionResult): void {
       console.error('[Dictation] Listener error:', err);
     }
   }
+}
+
+/**
+ * Refresh `micPermissionState` from the best available source. Does NOT
+ * trigger an OS prompt — safe to call on UI mount.
+ */
+export async function refreshMicPermissionState(): Promise<MicPermissionStatus> {
+  const electronGetStatus = window.electronAPI?.dictation?.getMicrophoneAccessStatus;
+  if (electronGetStatus) {
+    try {
+      const result = await electronGetStatus();
+      const status = (result?.status ?? 'unknown') as MicPermissionStatus;
+      micPermissionState.value = status;
+      return status;
+    } catch {
+      micPermissionState.value = 'unknown';
+      return 'unknown';
+    }
+  }
+
+  // Browser fallback — Permissions API is not universally supported for the
+  // 'microphone' name, so we treat unknowns as 'unknown' (which the UI treats
+  // as enabled and lets the native prompt happen on click).
+  const permissions = (navigator as Navigator & {
+    permissions?: { query: (descriptor: { name: string }) => Promise<{ state: PermissionState }> };
+  }).permissions;
+  if (permissions?.query) {
+    try {
+      const result = await permissions.query({ name: 'microphone' });
+      const mapped: MicPermissionStatus =
+        result.state === 'granted'
+          ? 'granted'
+          : result.state === 'denied'
+            ? 'denied'
+            : 'not-determined';
+      micPermissionState.value = mapped;
+      return mapped;
+    } catch {
+      // Fall through to unknown
+    }
+  }
+
+  micPermissionState.value = 'unknown';
+  return 'unknown';
 }
 
 function getProvider(settings: DictationSettings): TranscriptionProviderInterface {
@@ -72,6 +142,31 @@ export async function startRecording(): Promise<void> {
   if (dictationState.value.status === 'recording') return;
 
   try {
+    // In Electron, ensure the OS-level microphone permission is granted before
+    // calling getUserMedia. On macOS, an unauthorized app receives a silent
+    // stream rather than an error, which causes dictation to "work" but capture
+    // nothing.
+    const ensureMic = window.electronAPI?.dictation?.ensureMicrophoneAccess;
+    if (ensureMic) {
+      const result = await ensureMic();
+      if (result.status && result.status !== 'not-applicable') {
+        micPermissionState.value = result.status as MicPermissionStatus;
+      } else if (result.granted) {
+        micPermissionState.value = 'granted';
+      }
+      if (!result.granted) {
+        rawTranscriptionHandler = null;
+        dictationState.value = {
+          status: 'error',
+          error:
+            result.status === 'denied' || result.status === 'restricted'
+              ? 'Microphone access is blocked. Enable HydraNote under System Settings → Privacy & Security → Microphone, then try again.'
+              : result.error || 'Microphone access was not granted.',
+        };
+        return;
+      }
+    }
+
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
 
@@ -97,6 +192,7 @@ export async function startRecording(): Promise<void> {
     dictationState.value = { status: 'recording' };
   } catch (err) {
     console.error('[Dictation] Failed to start recording:', err);
+    rawTranscriptionHandler = null;
     dictationState.value = {
       status: 'error',
       error: err instanceof Error ? err.message : 'Failed to access microphone',
@@ -178,11 +274,35 @@ export function cancelRecording(): void {
     mediaStream = null;
   }
   audioChunks = [];
+  rawTranscriptionHandler = null;
   dictationState.value = { status: 'idle' };
 }
 
 export function isRecording(): boolean {
   return dictationState.value.status === 'recording';
+}
+
+/**
+ * Start a raw push-to-talk recording. The transcription result is delivered
+ * to `onComplete` only — global listeners (cleanup + review modal) are
+ * bypassed for this one recording. Use this for callers that want raw text
+ * inserted directly somewhere (e.g. the chat input mic button).
+ */
+export async function startPushToTalk(
+  onComplete: (result: TranscriptionResult) => void,
+): Promise<void> {
+  rawTranscriptionHandler = onComplete;
+  await startRecording();
+  // If startRecording failed (e.g. permission denied), the handler is already
+  // cleared inside startRecording so we don't keep stale state around.
+}
+
+/**
+ * Stop a push-to-talk recording started via `startPushToTalk`. Returns the
+ * transcription result (also delivered to the onComplete callback).
+ */
+export async function stopPushToTalk(): Promise<TranscriptionResult | null> {
+  return stopRecording();
 }
 
 /**
