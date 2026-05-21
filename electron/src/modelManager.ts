@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { app, BrowserWindow } from 'electron';
+import { selectDownloadableModelFiles } from './modelFileSelection';
 
 // ============================================
 // Types
@@ -509,15 +510,14 @@ export class ModelManager {
       fs.mkdirSync(modelDir, { recursive: true });
     }
 
-    // Determine which file to download (prefer Q4_K_M for balance of quality/size)
-    const primaryFile = modelRef.files.find(f => f.isPrimary) ||
-      modelRef.files.find(f => f.filename.includes('Q4_K_M')) ||
-      modelRef.files.find(f => f.filename.includes('Q5_K_M')) ||
-      modelRef.files[0];
+    // Determine which file group to download (prefer quantized files and include all shards).
+    const selectedFiles = selectDownloadableModelFiles(modelRef.files);
 
-    if (!primaryFile) {
+    if (selectedFiles.length === 0) {
       throw new Error('No downloadable model files found');
     }
+
+    const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
 
     // Create registry entry
     const localModel: LocalModel = {
@@ -525,15 +525,15 @@ export class ModelManager {
       huggingFaceId: modelRef.id,
       name: modelRef.name,
       version: 'main',
-      files: [{
-        filename: primaryFile.filename,
-        path: path.join(modelDir, primaryFile.filename),
-        size: primaryFile.size,
-        sha256: primaryFile.sha256,
+      files: selectedFiles.map(file => ({
+        filename: file.filename,
+        path: path.join(modelDir, file.filename),
+        size: file.size,
+        sha256: file.sha256,
         downloaded: false,
-      }],
+      })),
       state: 'downloading',
-      totalSize: primaryFile.size,
+      totalSize,
       downloadedSize: 0,
       architecture: modelRef.architecture,
       contextLength: modelRef.contextLength,
@@ -543,7 +543,7 @@ export class ModelManager {
     this.saveRegistry();
 
     // Start download
-    this.downloadModel(modelId, modelRef.id, primaryFile).catch(error => {
+    this.downloadModel(modelId, modelRef.id, selectedFiles).catch(error => {
       console.error('[ModelManager] Download failed:', error);
       const model = this.registry.get(modelId);
       if (model) {
@@ -626,19 +626,10 @@ export class ModelManager {
   private async downloadModel(
     modelId: string,
     repoId: string,
-    file: HFModelFile
+    files: HFModelFile[]
   ): Promise<void> {
     const model = this.registry.get(modelId);
     if (!model) return;
-
-    const localFile = model.files[0];
-    const downloadUrl = `https://huggingface.co/${repoId}/resolve/main/${file.filename}`;
-
-    // Validate URL
-    const url = new URL(downloadUrl);
-    if (!ALLOWED_DOWNLOAD_HOSTS.some(host => url.hostname === host || url.hostname.endsWith('.' + host))) {
-      throw new Error(`Download from ${url.hostname} is not allowed`);
-    }
 
     // Setup abort controller
     const controller = new AbortController();
@@ -650,96 +641,126 @@ export class ModelManager {
     }
 
     try {
-      const response = await fetch(downloadUrl, {
-        headers,
-        signal: controller.signal,
-        redirect: 'follow',
-      });
+      for (const file of files) {
+        const localFile = model.files.find(modelFile => modelFile.filename === file.filename);
+        if (!localFile) {
+          throw new Error(`Missing registry entry for ${file.filename}`);
+        }
 
-      if (!response.ok) {
-        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-      }
+        const downloadUrl = `https://huggingface.co/${repoId}/resolve/main/${file.filename}`;
 
-      const totalSize = parseInt(response.headers.get('content-length') || '0', 10) || file.size;
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Response body not readable');
-      }
+        // Validate URL
+        const url = new URL(downloadUrl);
+        if (!ALLOWED_DOWNLOAD_HOSTS.some(host => url.hostname === host || url.hostname.endsWith('.' + host))) {
+          throw new Error(`Download from ${url.hostname} is not allowed`);
+        }
 
-      // Open file for writing
-      const filePath = localFile.path;
-      const writeStream = fs.createWriteStream(filePath);
-      const hashStream = crypto.createHash('sha256');
+        const response = await fetch(downloadUrl, {
+          headers,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
 
-      let downloaded = 0;
-      let lastProgressTime = Date.now();
-      let lastDownloaded = 0;
+        if (!response.ok) {
+          throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+        }
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const totalSize = parseInt(response.headers.get('content-length') || '0', 10) || file.size;
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('Response body not readable');
+        }
 
-        writeStream.write(value);
-        hashStream.update(value);
-        downloaded += value.length;
+        // Open file for writing
+        const filePath = localFile.path;
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        const writeStream = fs.createWriteStream(filePath);
+        const hashStream = crypto.createHash('sha256');
 
-        // Calculate speed and emit progress
-        const now = Date.now();
-        const elapsed = (now - lastProgressTime) / 1000;
-        if (elapsed >= 0.5) {
-          const speed = (downloaded - lastDownloaded) / elapsed;
-          const eta = speed > 0 ? (totalSize - downloaded) / speed : undefined;
+        let downloaded = 0;
+        let lastProgressTime = Date.now();
+        let lastDownloaded = 0;
+        const previouslyDownloaded = model.files.reduce((sum, modelFile) => (
+          modelFile.downloaded ? sum + modelFile.size : sum
+        ), 0);
 
-          this.emitProgress({
-            modelId,
-            currentFile: file.filename,
-            fileDownloaded: downloaded,
-            fileTotal: totalSize,
-            totalDownloaded: downloaded,
-            totalSize,
-            speed,
-            eta,
-            status: 'downloading',
-          });
+        let readComplete = false;
+        while (!readComplete) {
+          const { done, value } = await reader.read();
+          if (done) {
+            readComplete = true;
+            break;
+          }
 
-          lastProgressTime = now;
-          lastDownloaded = downloaded;
+          writeStream.write(value);
+          hashStream.update(value);
+          downloaded += value.length;
+
+          // Calculate speed and emit progress
+          const now = Date.now();
+          const elapsed = (now - lastProgressTime) / 1000;
+          if (elapsed >= 0.5) {
+            const speed = (downloaded - lastDownloaded) / elapsed;
+            const remainingBytes = model.totalSize - previouslyDownloaded - downloaded;
+            const eta = speed > 0 ? Math.max(remainingBytes, 0) / speed : undefined;
+
+            this.emitProgress({
+              modelId,
+              currentFile: file.filename,
+              fileDownloaded: downloaded,
+              fileTotal: totalSize,
+              totalDownloaded: previouslyDownloaded + downloaded,
+              totalSize: model.totalSize,
+              speed,
+              eta,
+              status: 'downloading',
+            });
+
+            lastProgressTime = now;
+            lastDownloaded = downloaded;
+          }
+
+          // Update registry
+          model.downloadedSize = previouslyDownloaded + downloaded;
+        }
+
+        writeStream.end();
+
+        // Wait for write to complete
+        await new Promise<void>((resolve, reject) => {
+          writeStream.on('finish', resolve);
+          writeStream.on('error', reject);
+        });
+
+        // Verify checksum if provided
+        const computedHash = hashStream.digest('hex');
+        if (file.sha256 && computedHash !== file.sha256) {
+          fs.unlinkSync(filePath);
+          throw new Error(`Checksum mismatch: expected ${file.sha256}, got ${computedHash}`);
         }
 
         // Update registry
-        model.downloadedSize = downloaded;
+        localFile.downloaded = true;
+        localFile.sha256 = computedHash;
+        model.downloadedSize = model.files.reduce((sum, modelFile) => (
+          modelFile.downloaded ? sum + modelFile.size : sum
+        ), 0);
+        this.saveRegistry();
       }
 
-      writeStream.end();
-
-      // Wait for write to complete
-      await new Promise<void>((resolve, reject) => {
-        writeStream.on('finish', resolve);
-        writeStream.on('error', reject);
-      });
-
-      // Verify checksum if provided
-      const computedHash = hashStream.digest('hex');
-      if (file.sha256 && computedHash !== file.sha256) {
-        fs.unlinkSync(filePath);
-        throw new Error(`Checksum mismatch: expected ${file.sha256}, got ${computedHash}`);
-      }
-
-      // Update registry
-      localFile.downloaded = true;
-      localFile.sha256 = computedHash;
+      // Update registry after all required files are present
       model.state = 'installed';
       model.installedAt = new Date().toISOString();
-      model.primaryModelPath = filePath;
+      model.primaryModelPath = model.files[0]?.path;
       this.saveRegistry();
 
       this.emitProgress({
         modelId,
-        currentFile: file.filename,
-        fileDownloaded: totalSize,
-        fileTotal: totalSize,
-        totalDownloaded: totalSize,
-        totalSize,
+        currentFile: files[files.length - 1]?.filename || '',
+        fileDownloaded: files[files.length - 1]?.size || 0,
+        fileTotal: files[files.length - 1]?.size || 0,
+        totalDownloaded: model.totalSize,
+        totalSize: model.totalSize,
         speed: 0,
         status: 'completed',
       });
