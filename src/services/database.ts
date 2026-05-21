@@ -4,7 +4,7 @@
  */
 
 import * as duckdb from '@duckdb/duckdb-wasm';
-import type { Project, ProjectFile, Chunk, Embedding, CalendarEventRecord } from '../types';
+import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 
 /**
  * Convert Uint8Array to base64 string efficiently (avoids stack overflow for large files)
@@ -32,6 +32,78 @@ let connection: duckdb.AsyncDuckDBConnection | null = null;
 let initializationPromise: Promise<void> | null = null;
 
 const OPFS_DB_PATH = 'opfs://hydranote.duckdb';
+/**
+ * OPFS sidecar files that DuckDB may write alongside the data file. We try to
+ * delete each one during WAL-replay recovery; missing entries are ignored. The
+ * `.wal-shm` companion is defensive — current duckdb-wasm builds don't write
+ * it, but older / future variants may, and removing it is harmless when it
+ * doesn't exist.
+ */
+const OPFS_WAL_FILENAMES = ['hydranote.duckdb.wal', 'hydranote.duckdb.wal-shm'];
+
+/**
+ * Detects the specific DuckDB WASM error raised when the WAL file references
+ * a catalog the data file no longer has. This happens after an unclean
+ * shutdown (page closed mid-write, OS sleep killed the worker, crashed
+ * migration) — the on-disk `.duckdb` file is fine, but the orphan `.wal`
+ * cannot be replayed because it points at a catalog name that doesn't exist.
+ *
+ * Exported for testing.
+ */
+export function isWalReplayError(err: unknown): boolean {
+  const message = err instanceof Error
+    ? err.message
+    : typeof err === 'string'
+      ? err
+      : '';
+  if (!message) return false;
+  // The canonical signature DuckDB uses for replay failures — present even
+  // when the inner exception JSON varies across versions.
+  if (message.includes('Failure while replaying WAL')) return true;
+  // Defensive fallback: a Binder error whose message mentions a missing
+  // catalog and references the WAL file is the same class of failure.
+  return (
+    message.includes('"exception_type":"Binder"') &&
+    message.includes('does not exist') &&
+    message.includes('.wal')
+  );
+}
+
+/**
+ * Best-effort deletion of the orphaned WAL sidecar file(s) from the origin
+ * private file system. Returns `true` if at least one entry was successfully
+ * removed; `false` if OPFS is unavailable, none of the files existed, or every
+ * removal raised (typically because the file is still locked by a worker).
+ *
+ * Note: WAL removal MUST happen after the duckdb worker that failed to open
+ * has been terminated — otherwise the worker still holds an OPFS access
+ * handle and `removeEntry` will throw `NoModificationAllowedError`.
+ *
+ * Exported for testing.
+ */
+export async function clearOrphanWal(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) {
+    return false;
+  }
+  let root: FileSystemDirectoryHandle;
+  try {
+    root = await navigator.storage.getDirectory();
+  } catch {
+    return false;
+  }
+  let removedAny = false;
+  for (const name of OPFS_WAL_FILENAMES) {
+    try {
+      await root.removeEntry(name);
+      removedAny = true;
+    } catch {
+      // Either the entry doesn't exist (NotFoundError) or it's locked. Move
+      // on — partial success is still useful, and a fully missing WAL means
+      // we have nothing to clean up anyway.
+    }
+  }
+  return removedAny;
+}
 
 /**
  * Initialize DuckDB WASM with OPFS persistence
@@ -60,37 +132,99 @@ export async function initializeDatabase(): Promise<void> {
 }
 
 /**
- * Internal initialization logic
+ * Internal initialization logic.
+ *
+ * If the first connection attempt fails with the WAL-replay signature
+ * (`isWalReplayError`) we run a full recovery cycle:
+ *
+ *   1. Tear down the failed worker so it releases its OPFS access handles —
+ *      without this, step 2 would always fail with
+ *      `NoModificationAllowedError`.
+ *   2. Remove `hydranote.duckdb.wal` (and its `-shm` companion if present)
+ *      from OPFS.
+ *   3. Open a brand new worker + `AsyncDuckDB` and retry `open()` against the
+ *      now WAL-less data file.
+ *
+ * Any other initialization error (network, wasm load, schema migration, etc.)
+ * is re-thrown unchanged.
  */
 async function doInitializeDatabase(): Promise<void> {
-  const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
-
-  const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
-
-  const worker_url = URL.createObjectURL(
-    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
-  );
-
-  const worker = new Worker(worker_url);
-  const logger = new duckdb.ConsoleLogger();
-  
-  db = new duckdb.AsyncDuckDB(logger, worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  
-  // Open database with OPFS persistence
-  await db.open({
-    path: OPFS_DB_PATH,
-    accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
-  });
-  
-  connection = await db.connect();
+  let workerUrl: string | null = null;
+  try {
+    workerUrl = await openFreshConnection();
+  } catch (firstError) {
+    if (!isWalReplayError(firstError)) {
+      throw firstError;
+    }
+    // Recovery: terminate the failed worker FIRST so OPFS releases its lock
+    // on the WAL file, then delete the WAL and rebuild from scratch.
+    await teardownFailedConnection(workerUrl);
+    workerUrl = null;
+    await clearOrphanWal();
+    workerUrl = await openFreshConnection();
+  }
 
   await createSchema();
 
   // Register beforeunload to flush database
   window.addEventListener('beforeunload', handleBeforeUnload);
 
-  URL.revokeObjectURL(worker_url);
+  if (workerUrl) URL.revokeObjectURL(workerUrl);
+}
+
+/**
+ * Build and open a fresh duckdb-wasm worker + database connection. Sets the
+ * module-level `db` and `connection` on success. Returns the blob worker URL
+ * so the caller can revoke it.
+ *
+ * On failure the partial state (worker / db / connection) is intentionally
+ * left in place so `teardownFailedConnection` can clean it up — that helper
+ * is the single source of truth for releasing OPFS handles.
+ */
+async function openFreshConnection(): Promise<string> {
+  const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+  const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+
+  const workerUrl = URL.createObjectURL(
+    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+  );
+  const worker = new Worker(workerUrl);
+  const logger = new duckdb.ConsoleLogger();
+
+  db = new duckdb.AsyncDuckDB(logger, worker);
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+
+  await db.open({
+    path: OPFS_DB_PATH,
+    accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
+  });
+
+  connection = await db.connect();
+  return workerUrl;
+}
+
+/**
+ * Best-effort teardown of a half-initialized duckdb-wasm worker after a
+ * failed `openFreshConnection`. Every step is wrapped in its own try/catch
+ * because, by definition, the instance is in an inconsistent state and any
+ * of these calls may throw.
+ *
+ * Critically, this is what releases the OPFS access handle held by the
+ * worker — without terminating the worker, the subsequent WAL removal would
+ * fail with `NoModificationAllowedError`.
+ */
+async function teardownFailedConnection(workerUrl: string | null): Promise<void> {
+  if (connection) {
+    try { await connection.close(); } catch { /* connection may be invalid */ }
+    connection = null;
+  }
+  if (db) {
+    try { await db.terminate(); } catch { /* worker may already be dead */ }
+    db = null;
+  }
+  if (workerUrl) {
+    try { URL.revokeObjectURL(workerUrl); } catch { /* ignore */ }
+  }
 }
 
 /**
@@ -147,9 +281,19 @@ async function createSchema(): Promise<void> {
       text TEXT NOT NULL,
       start_offset INTEGER NOT NULL,
       end_offset INTEGER NOT NULL,
+      page_number INTEGER,
+      section VARCHAR,
+      kind VARCHAR DEFAULT 'text',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Idempotent migration for chunks columns added after the initial schema
+  // (DuckDB's ADD COLUMN IF NOT EXISTS prevents errors on existing databases)
+  await connection.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_number INTEGER`);
+  await connection.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS section VARCHAR`);
+  await connection.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS kind VARCHAR DEFAULT 'text'`);
+  await connection.query(`CREATE INDEX IF NOT EXISTS idx_chunks_file_page ON chunks(file_id, page_number)`);
 
   // Embeddings table with vector storage
   await connection.query(`
@@ -579,9 +723,14 @@ export async function updateFileProject(fileId: string, newProjectId: string, ne
 export async function createChunk(chunk: Chunk): Promise<void> {
   const conn = getConnection();
   const escapedText = chunk.text.replace(/'/g, "''");
+  const pageSql = chunk.pageNumber == null ? 'NULL' : `${chunk.pageNumber}`;
+  const sectionSql = chunk.section == null
+    ? 'NULL'
+    : `'${chunk.section.replace(/'/g, "''")}'`;
+  const kindSql = `'${(chunk.kind ?? 'text').replace(/'/g, "''")}'`;
   await conn.query(`
-    INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-    VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
+    INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, page_number, section, kind, created_at)
+    VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, ${pageSql}, ${sectionSql}, ${kindSql}, '${chunk.createdAt.toISOString()}')
   `);
 }
 
@@ -606,6 +755,9 @@ export async function getChunk(chunkId: string): Promise<Chunk | null> {
     text: row.text,
     startOffset: row.start_offset,
     endOffset: row.end_offset,
+    pageNumber: row.page_number ?? undefined,
+    section: row.section ?? undefined,
+    kind: (row.kind as Chunk['kind']) ?? undefined,
     createdAt: new Date(row.created_at),
   };
 }
@@ -636,7 +788,15 @@ export async function vectorSearch(
   projectId: string,
   queryVector: number[],
   k: number = 5
-): Promise<Array<{ chunkId: string; fileId: string; text: string; score: number }>> {
+): Promise<Array<{
+  chunkId: string;
+  fileId: string;
+  text: string;
+  score: number;
+  pageNumber?: number;
+  section?: string;
+  kind?: string;
+}>> {
   const conn = getConnection();
   const queryVectorStr = `[${queryVector.join(', ')}]`;
   
@@ -649,6 +809,9 @@ export async function vectorSearch(
       e.chunk_id,
       e.file_id,
       c.text,
+      c.page_number,
+      c.section,
+      c.kind,
       (
         list_sum(list_transform(list_zip(e.vector, q.qvec), x -> x[1] * x[2])) /
         (sqrt(list_sum(list_transform(e.vector, x -> x * x))) * sqrt(list_sum(list_transform(q.qvec, x -> x * x))))
@@ -666,6 +829,9 @@ export async function vectorSearch(
     fileId: row.file_id as string,
     text: row.text as string,
     score: row.score as number,
+    pageNumber: row.page_number != null ? Number(row.page_number) : undefined,
+    section: row.section != null ? String(row.section) : undefined,
+    kind: row.kind != null ? String(row.kind) : undefined,
   }));
 }
 

@@ -45,6 +45,14 @@ export interface ProjectFile {
 }
 
 /**
+ * Chunk kind discriminator. 'text' is the default for normal extracted text
+ * chunks (md, txt, pdf body text). 'visual_description' is used for chunks
+ * produced by the vision model from a rendered PDF page (charts, diagrams,
+ * images on the page) so retrieval can tell them apart from plain text.
+ */
+export type ChunkKind = 'text' | 'visual_description';
+
+/**
  * Chunk entity - represents a segment of a document
  */
 export interface Chunk {
@@ -55,6 +63,12 @@ export interface Chunk {
   text: string;
   startOffset: number;
   endOffset: number;
+  /** 1-based PDF page number; undefined for non-paginated sources (md, txt) */
+  pageNumber?: number;
+  /** Nearest enclosing section (PDF outline title or detected heading); undefined when unknown */
+  section?: string;
+  /** Chunk kind. Defaults to 'text' when omitted. */
+  kind?: ChunkKind;
   createdAt: Date;
 }
 
@@ -90,6 +104,12 @@ export interface SearchResult {
   fileName: string;
   text: string;
   score: number; // Similarity score
+  /** PDF page number for the matched chunk (when applicable) */
+  pageNumber?: number;
+  /** Section / outline title the matched chunk belongs to (when known) */
+  section?: string;
+  /** Discriminator that lets callers distinguish text vs. visual chunks */
+  kind?: ChunkKind;
 }
 
 /**
@@ -153,11 +173,24 @@ export interface GeminiEmbeddingConfig {
 
 /**
  * Ollama embedding configuration
+ *
+ * `mode` selects between a local Ollama daemon and Ollama Cloud
+ * (https://ollama.com). In `cloud` mode the requests carry an
+ * `Authorization: Bearer <apiKey>` header and the URL field is ignored
+ * (the cloud base URL is fixed in `OLLAMA_CLOUD_BASE_URL`).
  */
 export interface OllamaEmbeddingConfig {
+  mode: 'local' | 'cloud';
   baseUrl: string;
+  apiKey: string;
   model: string; // user picks: 'nomic-embed-text', 'mxbai-embed-large', etc.
 }
+
+/**
+ * Fixed base URL for Ollama Cloud. Stored in a single place so the auth
+ * header / URL pairing stays consistent across services.
+ */
+export const OLLAMA_CLOUD_BASE_URL = 'https://ollama.com';
 
 /**
  * Hugging Face Local embedding configuration
@@ -193,7 +226,9 @@ export const DEFAULT_INDEXER_SETTINGS: IndexerSettings = {
     model: 'text-embedding-004',
   },
   ollama: {
+    mode: 'local',
     baseUrl: 'http://localhost:11434',
+    apiKey: '',
     model: 'nomic-embed-text',
   },
   huggingfaceLocal: {
@@ -382,11 +417,30 @@ export interface OpenAIConfig {
 
 /**
  * Ollama configuration
+ *
+ * `mode` selects between a local Ollama daemon and Ollama Cloud
+ * (https://ollama.com). In `cloud` mode the requests carry an
+ * `Authorization: Bearer <apiKey>` header and the URL field is ignored
+ * (the cloud base URL is fixed in `OLLAMA_CLOUD_BASE_URL`).
  */
 export interface OllamaConfig {
+  mode: 'local' | 'cloud';
   baseUrl: string;
+  apiKey: string;
   model: string;
 }
+
+/**
+ * Suggested Ollama Cloud LLM model tags. Cloud-only models use the
+ * `:<size>-cloud` suffix on https://ollama.com.
+ */
+export const SUGGESTED_OLLAMA_CLOUD_MODELS = [
+  { name: 'gpt-oss:120b-cloud', description: 'OpenAI gpt-oss 120B (Ollama Cloud)' },
+  { name: 'gpt-oss:20b-cloud', description: 'OpenAI gpt-oss 20B (Ollama Cloud)' },
+  { name: 'qwen3-coder:480b-cloud', description: 'Qwen3 Coder 480B (Ollama Cloud)' },
+  { name: 'deepseek-v3.1:671b-cloud', description: 'DeepSeek v3.1 671B (Ollama Cloud)' },
+  { name: 'kimi-k2:1t-cloud', description: 'Kimi K2 1T (Ollama Cloud)' },
+] as const;
 
 /**
  * Anthropic (Claude) configuration
@@ -471,7 +525,9 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
     model: 'gpt-5-mini',
   },
   ollama: {
+    mode: 'local',
     baseUrl: 'http://localhost:11434',
+    apiKey: '',
     model: 'llama3.2',
   },
   anthropic: {
