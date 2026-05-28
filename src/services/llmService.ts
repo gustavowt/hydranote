@@ -27,7 +27,16 @@ const ANTHROPIC_API_VERSION = '2023-06-01';
 // ============================================
 
 /**
- * Load LLM settings from localStorage
+ * Load LLM settings from localStorage.
+ *
+ * Migrates legacy `ollama.mode === 'cloud'` configurations to local mode.
+ * The local Ollama daemon (since v0.6+) transparently proxies cloud-tagged
+ * models (e.g. `qwen3-coder:480b-cloud`) to ollama.com when the user has
+ * authenticated via `ollama signin`. This means the renderer only needs
+ * to talk to the local daemon — no CORS, no API key managed in HydraNote.
+ *
+ * The legacy `apiKey` is preserved on disk (dormant) to avoid silent data
+ * loss; it is no longer read or sent on requests.
  */
 export function loadSettings(): LLMSettings {
   try {
@@ -35,7 +44,7 @@ export function loadSettings(): LLMSettings {
     if (stored) {
       const parsed = JSON.parse(stored);
       // Deep merge to ensure nested settings are properly initialized
-      return {
+      const merged: LLMSettings = {
         ...DEFAULT_LLM_SETTINGS,
         ...parsed,
         noteSettings: {
@@ -55,6 +64,19 @@ export function loadSettings(): LLMSettings {
           },
         },
       };
+
+      // Cloud → local migration. Preserve apiKey (dormant on disk) and the
+      // model name (cloud-tagged models continue to work via the local
+      // daemon's proxy). Reset baseUrl to localhost only if it was empty.
+      if (merged.ollama.mode === 'cloud') {
+        merged.ollama = {
+          ...merged.ollama,
+          mode: 'local',
+          baseUrl: merged.ollama.baseUrl?.trim() ? merged.ollama.baseUrl : 'http://localhost:11434',
+        };
+      }
+
+      return merged;
     }
   } catch {
     // Ignore parse errors
@@ -79,7 +101,6 @@ export function isConfigured(): boolean {
       return !!settings.openai.apiKey;
     case 'ollama':
       if (!settings.ollama.model) return false;
-      if (settings.ollama.mode === 'cloud') return !!settings.ollama.apiKey;
       return !!settings.ollama.baseUrl;
     case 'anthropic':
       return !!settings.anthropic.apiKey;
@@ -311,11 +332,19 @@ async function callOpenAI(
 // ============================================
 
 /**
- * Resolve the effective base URL + auth headers for an Ollama request.
+ * Resolve the effective base URL + headers for an Ollama request.
  *
- * - `local`: uses the configured `baseUrl`, no auth header.
- * - `cloud`: uses the fixed `OLLAMA_CLOUD_BASE_URL` and attaches
- *   `Authorization: Bearer <apiKey>`.
+ * The chat path is local-daemon-only: cloud-tagged models (`*-cloud`) are
+ * proxied automatically by a local Ollama daemon that the user has
+ * authenticated via `ollama signin`, so HydraNote always talks to the
+ * configured local URL.
+ *
+ * For backwards compatibility, this helper still tolerates an optional
+ * `mode: 'cloud'` discriminator on `OllamaConfig` (used by the embeddings
+ * indexer config, which retains its own local/cloud split). When `cloud`
+ * is supplied it returns the fixed `OLLAMA_CLOUD_BASE_URL` and attaches a
+ * bearer header; in chat code, this branch is unreachable because
+ * `loadSettings()` migrates `mode: 'cloud'` to `'local'`.
  *
  * Exported for the embedding/vision services that share the same daemon.
  */
@@ -330,14 +359,89 @@ export function getOllamaRequestConfig(
   return { baseUrl: config.baseUrl, headers };
 }
 
+/**
+ * Whether the renderer can route HTTP requests through the Electron main
+ * process via the `web:fetch` IPC bridge.
+ *
+ * Used by the embeddings indexer's Ollama cloud mode (still supported)
+ * and shared services that talk to ollama.com directly. The chat path
+ * never needs IPC — it goes to localhost.
+ */
+function isElectronWebFetchAvailable(): boolean {
+  return typeof window !== 'undefined' && !!window.electronAPI?.web?.fetch;
+}
+
+interface OllamaFetchInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
+}
+
+interface OllamaFetchResult {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  body: string;
+  json<T = unknown>(): T;
+}
+
+/**
+ * Issue a non-streaming HTTP request to an Ollama endpoint, routing through
+ * the Electron `web:fetch` IPC bridge when available and falling back to
+ * native `fetch`.
+ *
+ * Exported for `embeddingService` (whose Ollama indexer config still has
+ * a `mode: 'local' | 'cloud'` discriminator and needs the IPC bridge for
+ * the cloud branch under the `capacitor-electron://-` origin).
+ */
+export async function ollamaJsonFetch(url: string, init: OllamaFetchInit = {}): Promise<OllamaFetchResult> {
+  const { method = 'GET', headers = {}, body, timeout = 30000 } = init;
+
+  if (isElectronWebFetchAvailable()) {
+    const result = await window.electronAPI!.web.fetch({ url, method, headers, body, timeout });
+    if (!result.success) {
+      // Surface the same shape regardless of transport so callers can
+      // inspect status/text without knowing whether IPC or fetch was used.
+      throw new Error(result.error || `Ollama request failed: ${url}`);
+    }
+    const status = result.status ?? 0;
+    const responseBody = result.body ?? '';
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: '',
+      body: responseBody,
+      json<T = unknown>(): T {
+        return JSON.parse(responseBody) as T;
+      },
+    };
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body ?? undefined,
+  });
+  const responseBody = await response.text();
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    body: responseBody,
+    json<T = unknown>(): T {
+      return JSON.parse(responseBody) as T;
+    },
+  };
+}
+
 async function callOllama(
   request: LLMCompletionRequest,
   config: LLMSettings['ollama']
 ): Promise<LLMCompletionResponse> {
-  const { baseUrl, headers } = getOllamaRequestConfig(config);
-  const response = await fetch(`${baseUrl}/api/chat`, {
+  const response = await fetch(`${config.baseUrl}/api/chat`, {
     method: 'POST',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: config.model,
       messages: request.messages,
@@ -355,7 +459,7 @@ async function callOllama(
   }
 
   const data = await response.json();
-  
+
   return {
     content: data.message?.content || '',
     finishReason: data.done ? 'stop' : undefined,
@@ -613,10 +717,9 @@ async function streamOllama(
   config: LLMSettings['ollama'],
   onChunk: LLMStreamCallback
 ): Promise<LLMCompletionResponse> {
-  const { baseUrl, headers } = getOllamaRequestConfig(config);
-  const response = await fetch(`${baseUrl}/api/chat`, {
+  const response = await fetch(`${config.baseUrl}/api/chat`, {
     method: 'POST',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: config.model,
       messages: request.messages,
@@ -1066,10 +1169,7 @@ export async function chatCompletion(
       return callOpenAI(request, settings.openai);
     
     case 'ollama':
-      if (settings.ollama.mode === 'cloud' && !settings.ollama.apiKey) {
-        throw new Error('Ollama Cloud API key not configured. Please add your API key in Settings.');
-      }
-      if (settings.ollama.mode !== 'cloud' && !settings.ollama.baseUrl) {
+      if (!settings.ollama.baseUrl) {
         throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
       }
       return callOllama(request, settings.ollama);
@@ -1115,10 +1215,7 @@ export async function chatCompletionStreaming(
       return streamOpenAI(request, settings.openai, onChunk);
     
     case 'ollama':
-      if (settings.ollama.mode === 'cloud' && !settings.ollama.apiKey) {
-        throw new Error('Ollama Cloud API key not configured. Please add your API key in Settings.');
-      }
-      if (settings.ollama.mode !== 'cloud' && !settings.ollama.baseUrl) {
+      if (!settings.ollama.baseUrl) {
         throw new Error('Ollama URL not configured. Please configure Ollama in Settings.');
       }
       return streamOllama(request, settings.ollama, onChunk);
@@ -1207,8 +1304,10 @@ export async function testConnection(): Promise<{ success: boolean; message: str
  * Get available Ollama models for the given daemon.
  *
  * Accepts either a plain base URL (legacy local-only call sites) or a full
- * Ollama config object (used when the caller knows whether the daemon is
- * local or Ollama Cloud and needs auth headers).
+ * Ollama config object. The chat path is local-daemon-only after the
+ * cloud → local migration in `loadSettings`; the config-object overload
+ * is retained for the embeddings indexer, which still has its own
+ * `mode: 'local' | 'cloud'` discriminator.
  */
 export async function getOllamaModels(
   configOrBaseUrl: string | Pick<OllamaConfig, 'mode' | 'baseUrl' | 'apiKey'>

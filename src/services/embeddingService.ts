@@ -7,7 +7,7 @@
 
 import type { Chunk, Embedding, IndexerSettings, HFEmbeddingRuntimeStatus, OllamaEmbeddingConfig } from "../types";
 import { DEFAULT_INDEXER_SETTINGS } from "../types";
-import { getOllamaRequestConfig } from "./llmService";
+import { getOllamaRequestConfig, ollamaJsonFetch } from "./llmService";
 
 const INDEXER_STORAGE_KEY = "hydranote_indexer_settings";
 
@@ -181,7 +181,7 @@ async function generateEmbeddingOllama(
   const { baseUrl, headers } = getOllamaRequestConfig(config);
   const url = `${baseUrl.replace(/\/$/, "")}/api/embeddings`;
 
-  const response = await fetch(url, {
+  const response = await ollamaJsonFetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -191,17 +191,17 @@ async function generateEmbeddingOllama(
   });
 
   if (!response.ok) {
-    let errorMessage = response.statusText;
+    let errorMessage = response.statusText || `HTTP ${response.status}`;
     try {
-      const error = await response.json();
+      const error = response.json<{ error?: string }>();
       errorMessage = error.error || errorMessage;
     } catch {
-      // Ignore JSON parse error
+      if (response.body) errorMessage = response.body;
     }
     throw new Error(`Ollama Embedding API error: ${errorMessage}`);
   }
 
-  const data = await response.json();
+  const data = response.json<{ embedding: number[] }>();
   return data.embedding;
 }
 

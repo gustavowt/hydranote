@@ -42,6 +42,7 @@ import {
   getOllamaModels,
   chatCompletion,
   saveSettings,
+  loadSettings,
 } from '../../src/services/llmService';
 import {
   generateEmbedding,
@@ -84,8 +85,17 @@ function makeJsonResponse(body: unknown): Response {
   } as unknown as Response;
 }
 
+// ============================================================================
+// Local-only chat path
+// ============================================================================
+//
+// The chat Ollama provider is local-daemon-only. Cloud-tagged models
+// (`*-cloud`) work because the local Ollama daemon proxies them to
+// ollama.com after the user runs `ollama signin` on their machine.
+// HydraNote always talks to the configured local URL.
+
 describe('getOllamaRequestConfig', () => {
-  test('local mode uses configured baseUrl and no Authorization header', () => {
+  test('returns the configured baseUrl with no Authorization header in local mode', () => {
     const result = getOllamaRequestConfig({
       mode: 'local',
       baseUrl: 'http://localhost:11434',
@@ -97,7 +107,10 @@ describe('getOllamaRequestConfig', () => {
     expect(result.headers.Authorization).toBeUndefined();
   });
 
-  test('cloud mode uses the fixed cloud URL and attaches a bearer token', () => {
+  // The 'cloud' branch is preserved on the helper for the embeddings indexer
+  // (which still has its own local/cloud discriminator). The chat path can
+  // never reach it because `loadSettings` migrates cloud→local on read.
+  test('still routes to ollama.com when callers explicitly pass mode:"cloud" (used by embeddings indexer)', () => {
     const result = getOllamaRequestConfig({
       mode: 'cloud',
       baseUrl: 'http://localhost:11434',
@@ -107,21 +120,10 @@ describe('getOllamaRequestConfig', () => {
     expect(result.baseUrl).toBe(OLLAMA_CLOUD_BASE_URL);
     expect(result.headers.Authorization).toBe('Bearer sk-cloud-key');
   });
-
-  test('cloud mode without an apiKey omits the Authorization header', () => {
-    const result = getOllamaRequestConfig({
-      mode: 'cloud',
-      baseUrl: 'http://localhost:11434',
-      apiKey: '',
-    });
-
-    expect(result.baseUrl).toBe(OLLAMA_CLOUD_BASE_URL);
-    expect(result.headers.Authorization).toBeUndefined();
-  });
 });
 
 describe('getOllamaModels', () => {
-  test('legacy string baseUrl call still works and hits the local tags endpoint', async () => {
+  test('legacy string baseUrl call hits the local tags endpoint', async () => {
     fetchMock.mockResolvedValueOnce(makeJsonResponse({ models: [{ name: 'llama3.2' }] }));
 
     const models = await getOllamaModels('http://localhost:11434');
@@ -134,28 +136,10 @@ describe('getOllamaModels', () => {
     const sentHeaders = fetchMock.mock.calls[0][1].headers as Record<string, string>;
     expect(sentHeaders.Authorization).toBeUndefined();
   });
-
-  test('config-object call in cloud mode sends bearer token to the cloud URL', async () => {
-    fetchMock.mockResolvedValueOnce(makeJsonResponse({ models: [{ name: 'gpt-oss:120b-cloud' }] }));
-
-    const models = await getOllamaModels({
-      mode: 'cloud',
-      baseUrl: 'http://localhost:11434',
-      apiKey: 'test-token',
-    });
-
-    expect(models).toEqual(['gpt-oss:120b-cloud']);
-    expect(fetchMock).toHaveBeenCalledWith(
-      `${OLLAMA_CLOUD_BASE_URL}/api/tags`,
-      expect.objectContaining({ headers: expect.any(Object) }),
-    );
-    const sentHeaders = fetchMock.mock.calls[0][1].headers as Record<string, string>;
-    expect(sentHeaders.Authorization).toBe('Bearer test-token');
-  });
 });
 
-describe('chatCompletion - Ollama', () => {
-  test('local mode posts to configured URL with no auth header', async () => {
+describe('chatCompletion - Ollama (local-only)', () => {
+  test('posts to the configured local URL with no auth header', async () => {
     saveSettings({
       ...DEFAULT_LLM_SETTINGS,
       provider: 'ollama',
@@ -187,21 +171,21 @@ describe('chatCompletion - Ollama', () => {
     expect(sentHeaders.Authorization).toBeUndefined();
   });
 
-  test('cloud mode posts to https://ollama.com with bearer token', async () => {
+  test('cloud-tagged model name (`*-cloud`) is sent to the local URL — the daemon does the proxying', async () => {
     saveSettings({
       ...DEFAULT_LLM_SETTINGS,
       provider: 'ollama',
       ollama: {
-        mode: 'cloud',
+        mode: 'local',
         baseUrl: 'http://localhost:11434',
-        apiKey: 'cloud-token',
-        model: 'gpt-oss:120b-cloud',
+        apiKey: '',
+        model: 'qwen3-coder:480b-cloud',
       },
     });
 
     fetchMock.mockResolvedValueOnce(
       makeJsonResponse({
-        message: { content: 'hi from cloud' },
+        message: { content: 'hi via local-proxied cloud model' },
         done: true,
       }),
     );
@@ -210,33 +194,129 @@ describe('chatCompletion - Ollama', () => {
       messages: [{ role: 'user', content: 'hello' }],
     });
 
-    expect(result.content).toBe('hi from cloud');
+    expect(result.content).toBe('hi via local-proxied cloud model');
+    // Crucially, the renderer NEVER hits ollama.com directly — the local
+    // daemon at localhost:11434 handles the cloud proxy when configured
+    // with `ollama signin`.
     expect(fetchMock).toHaveBeenCalledWith(
-      `${OLLAMA_CLOUD_BASE_URL}/api/chat`,
+      'http://localhost:11434/api/chat',
       expect.objectContaining({ method: 'POST' }),
     );
-    const sentHeaders = fetchMock.mock.calls[0][1].headers as Record<string, string>;
-    expect(sentHeaders.Authorization).toBe('Bearer cloud-token');
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).not.toContain('ollama.com');
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(requestBody.model).toBe('qwen3-coder:480b-cloud');
   });
 
-  test('cloud mode without apiKey throws a clear configuration error', async () => {
+  test('throws a clear error when baseUrl is missing', async () => {
     saveSettings({
       ...DEFAULT_LLM_SETTINGS,
       provider: 'ollama',
       ollama: {
-        mode: 'cloud',
-        baseUrl: 'http://localhost:11434',
+        mode: 'local',
+        baseUrl: '',
         apiKey: '',
-        model: 'gpt-oss:120b-cloud',
+        model: 'llama3.2',
       },
     });
 
     await expect(
       chatCompletion({ messages: [{ role: 'user', content: 'hi' }] }),
-    ).rejects.toThrow(/Ollama Cloud API key not configured/i);
+    ).rejects.toThrow(/Ollama URL not configured/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// ============================================================================
+// Cloud → local migration in loadSettings
+// ============================================================================
+//
+// Older builds shipped an explicit Ollama "Cloud" mode. The new model is
+// local-daemon-only because the local daemon transparently proxies cloud
+// models. On load, persisted `mode: 'cloud'` configurations are migrated
+// in-place. The model name is preserved (cloud-tagged models keep working
+// via the local daemon) and `apiKey` stays on disk dormant (preserved to
+// avoid silent data loss; no longer read or sent on requests).
+
+describe('loadSettings - Cloud → local migration', () => {
+  test('migrates persisted mode:"cloud" to mode:"local" while preserving the model name', () => {
+    localStorage.setItem(
+      'hydranote_llm_settings',
+      JSON.stringify({
+        provider: 'ollama',
+        ollama: {
+          mode: 'cloud',
+          baseUrl: '',
+          apiKey: 'sk-old-cloud-key',
+          model: 'qwen3-coder:480b-cloud',
+        },
+      }),
+    );
+
+    const settings = loadSettings();
+
+    expect(settings.ollama.mode).toBe('local');
+    // Empty baseUrl is filled in with the localhost default so the daemon
+    // is reachable out of the box.
+    expect(settings.ollama.baseUrl).toBe('http://localhost:11434');
+    // Model name is preserved — `*-cloud` continues to work via local proxy.
+    expect(settings.ollama.model).toBe('qwen3-coder:480b-cloud');
+    // apiKey is preserved on disk (dormant) to avoid silent data loss.
+    expect(settings.ollama.apiKey).toBe('sk-old-cloud-key');
+  });
+
+  test('does not overwrite a non-empty baseUrl when migrating', () => {
+    localStorage.setItem(
+      'hydranote_llm_settings',
+      JSON.stringify({
+        provider: 'ollama',
+        ollama: {
+          mode: 'cloud',
+          baseUrl: 'http://my-remote-daemon:11434',
+          apiKey: 'unused',
+          model: 'gpt-oss:120b-cloud',
+        },
+      }),
+    );
+
+    const settings = loadSettings();
+
+    expect(settings.ollama.mode).toBe('local');
+    expect(settings.ollama.baseUrl).toBe('http://my-remote-daemon:11434');
+    expect(settings.ollama.model).toBe('gpt-oss:120b-cloud');
+  });
+
+  test('leaves mode:"local" configurations untouched', () => {
+    localStorage.setItem(
+      'hydranote_llm_settings',
+      JSON.stringify({
+        provider: 'ollama',
+        ollama: {
+          mode: 'local',
+          baseUrl: 'http://localhost:11434',
+          apiKey: '',
+          model: 'llama3.2',
+        },
+      }),
+    );
+
+    const settings = loadSettings();
+
+    expect(settings.ollama.mode).toBe('local');
+    expect(settings.ollama.baseUrl).toBe('http://localhost:11434');
+    expect(settings.ollama.model).toBe('llama3.2');
+    expect(settings.ollama.apiKey).toBe('');
+  });
+});
+
+// ============================================================================
+// Embedding indexer Ollama (still has local + cloud modes)
+// ============================================================================
+//
+// The embeddings indexer keeps its own `mode: 'local' | 'cloud'`
+// discriminator on `OllamaEmbeddingConfig`. The cloud branch routes
+// through the Electron `web:fetch` IPC bridge to bypass renderer CORS
+// when running under `capacitor-electron://-`.
 
 describe('generateEmbedding - Ollama', () => {
   test('local mode hits the local embeddings endpoint without auth header', async () => {
@@ -287,5 +367,73 @@ describe('generateEmbedding - Ollama', () => {
     );
     const sentHeaders = fetchMock.mock.calls[0][1].headers as Record<string, string>;
     expect(sentHeaders.Authorization).toBe('Bearer embed-token');
+  });
+});
+
+// ============================================================================
+// Electron IPC routing (still used by embeddings indexer cloud mode)
+// ============================================================================
+//
+// Embeddings cloud mode targets `https://ollama.com`, which rejects the
+// `capacitor-electron://-` origin via CORS. When running under Electron,
+// `ollamaJsonFetch` routes through `window.electronAPI.web.fetch` so the
+// request is performed by the main process where browser CORS does not
+// apply. Chat does not use IPC because it always targets localhost.
+
+describe('Electron IPC routing - embeddings cloud mode', () => {
+  const ipcFetchMock = vi.fn();
+  let originalElectronAPI: unknown;
+
+  beforeEach(() => {
+    ipcFetchMock.mockReset();
+    originalElectronAPI = (globalThis as { window?: { electronAPI?: unknown } }).window?.electronAPI;
+    Object.defineProperty(window, 'electronAPI', {
+      value: { web: { fetch: ipcFetchMock } },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', {
+      value: originalElectronAPI,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test('generateEmbedding routes Ollama Cloud requests through electronAPI.web.fetch (not globalThis.fetch)', async () => {
+    saveIndexerSettings({
+      ...DEFAULT_INDEXER_SETTINGS,
+      provider: 'ollama',
+      ollama: {
+        mode: 'cloud',
+        baseUrl: 'http://localhost:11434',
+        apiKey: 'embed-token',
+        model: 'nomic-embed-text',
+      },
+    });
+
+    ipcFetchMock.mockResolvedValueOnce({
+      success: true,
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ embedding: [0.7, 0.8] }),
+      finalUrl: `${OLLAMA_CLOUD_BASE_URL}/api/embeddings`,
+    });
+
+    const vec = await generateEmbedding('hello via ipc');
+
+    expect(vec).toEqual([0.7, 0.8]);
+    expect(ipcFetchMock).toHaveBeenCalledTimes(1);
+    expect(ipcFetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `${OLLAMA_CLOUD_BASE_URL}/api/embeddings`,
+        method: 'POST',
+      }),
+    );
+    const ipcArgs = ipcFetchMock.mock.calls[0][0] as { headers: Record<string, string> };
+    expect(ipcArgs.headers.Authorization).toBe('Bearer embed-token');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

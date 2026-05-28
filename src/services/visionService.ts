@@ -285,8 +285,7 @@ async function describeWithGoogle(
 async function pickOllamaVisionModel(
   config: Pick<OllamaConfig, 'mode' | 'baseUrl' | 'apiKey'>,
 ): Promise<string | null> {
-  if (config.mode !== 'cloud' && !config.baseUrl) return null;
-  if (config.mode === 'cloud' && !config.apiKey) return null;
+  if (!config.baseUrl) return null;
   const installed = await getOllamaModels(config);
   if (installed.length === 0) return null;
   for (const candidate of OLLAMA_VISION_CANDIDATES) {
@@ -301,11 +300,8 @@ async function describeWithOllama(
   settings: LLMSettings,
 ): Promise<string | null> {
   const config = settings.ollama;
-  if (config.mode !== 'cloud' && !config.baseUrl) {
+  if (!config.baseUrl) {
     throw new Error('Ollama baseUrl is not configured');
-  }
-  if (config.mode === 'cloud' && !config.apiKey) {
-    throw new Error('Ollama Cloud apiKey is not configured');
   }
   const model = await pickOllamaVisionModel(config);
   if (!model) return null;

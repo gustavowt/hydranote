@@ -94,8 +94,17 @@
             :value="modelValue.openai.model"
             @change="updateNestedField('openai', 'model', ($event.target as HTMLSelectElement).value)"
           >
-            <optgroup label="GPT-5 Series (2025-2026)">
-              <option value="gpt-5.2">GPT-5.2 (Most Powerful)</option>
+            <optgroup label="GPT-5.5 Series (2026)">
+              <option value="gpt-5.5">GPT-5.5 (Latest, Most Powerful)</option>
+              <option value="gpt-5.5-pro">GPT-5.5 Pro (Highest Accuracy)</option>
+            </optgroup>
+            <optgroup label="GPT-5.4 Series (2026)">
+              <option value="gpt-5.4">GPT-5.4</option>
+              <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+              <option value="gpt-5.4-nano">GPT-5.4 Nano</option>
+            </optgroup>
+            <optgroup label="GPT-5 Series (2025)">
+              <option value="gpt-5.2">GPT-5.2</option>
               <option value="gpt-5">GPT-5</option>
               <option value="gpt-5-mini">GPT-5 Mini</option>
               <option value="gpt-5-nano">GPT-5 Nano</option>
@@ -157,12 +166,14 @@
             :value="modelValue.anthropic.model"
             @change="updateNestedField('anthropic', 'model', ($event.target as HTMLSelectElement).value)"
           >
-            <optgroup label="Claude 4.6 / 4.5 (Latest)">
-              <option value="claude-opus-4-6">Claude Opus 4.6 (Most Powerful)</option>
-              <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+            <optgroup label="Claude 4.7 / 4.6 (Latest)">
+              <option value="claude-opus-4-7">Claude Opus 4.7 (Most Powerful)</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+              <option value="claude-opus-4-6">Claude Opus 4.6</option>
               <option value="claude-haiku-4-5">Claude Haiku 4.5 (Fast)</option>
             </optgroup>
-            <optgroup label="Claude 4 (2025)">
+            <optgroup label="Claude 4.5 (2025)">
+              <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
               <option value="claude-opus-4-5-20251101">Claude Opus 4.5</option>
               <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
               <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
@@ -204,8 +215,15 @@
             :value="modelValue.google.model"
             @change="updateNestedField('google', 'model', ($event.target as HTMLSelectElement).value)"
           >
-            <optgroup label="Gemini 3 (Latest)">
-              <option value="gemini-3-pro-preview">Gemini 3 Pro (Most Powerful)</option>
+            <optgroup label="Gemini 3.5 (Latest)">
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash (Most Powerful)</option>
+            </optgroup>
+            <optgroup label="Gemini 3.1">
+              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
+              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+            </optgroup>
+            <optgroup label="Gemini 3">
+              <option value="gemini-3-pro-preview">Gemini 3 Pro</option>
               <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
             </optgroup>
             <optgroup label="Gemini 2.5">
@@ -225,39 +243,7 @@
     <div v-if="modelValue.provider === 'ollama'" class="config-panel">
       <h3 v-if="!compact" class="config-title">Ollama Configuration</h3>
       <div class="config-fields">
-        <!-- Local / Cloud mode switch -->
         <div class="field-group">
-          <label>Mode</label>
-          <div class="mode-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              class="mode-tab"
-              :class="{ selected: (modelValue.ollama.mode ?? 'local') === 'local' }"
-              :aria-selected="(modelValue.ollama.mode ?? 'local') === 'local'"
-              @click="updateNestedField('ollama', 'mode', 'local')"
-            >
-              Local
-            </button>
-            <button
-              type="button"
-              role="tab"
-              class="mode-tab"
-              :class="{ selected: modelValue.ollama.mode === 'cloud' }"
-              :aria-selected="modelValue.ollama.mode === 'cloud'"
-              @click="updateNestedField('ollama', 'mode', 'cloud')"
-            >
-              Cloud
-            </button>
-          </div>
-          <span class="field-hint">
-            Local: a daemon you run yourself. Cloud: hosted models on
-            <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>.
-          </span>
-        </div>
-
-        <!-- Local URL (local mode only) -->
-        <div v-if="(modelValue.ollama.mode ?? 'local') === 'local'" class="field-group">
           <label>Ollama URL</label>
           <input
             :value="modelValue.ollama.baseUrl"
@@ -265,25 +251,11 @@
             type="text"
             placeholder="http://localhost:11434"
           />
-          <span class="field-hint">Local Ollama server address</span>
-        </div>
-
-        <!-- Cloud API key (cloud mode only) -->
-        <div v-if="modelValue.ollama.mode === 'cloud'" class="field-group">
-          <label>API Key</label>
-          <div class="input-wrapper">
-            <input
-              :value="modelValue.ollama.apiKey"
-              @input="updateNestedField('ollama', 'apiKey', ($event.target as HTMLInputElement).value)"
-              :type="showApiKey ? 'text' : 'password'"
-              placeholder="ollama_..."
-            />
-            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
-              <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
-            </button>
-          </div>
           <span class="field-hint">
-            Get your key at <a href="https://ollama.com/settings/keys" target="_blank" rel="noopener">ollama.com/settings/keys</a>
+            Local Ollama daemon address. Cloud-tagged models (e.g.
+            <code>qwen3-coder:480b-cloud</code>) are proxied automatically by
+            the local daemon after running <code>ollama signin</code> in a
+            terminal once.
           </span>
         </div>
 
@@ -294,7 +266,7 @@
               :value="modelValue.ollama.model"
               @input="updateNestedField('ollama', 'model', ($event.target as HTMLInputElement).value)"
               type="text"
-              :placeholder="modelValue.ollama.mode === 'cloud' ? 'gpt-oss:120b-cloud' : 'llama3.2'"
+              placeholder="llama3.2 or qwen3-coder:480b-cloud"
             />
             <button 
               class="fetch-models-btn" 
@@ -311,34 +283,8 @@
             :value="modelValue.ollama.model"
             @input="updateNestedField('ollama', 'model', ($event.target as HTMLInputElement).value)"
             type="text"
-            :placeholder="modelValue.ollama.mode === 'cloud' ? 'gpt-oss:120b-cloud' : 'llama3.2'"
+            placeholder="llama3.2 or qwen3-coder:480b-cloud"
           />
-        </div>
-
-        <!-- Suggested cloud models (cloud mode, full UI only) -->
-        <div v-if="!compact && modelValue.ollama.mode === 'cloud'" class="field-group">
-          <label>Suggested Cloud Models</label>
-          <div class="models-list">
-            <button
-              v-for="suggestion in SUGGESTED_OLLAMA_CLOUD_MODELS"
-              :key="suggestion.name"
-              class="model-item"
-              :class="{ selected: modelValue.ollama.model === suggestion.name }"
-              @click="updateNestedField('ollama', 'model', suggestion.name)"
-              type="button"
-            >
-              <ion-icon :icon="cubeOutline" />
-              <div class="model-item-info">
-                <span>{{ suggestion.name }}</span>
-                <span class="field-hint">{{ suggestion.description }}</span>
-              </div>
-              <ion-icon
-                v-if="modelValue.ollama.model === suggestion.name"
-                :icon="checkmarkOutline"
-                class="check-icon"
-              />
-            </button>
-          </div>
         </div>
 
         <!-- Available Models from the daemon (full mode only) -->
@@ -362,6 +308,39 @@
               />
             </button>
           </div>
+        </div>
+
+        <!-- Cloud Models (via local daemon) -->
+        <div v-if="!compact" class="field-group">
+          <label>Cloud Models (via local daemon)</label>
+          <div class="models-list">
+            <button
+              v-for="suggestion in SUGGESTED_OLLAMA_CLOUD_MODELS"
+              :key="suggestion.name"
+              class="model-item"
+              :class="{ selected: modelValue.ollama.model === suggestion.name }"
+              @click="updateNestedField('ollama', 'model', suggestion.name)"
+              type="button"
+            >
+              <ion-icon :icon="cubeOutline" />
+              <div class="model-item-info">
+                <span>{{ suggestion.name }}</span>
+                <span class="field-hint">{{ suggestion.description }}</span>
+              </div>
+              <ion-icon
+                v-if="modelValue.ollama.model === suggestion.name"
+                :icon="checkmarkOutline"
+                class="check-icon"
+              />
+            </button>
+          </div>
+          <span class="field-hint">
+            These models run on
+            <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>
+            but are reached via your local daemon. Run
+            <code>ollama signin</code> once to link your account; the daemon
+            will pull cloud-tagged models on first use.
+          </span>
         </div>
       </div>
     </div>
@@ -808,19 +787,19 @@ const mainProviders: ProviderConfig[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    description: 'GPT-5.2, GPT-5, o4-mini',
+    description: 'GPT-5.5, GPT-5.4, o4-mini',
     iconComponent: OpenAiIcon,
   },
   {
     id: 'anthropic',
     name: 'Claude',
-    description: 'Claude Opus 4.6, Sonnet 4.5',
+    description: 'Claude Opus 4.7, Sonnet 4.6',
     iconComponent: ClaudeIcon,
   },
   {
     id: 'google',
     name: 'Gemini',
-    description: 'Gemini 3 Pro, Flash',
+    description: 'Gemini 3.5 Flash, 3.1 Pro',
     iconComponent: GeminiIcon,
   },
 ];
@@ -847,10 +826,7 @@ const hasApiKey = computed(() => {
   if (provider === 'openai') return !!props.modelValue.openai.apiKey;
   if (provider === 'anthropic') return !!props.modelValue.anthropic.apiKey;
   if (provider === 'google') return !!props.modelValue.google.apiKey;
-  if (provider === 'ollama') {
-    if (props.modelValue.ollama.mode === 'cloud') return !!props.modelValue.ollama.apiKey;
-    return !!props.modelValue.ollama.baseUrl;
-  }
+  if (provider === 'ollama') return !!props.modelValue.ollama.baseUrl;
   if (provider === 'huggingface_local') return props.localModelsAvailable && props.installedModels.length > 0;
   return false;
 });
@@ -1127,6 +1103,15 @@ function formatHardwareInfo(info: HardwareInfo): string {
   color: var(--hn-text-secondary);
 }
 
+.field-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--hn-bg-deep);
+  color: var(--hn-text-primary);
+}
+
 .field-hint a {
   color: var(--hn-purple);
   text-decoration: none;
@@ -1134,37 +1119,6 @@ function formatHardwareInfo(info: HardwareInfo): string {
 
 .field-hint a:hover {
   text-decoration: underline;
-}
-
-.mode-tabs {
-  display: inline-flex;
-  background: var(--hn-bg-deep);
-  border: 1px solid var(--hn-border-default);
-  border-radius: 8px;
-  padding: 4px;
-  gap: 4px;
-  width: fit-content;
-}
-
-.mode-tab {
-  padding: 8px 20px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--hn-text-secondary);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.mode-tab:hover:not(.selected) {
-  color: var(--hn-text-primary);
-}
-
-.mode-tab.selected {
-  background: var(--hn-purple);
-  color: #ffffff;
 }
 
 .optional {
