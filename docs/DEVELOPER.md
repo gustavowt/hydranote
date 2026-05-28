@@ -7,7 +7,7 @@ Technical documentation for HydraNote - an AI-powered document indexing and inte
 **Tech Stack:**
 - **Frontend**: Ionic Vue (Vue 3 + TypeScript)
 - **Database**: DuckDB (in-browser WASM with OPFS persistence)
-- **AI Providers**: OpenAI, Anthropic (Claude), Google (Gemini), Ollama (local daemon or Ollama Cloud), Hugging Face Local
+- **AI Providers**: OpenAI, Anthropic (Claude), Google (Gemini), Ollama (local daemon — cloud-tagged models proxied via the daemon after `ollama signin`), Hugging Face Local
 - **Embedding Providers**: OpenAI, Gemini, Ollama (local daemon or Ollama Cloud), Hugging Face Local (independent from LLM provider)
 - **Document Processing**: PDF.js, Mammoth (DOCX), Tesseract.js (OCR)
 - **Markdown**: marked + highlight.js + Mermaid (diagrams); **Live** mode is a Tiptap (ProseMirror) WYSIWYG editor — markdown is rendered to HTML via `marked` on load and serialized back to markdown via `turndown` + `turndown-plugin-gfm` on edit, so the editing surface looks identical to the reading view
@@ -210,7 +210,7 @@ Multi-provider embedding generation, independent from LLM provider.
 | Provider | Models |
 |----------|--------|
 | OpenAI | text-embedding-3-small, text-embedding-3-large |
-| Gemini | text-embedding-004 |
+| Gemini | gemini-embedding-001 (current GA), gemini-embedding-2 (multimodal, GA Apr 2026), text-embedding-004 (deprecated Jan 14 2026 — kept for migration) |
 | Ollama | nomic-embed-text, mxbai-embed-large, all-minilm (local daemon or Ollama Cloud) |
 | Hugging Face Local | Xenova/all-MiniLM-L6-v2, etc. (Electron only, offline) |
 
@@ -239,8 +239,8 @@ AI image generation supporting OpenAI and Google Gemini providers.
 **Supported Providers:**
 | Provider | Models | API |
 |----------|--------|-----|
-| OpenAI | `gpt-image-1`, `dall-e-3`, `dall-e-2` | `/v1/images/generations` (b64_json) |
-| Google Gemini (Nano Banana) | `gemini-3.1-flash-image-preview` (Nano Banana 2), `gemini-2.0-flash-preview-image-generation` | Native multimodal `generateContent` |
+| OpenAI | `gpt-image-2` (latest, Apr 2026), `gpt-image-1.5`, `gpt-image-1`, `dall-e-3`, `dall-e-2` | `/v1/images/generations` (b64_json) |
+| Google Gemini (Nano Banana) | `gemini-3-pro-image-preview` (Nano Banana 3, latest), `gemini-3.1-flash-image-preview` (Nano Banana 2), `gemini-2.0-flash-preview-image-generation` | Native multimodal `generateContent` |
 | Google Imagen | `imagen-4.0-generate-001`, `imagen-4.0-ultra-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-3.0-generate-002` | Predict API |
 
 **Configuration:**
@@ -454,7 +454,7 @@ A page counts as "visual" if either is true:
 | OpenAI | `gpt-4o` | `chat/completions` with `image_url` content parts |
 | Anthropic | `claude-3-5-sonnet-latest` | `messages` with base64 `image` blocks |
 | Google | `gemini-3.1-flash` | `generateContent` with `inlineData` parts |
-| Ollama (local or Cloud) | first installed match from `OLLAMA_VISION_CANDIDATES` (`llama3.2-vision`, `llava`, `llava-llama3`, `bakllava`, `minicpm-v`, …); skipped if none installed. Uses the same `mode`/`apiKey` resolution as chat — local hits the configured URL, cloud hits `https://ollama.com` with a bearer token. | `/api/chat` with `images: [base64]` |
+| Ollama (local daemon) | first installed match from `OLLAMA_VISION_CANDIDATES` (`llama3.2-vision`, `llava`, `llava-llama3`, `bakllava`, `minicpm-v`, …); skipped if none installed. Always hits the configured local daemon URL with no auth header — cloud-tagged vision models, if any, are proxied transparently by the daemon. | `/api/chat` with `images: [base64]` |
 | Hugging Face Local | not supported — pages are text-only | — |
 
 The vision prompt is fixed: it asks for plain-prose description of charts, diagrams, images, axes, labels and key values, with a small page+section context block appended.
@@ -630,10 +630,10 @@ The Ollama indexer config in `IndexerSettings.ollama` mirrors this shape (`mode`
 ### Supported AI Providers
 | Provider | Models |
 |----------|--------|
-| OpenAI | GPT-5.2, GPT-5, GPT-5 Mini/Nano, o4-mini, o3, GPT-4.1 series |
-| Anthropic | Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4 series |
-| Google | Gemini 3 Pro/Flash, Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0 |
-| Ollama | Local daemon (Llama, Mistral, etc.) or Ollama Cloud (`*-cloud` tags like `gpt-oss:120b-cloud`) |
+| OpenAI | GPT-5.5 / 5.5 Pro (latest, Apr 2026), GPT-5.4 / 5.4 Mini / 5.4 Nano, GPT-5.2, GPT-5 / Mini / Nano, o4-mini, o3, GPT-4.1 series |
+| Anthropic | Claude Opus 4.7 (latest, Apr 2026), Claude Sonnet 4.6, Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4 series |
+| Google | Gemini 3.5 Flash (latest, May 2026), Gemini 3.1 Pro/Flash-Lite, Gemini 3 Pro/Flash, Gemini 2.5 Pro/Flash/Flash-Lite, Gemini 2.0 |
+| Ollama | Local daemon (Llama, Mistral, etc.) plus cloud-tagged models proxied via the daemon (`*:cloud` and `*-cloud` tags like `deepseek-v4-pro:cloud`, `gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud` — requires `ollama signin` once) |
 | Hugging Face Local | GGUF models via node-llama-cpp (Electron only) |
 
 **OpenAI reasoning model request behavior:**
@@ -644,12 +644,27 @@ The Ollama indexer config in `IndexerSettings.ollama` mirrors this shape (`mode`
 - HydraNote sends `anthropic-version: "2023-06-01"` for both regular and streaming Claude requests.
 - Keep this header on a valid Anthropic API version; unsupported versions are rejected before model execution.
 
-**Ollama (local and Ollama Cloud):**
-- `OllamaConfig` carries an explicit `mode: 'local' | 'cloud'` discriminator. The settings UI shows the URL input in `local` mode and the API key input in `cloud` mode (URL is hidden because the cloud base URL is fixed in code).
-- `local` mode hits the configured `baseUrl` with no auth header — identical to the previous behavior so existing local-only users see no change.
-- `cloud` mode hits the constant `OLLAMA_CLOUD_BASE_URL` (`https://ollama.com`) and attaches `Authorization: Bearer <apiKey>` to every request. Get a key at <https://ollama.com/settings/keys>.
-- The same auth handling applies uniformly to chat (`/api/chat`), embeddings (`/api/embeddings`), tag discovery (`/api/tags`), and the vision-pipeline call. A single helper `getOllamaRequestConfig(config)` in `llmService.ts` returns `{ baseUrl, headers }` and is reused by `embeddingService` and `visionService`.
-- Cloud LLM models use a `:<size>-cloud` suffix on `ollama.com` (e.g. `gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud`, `kimi-k2:1t-cloud`). The suggested set lives in `SUGGESTED_OLLAMA_CLOUD_MODELS` (`src/types/index.ts`); the model picker also exposes the "Fetch Models" button that calls `/api/tags` against the cloud account.
+**Ollama (chat / vision — local-daemon-only with cloud-tagged model proxy):**
+
+The chat-side Ollama provider is **local-daemon-only**. The renderer always talks to the configured local daemon URL (default `http://localhost:11434`) via plain `fetch()`. Cloud-tagged models are first-class citizens because the local Ollama daemon (since v0.6+) transparently proxies them to ollama.com after the user runs `ollama signin` in a terminal once.
+
+- `OllamaConfig` keeps a `mode: 'local' | 'cloud'` field on the type for backwards compatibility with persisted data, but `loadSettings()` migrates any persisted `mode: 'cloud'` config to `'local'` on read. The migration:
+  - Sets `mode = 'local'`.
+  - Fills `baseUrl` with `'http://localhost:11434'` only if the persisted value is empty (custom URLs are kept).
+  - **Preserves the model name.** A `qwen3-coder:480b-cloud` selection survives the migration and continues to work because the local daemon proxies it.
+  - **Preserves `apiKey` on disk (dormant).** The field is no longer read or sent on requests, but is kept in storage to avoid silent data loss for users who had a HydraNote-side cloud key configured.
+- The settings UI in `AIProviderSelector.vue` no longer shows a Local/Cloud mode toggle or an API key field. It shows the daemon URL plus two model lists:
+  - **Available Models** — pulled from `/api/tags` on the configured daemon.
+  - **Cloud Models (via local daemon)** — the static `SUGGESTED_OLLAMA_CLOUD_MODELS` set (`src/types/index.ts`: `gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud`, `kimi-k2:1t-cloud`, etc.). A help hint reminds the user to run `ollama signin` once; on first use the daemon will pull the cloud-tagged model on demand.
+- Chat (`callOllama`, `streamOllama`), tag discovery (`getOllamaModels`), and vision (`visionService.describeWithOllama`) all hit `${baseUrl}/api/...` directly with `fetch()`. There is no IPC bridge involved on the chat path because the request never leaves localhost — the daemon owns the cloud proxy.
+- `getOllamaRequestConfig(config)` still tolerates `mode === 'cloud'` for one remaining caller: the **embeddings indexer**, whose own `OllamaEmbeddingConfig` retains a `mode: 'local' | 'cloud'` discriminator (see "Embedding service" below). For chat, `config.mode` is always `'local'` after migration, so the cloud branch is unreachable from the chat path.
+
+**Embeddings indexer Ollama (still has local + cloud modes):**
+
+`OllamaEmbeddingConfig` keeps the original `mode: 'local' | 'cloud'` shape. The cloud branch targets `https://ollama.com/api/embeddings` directly (with `Authorization: Bearer <apiKey>`), which the renderer's `capacitor-electron://-` origin can't reach because of CORS. To work around that, the embedding service's Ollama call goes through the Electron `web:fetch` IPC bridge via the shared `ollamaJsonFetch(url, init)` helper exported from `llmService.ts`:
+- `ollamaJsonFetch` detects `window.electronAPI?.web?.fetch`. When present, it routes through IPC (main process performs the request, no browser CORS). Otherwise it falls back to native `fetch` (web/PWA build, Vitest jsdom env, etc.).
+- This is the *only* remaining IPC-routed Ollama path. Chat does not need it.
+- The embeddings indexer settings UI still surfaces both modes; nothing changed there.
 
 ---
 
@@ -754,6 +769,9 @@ If a user still encounters the issue, recommend:
 **Shell:**
 `shell:openPath` - Open file in system default app
 `shell:openExternal` - Open URL in system default browser
+
+**Web (CORS bypass):**
+`web:fetch` - One-shot HTTP request executed in the main process (bypasses renderer CORS). Returns `{ success, status, headers, body, finalUrl, error? }`. Used by the embeddings indexer's Ollama cloud mode (via `ollamaJsonFetch` in `llmService.ts`), `zoomService`, `googleWorkspaceAuthService`, `webSearchService`, and `deepgramProvider`. The chat-side Ollama provider does **not** use this bridge — it always talks to localhost, where browser CORS does not apply.
 
 **Dictation:**
 `dictation:registerShortcut` - Register a global OS-level keyboard shortcut for push-to-talk

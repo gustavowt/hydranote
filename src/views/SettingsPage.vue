@@ -489,6 +489,8 @@
                   <select
                     v-model="settings.imageGeneration.openai.model"
                   >
+                    <option value="gpt-image-2">GPT Image 2 (Latest)</option>
+                    <option value="gpt-image-1.5">GPT Image 1.5</option>
                     <option value="gpt-image-1">GPT Image 1</option>
                     <option value="dall-e-3">DALL-E 3</option>
                     <option value="dall-e-2">DALL-E 2</option>
@@ -506,7 +508,8 @@
                     v-model="settings.imageGeneration.google.model"
                   >
                     <optgroup label="Gemini Native (Nano Banana)">
-                      <option value="gemini-3.1-flash-image-preview">Nano Banana 2 — Gemini 3.1 Flash Image (Latest)</option>
+                      <option value="gemini-3-pro-image-preview">Nano Banana 3 — Gemini 3 Pro Image (Latest)</option>
+                      <option value="gemini-3.1-flash-image-preview">Nano Banana 2 — Gemini 3.1 Flash Image</option>
                       <option value="gemini-2.0-flash-preview-image-generation">Gemini 2.0 Flash Image</option>
                     </optgroup>
                     <optgroup label="Imagen">
@@ -1186,10 +1189,7 @@ async function fetchOllamaModels() {
 
     if (models.length === 0) {
       const toast = await toastController.create({
-        message:
-          settings.value.ollama.mode === 'cloud'
-            ? 'No models found. Check your Ollama Cloud API key.'
-            : 'No models found. Make sure Ollama is running.',
+        message: 'No models found. Make sure Ollama is running.',
         duration: 3000,
         color: 'warning',
         position: 'top',
@@ -1198,10 +1198,7 @@ async function fetchOllamaModels() {
     }
   } catch (error) {
     const toast = await toastController.create({
-      message:
-        settings.value.ollama.mode === 'cloud'
-          ? 'Failed to fetch models. Check your Ollama Cloud API key.'
-          : 'Failed to fetch models. Check Ollama URL.',
+      message: 'Failed to fetch models. Check Ollama URL.',
       duration: 3000,
       color: 'danger',
       position: 'top',

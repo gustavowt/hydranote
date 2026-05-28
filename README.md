@@ -206,7 +206,7 @@ User Input --> Router --> Tool Selection --> Tool Execution --> LLM Response -->
 | **OpenAI** | GPT-4.1, GPT-5 Mini, o4-mini |
 | **Anthropic** | Claude Sonnet 4.5, Claude Haiku 4.5 |
 | **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash |
-| **Ollama** | Llama, Mistral, Qwen, and any local model |
+| **Ollama** | Llama, Mistral, Qwen, any local model — plus cloud-tagged models (`*:cloud`, `*-cloud`) proxied via your local daemon after `ollama signin` |
 | **Hugging Face Local** | GGUF models via node-llama-cpp (Electron only) |
 
 ### Embedding Providers

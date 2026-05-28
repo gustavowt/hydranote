@@ -162,7 +162,13 @@
               :value="modelValue.gemini.model"
               @change="updateField('gemini', 'model', ($event.target as HTMLSelectElement).value)"
             >
-              <option value="text-embedding-004">text-embedding-004 (768 dims)</option>
+              <optgroup label="Current">
+                <option value="gemini-embedding-001">gemini-embedding-001 (up to 3072 dims, 100+ languages)</option>
+                <option value="gemini-embedding-2">gemini-embedding-2 (multimodal, 3072 dims)</option>
+              </optgroup>
+              <optgroup label="Legacy">
+                <option value="text-embedding-004">text-embedding-004 (768 dims, deprecated Jan 2026)</option>
+              </optgroup>
             </select>
           </div>
         </div>

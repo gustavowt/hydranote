@@ -223,7 +223,7 @@ export const DEFAULT_INDEXER_SETTINGS: IndexerSettings = {
   },
   gemini: {
     apiKey: '',
-    model: 'text-embedding-004',
+    model: 'gemini-embedding-001',
   },
   ollama: {
     mode: 'local',
@@ -256,9 +256,16 @@ export const OPENAI_EMBEDDING_MODELS = [
 
 /**
  * Gemini embedding model options
+ *
+ * `text-embedding-004` was deprecated on Jan 14 2026 and is kept selectable
+ * only for users mid-migration. New users should pick `gemini-embedding-001`
+ * (current GA, MRL-adjustable dims) or `gemini-embedding-2` (multimodal,
+ * GA Apr 22 2026).
  */
 export const GEMINI_EMBEDDING_MODELS = [
-  { name: 'text-embedding-004', description: 'Latest model, 768 dimensions' },
+  { name: 'gemini-embedding-001', description: 'Current GA, 100+ languages, MRL adjustable up to 3072 dims' },
+  { name: 'gemini-embedding-2', description: 'Multimodal (text/image/audio/video/PDF), 8192 token limit, 3072 dims' },
+  { name: 'text-embedding-004', description: 'Deprecated Jan 14 2026 — legacy, 768 dimensions' },
 ] as const;
 
 /**
@@ -435,6 +442,14 @@ export interface OllamaConfig {
  * `:<size>-cloud` suffix on https://ollama.com.
  */
 export const SUGGESTED_OLLAMA_CLOUD_MODELS = [
+  { name: 'deepseek-v4-flash:cloud', description: 'DeepSeek V4 Flash — 284B MoE / 13B active, 1M context (Ollama Cloud)' },
+  { name: 'deepseek-v4-pro:cloud', description: 'DeepSeek V4 Pro — frontier MoE, 3 reasoning modes (Ollama Cloud)' },
+  { name: 'gemma4:cloud', description: 'Gemma 4 — multimodal, agentic, coding (Ollama Cloud)' },
+  { name: 'qwen3.5:cloud', description: 'Qwen 3.5 — open multimodal family (Ollama Cloud)' },
+  { name: 'glm-5.1:cloud', description: 'GLM 5.1 — Z.AI flagship, SOTA on SWE-Bench Pro (Ollama Cloud)' },
+  { name: 'minimax-m2.7:cloud', description: 'MiniMax M2.7 — coding & agentic workflows (Ollama Cloud)' },
+  { name: 'nemotron-3-super:cloud', description: 'NVIDIA Nemotron 3 Super — 120B MoE / 12B active (Ollama Cloud)' },
+  { name: 'kimi-k2.6:cloud', description: 'Kimi K2.6 — multimodal agentic, long-horizon coding (Ollama Cloud)' },
   { name: 'gpt-oss:120b-cloud', description: 'OpenAI gpt-oss 120B (Ollama Cloud)' },
   { name: 'gpt-oss:20b-cloud', description: 'OpenAI gpt-oss 20B (Ollama Cloud)' },
   { name: 'qwen3-coder:480b-cloud', description: 'Qwen3 Coder 480B (Ollama Cloud)' },
