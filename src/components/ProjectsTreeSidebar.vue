@@ -742,8 +742,16 @@ function handleProjectDragOver(event: DragEvent, projectId: string) {
     }
     return;
   }
-  // In-app moves: only highlight when dragging across projects.
-  if (draggingNode.value && draggingSourceProjectId.value !== projectId) {
+  // In-app moves: highlight when dragging across projects, or when dragging a
+  // file out of a subdirectory back to its own project's root.
+  const node = draggingNode.value;
+  if (!node) return;
+  const crossProject = draggingSourceProjectId.value !== projectId;
+  const sameProjectToRoot =
+    draggingSourceProjectId.value === projectId &&
+    node.type === 'file' &&
+    node.path.includes('/');
+  if (crossProject || sameProjectToRoot) {
     dragOverProjectId.value = projectId;
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'move';
@@ -782,7 +790,15 @@ async function handleProjectDrop(event: DragEvent, targetProjectId: string) {
     return;
   }
 
-  if (!sourceProjectId || sourceProjectId === targetProjectId) {
+  if (!sourceProjectId) {
+    return;
+  }
+
+  // Same-project drop on the header moves the file back to the project root.
+  // Only meaningful when the file currently lives in a subdirectory; a file
+  // already at root has nothing to move.
+  const isSameProject = sourceProjectId === targetProjectId;
+  if (isSameProject && !sourceNode.path.includes('/')) {
     return;
   }
   
