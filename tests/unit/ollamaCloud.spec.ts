@@ -41,6 +41,7 @@ import {
   getOllamaRequestConfig,
   getOllamaModels,
   chatCompletion,
+  chatCompletionStreaming,
   saveSettings,
   loadSettings,
 } from '../../src/services/llmService';
@@ -435,5 +436,125 @@ describe('Electron IPC routing - embeddings cloud mode', () => {
     const ipcArgs = ipcFetchMock.mock.calls[0][0] as { headers: Record<string, string> };
     expect(ipcArgs.headers.Authorization).toBe('Bearer embed-token');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Electron IPC routing - chat (local daemon) path
+// ============================================================================
+//
+// The local Ollama daemon rejects the renderer's `capacitor-electron://-`
+// origin with 403. Under Electron, all chat-side Ollama calls must route
+// through the main-process bridge (`web.fetch` for non-streaming + tags,
+// `web.fetchStream` for streaming) so the request carries no browser origin.
+
+describe('Electron IPC routing - Ollama chat', () => {
+  const ipcFetchMock = vi.fn();
+  const ipcFetchStreamMock = vi.fn();
+  let originalElectronAPI: unknown;
+
+  beforeEach(() => {
+    ipcFetchMock.mockReset();
+    ipcFetchStreamMock.mockReset();
+    originalElectronAPI = (globalThis as { window?: { electronAPI?: unknown } }).window?.electronAPI;
+    Object.defineProperty(window, 'electronAPI', {
+      value: { web: { fetch: ipcFetchMock, fetchStream: ipcFetchStreamMock } },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', {
+      value: originalElectronAPI,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test('non-streaming chat routes through electronAPI.web.fetch (not globalThis.fetch)', async () => {
+    saveSettings({
+      ...DEFAULT_LLM_SETTINGS,
+      provider: 'ollama',
+      ollama: { mode: 'local', baseUrl: 'http://localhost:11434', apiKey: '', model: 'qwen3-coder:480b-cloud' },
+    });
+
+    ipcFetchMock.mockResolvedValueOnce({
+      success: true,
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ message: { content: 'hi via ipc' }, done: true }),
+      finalUrl: 'http://localhost:11434/api/chat',
+    });
+
+    const result = await chatCompletion({ messages: [{ role: 'user', content: 'hello' }] });
+
+    expect(result.content).toBe('hi via ipc');
+    expect(ipcFetchMock).toHaveBeenCalledTimes(1);
+    expect(ipcFetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'http://localhost:11434/api/chat', method: 'POST' }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('getOllamaModels routes through electronAPI.web.fetch', async () => {
+    ipcFetchMock.mockResolvedValueOnce({
+      success: true,
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ models: [{ name: 'qwen3-coder:480b-cloud' }, { name: 'llama3.2' }] }),
+      finalUrl: 'http://localhost:11434/api/tags',
+    });
+
+    const models = await getOllamaModels('http://localhost:11434');
+
+    expect(models).toEqual(['qwen3-coder:480b-cloud', 'llama3.2']);
+    expect(ipcFetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'http://localhost:11434/api/tags', method: 'GET' }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('streaming chat routes through electronAPI.web.fetchStream and assembles chunked NDJSON', async () => {
+    saveSettings({
+      ...DEFAULT_LLM_SETTINGS,
+      provider: 'ollama',
+      ollama: { mode: 'local', baseUrl: 'http://localhost:11434', apiKey: '', model: 'qwen3-coder:480b-cloud' },
+    });
+
+    // Simulate the main process delivering NDJSON across arbitrary chunk
+    // boundaries (a token split mid-line), then resolving on stream end.
+    ipcFetchStreamMock.mockImplementationOnce(async (_options, onChunk: (c: string) => void) => {
+      onChunk('{"message":{"content":"Hel');
+      onChunk('lo"},"done":false}\n');
+      onChunk('{"message":{"content":" world"},"done":true,"eval_count":2,"prompt_eval_count":5}\n');
+      return { success: true, status: 200 };
+    });
+
+    const deltas: string[] = [];
+    const result = await chatCompletionStreaming(
+      { messages: [{ role: 'user', content: 'hello' }] },
+      (chunk, done) => { if (!done && chunk) deltas.push(chunk); },
+    );
+
+    expect(deltas).toEqual(['Hello', ' world']);
+    expect(result.content).toBe('Hello world');
+    expect(result.usage?.totalTokens).toBe(7);
+    expect(ipcFetchStreamMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('streaming chat surfaces a clear error when the daemon rejects the request', async () => {
+    saveSettings({
+      ...DEFAULT_LLM_SETTINGS,
+      provider: 'ollama',
+      ollama: { mode: 'local', baseUrl: 'http://localhost:11434', apiKey: '', model: 'llama3.2' },
+    });
+
+    ipcFetchStreamMock.mockResolvedValueOnce({ success: false, status: 403, error: 'Forbidden' });
+
+    await expect(
+      chatCompletionStreaming({ messages: [{ role: 'user', content: 'hi' }] }, () => {}),
+    ).rejects.toThrow(/Ollama API error/i);
   });
 });

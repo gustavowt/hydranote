@@ -11,7 +11,7 @@
  * support today and returns `null` so the caller can degrade gracefully.
  */
 
-import { loadSettings, getOllamaModels, getOllamaRequestConfig } from './llmService';
+import { loadSettings, getOllamaModels, getOllamaRequestConfig, ollamaJsonFetch } from './llmService';
 import type { LLMSettings, OllamaConfig } from '../types';
 
 const ANTHROPIC_API_VERSION = '2023-06-01';
@@ -320,17 +320,20 @@ async function describeWithOllama(
   };
 
   const { baseUrl, headers } = getOllamaRequestConfig(config);
-  const response = await fetch(`${baseUrl}/api/chat`, {
+  // Route through ollamaJsonFetch (main-process IPC in Electron) so the request
+  // carries no browser origin — the local daemon 403s the renderer's
+  // `capacitor-electron://-` origin. Vision can be slow, so allow a long timeout.
+  const result = await ollamaJsonFetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    timeout: 300000,
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Ollama vision error: ${error || response.status}`);
+  if (!result.ok) {
+    throw new Error(`Ollama vision error: ${result.body || result.status}`);
   }
 
-  const data = await response.json();
+  const data = result.json<{ message?: { content?: string } }>();
   return data.message?.content?.toString() ?? '';
 }

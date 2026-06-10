@@ -435,11 +435,22 @@ export async function ollamaJsonFetch(url: string, init: OllamaFetchInit = {}): 
   };
 }
 
+interface OllamaChatResponse {
+  message?: { content?: string };
+  done?: boolean;
+  eval_count?: number;
+  prompt_eval_count?: number;
+}
+
 async function callOllama(
   request: LLMCompletionRequest,
   config: LLMSettings['ollama']
 ): Promise<LLMCompletionResponse> {
-  const response = await fetch(`${config.baseUrl}/api/chat`, {
+  // Route through ollamaJsonFetch so Electron uses the main-process IPC bridge:
+  // the local daemon rejects the renderer's `capacitor-electron://-` origin (403),
+  // so the request must originate where no browser origin is attached.
+  // Generous timeout covers cold cloud-model pulls on first use.
+  const result = await ollamaJsonFetch(`${config.baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -451,14 +462,14 @@ async function callOllama(
         num_predict: request.maxTokens ?? 4096,
       },
     }),
+    timeout: 300000,
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Ollama API error: ${error || response.status}`);
+  if (!result.ok) {
+    throw new Error(`Ollama API error: ${result.body || result.status}`);
   }
 
-  const data = await response.json();
+  const data = result.json<OllamaChatResponse>();
 
   return {
     content: data.message?.content || '',
@@ -717,18 +728,82 @@ async function streamOllama(
   config: LLMSettings['ollama'],
   onChunk: LLMStreamCallback
 ): Promise<LLMCompletionResponse> {
-  const response = await fetch(`${config.baseUrl}/api/chat`, {
+  const url = `${config.baseUrl}/api/chat`;
+  const body = JSON.stringify({
+    model: config.model,
+    messages: request.messages,
+    stream: true,
+    options: {
+      temperature: request.temperature ?? 0.7,
+      num_predict: request.maxTokens ?? 4096,
+    },
+  });
+
+  // Shared NDJSON line handler: accumulates content, forwards deltas via
+  // onChunk, and captures the terminal response when Ollama sends `done`.
+  let fullContent = '';
+  let finalResponse: LLMCompletionResponse | null = null;
+  const handleLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      const json = JSON.parse(trimmed) as OllamaChatResponse;
+      const content = json.message?.content;
+      if (content) {
+        fullContent += content;
+        onChunk(content, false);
+      }
+      if (json.done) {
+        finalResponse = {
+          content: fullContent,
+          finishReason: 'stop',
+          usage: json.eval_count ? {
+            promptTokens: json.prompt_eval_count || 0,
+            completionTokens: json.eval_count || 0,
+            totalTokens: (json.prompt_eval_count || 0) + (json.eval_count || 0),
+          } : undefined,
+        };
+      }
+    } catch {
+      // Skip malformed JSON lines
+    }
+  };
+
+  // Electron: stream through the main-process IPC bridge so the request carries
+  // no browser origin (the local daemon 403s the renderer's custom-scheme origin).
+  if (isElectronWebFetchAvailable()) {
+    let buffer = '';
+    const result = await window.electronAPI!.web.fetchStream(
+      {
+        requestId: `ollama-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        url,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        timeout: 300000,
+      },
+      (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) handleLine(line);
+      },
+    );
+
+    if (!result.success) {
+      throw new Error(`Ollama API error: ${result.error || result.status}`);
+    }
+
+    if (buffer.trim()) handleLine(buffer);
+    onChunk('', true);
+    return finalResponse ?? { content: fullContent, finishReason: 'stop' };
+  }
+
+  // Web/PWA fallback: native streaming fetch (no custom-scheme origin there).
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.model,
-      messages: request.messages,
-      stream: true,
-      options: {
-        temperature: request.temperature ?? 0.7,
-        num_predict: request.maxTokens ?? 4096,
-      },
-    }),
+    body,
   });
 
   if (!response.ok) {
@@ -742,7 +817,6 @@ async function streamOllama(
   }
 
   const decoder = new TextDecoder();
-  let fullContent = '';
   let buffer = '';
 
   try {
@@ -759,30 +833,10 @@ async function streamOllama(
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        try {
-          const json = JSON.parse(trimmed);
-          const content = json.message?.content;
-          if (content) {
-            fullContent += content;
-            onChunk(content, false);
-          }
-          if (json.done) {
-            onChunk('', true);
-            return {
-              content: fullContent,
-              finishReason: 'stop',
-              usage: json.eval_count ? {
-                promptTokens: json.prompt_eval_count || 0,
-                completionTokens: json.eval_count || 0,
-                totalTokens: (json.prompt_eval_count || 0) + (json.eval_count || 0),
-              } : undefined,
-            };
-          }
-        } catch {
-          // Skip malformed JSON lines
+        handleLine(line);
+        if (finalResponse) {
+          onChunk('', true);
+          return finalResponse;
         }
       }
     }
@@ -790,9 +844,10 @@ async function streamOllama(
     reader.releaseLock();
   }
 
+  if (buffer.trim()) handleLine(buffer);
   onChunk('', true);
 
-  return {
+  return finalResponse ?? {
     content: fullContent,
     finishReason: 'stop',
   };
@@ -1317,12 +1372,15 @@ export async function getOllamaModels(
       ? { baseUrl: configOrBaseUrl, headers: { 'Content-Type': 'application/json' } as Record<string, string> }
       : getOllamaRequestConfig(configOrBaseUrl);
   try {
-    const response = await fetch(`${baseUrl}/api/tags`, { headers });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch models: ${response.status}`);
+    // Route through ollamaJsonFetch (main-process IPC in Electron) — the daemon
+    // rejects the renderer's custom-scheme origin with 403, which would otherwise
+    // leave the "Available Models" list empty.
+    const result = await ollamaJsonFetch(`${baseUrl}/api/tags`, { method: 'GET', headers });
+    if (!result.ok) {
+      throw new Error(`Failed to fetch models: ${result.status}`);
     }
-    const data = await response.json();
-    return data.models?.map((m: { name: string }) => m.name) || [];
+    const data = result.json<{ models?: Array<{ name: string }> }>();
+    return data.models?.map((m) => m.name) || [];
   } catch {
     return [];
   }
