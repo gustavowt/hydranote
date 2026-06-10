@@ -60,7 +60,6 @@ interface ElectronWebFetchStreamResult {
 }
 
 
-
 // File System Operation Results
 interface ElectronFsResult {
   success: boolean;
@@ -275,6 +274,51 @@ interface ElectronBatchEmbeddingResult {
   error?: string;
 }
 
+// ============================================
+// Auto-Updater Types (electron-updater)
+// ============================================
+
+// Event payloads pushed from the main process to the renderer.
+// Must mirror electron/src/index.ts AutoUpdaterEventPayload.
+type ElectronAutoUpdaterEventPayload =
+  | { kind: 'checking' }
+  | {
+      kind: 'available';
+      version: string;
+      releaseName?: string | null;
+      releaseNotes?: string | null;
+      releaseDate?: string;
+    }
+  | { kind: 'not-available'; version: string }
+  | {
+      kind: 'download-progress';
+      percent: number;
+      bytesPerSecond: number;
+      transferred: number;
+      total: number;
+    }
+  | {
+      kind: 'downloaded';
+      version: string;
+      releaseName?: string | null;
+      releaseNotes?: string | null;
+      releaseDate?: string;
+    }
+  | { kind: 'error'; message: string };
+
+interface ElectronAutoUpdaterApi {
+  /** Trigger a check against the configured publish provider (GitHub Releases). */
+  check: () => Promise<{ success: boolean; error?: string }>;
+  /** Download an already-detected pending update. Emits download-progress + downloaded events. */
+  downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
+  /** Quit the app and install the downloaded update. Bypasses the tray "close to hide" interceptor. */
+  quitAndInstall: () => Promise<{ success: boolean; error?: string }>;
+  /** Subscribe to lifecycle events: checking, available, not-available, download-progress, downloaded, error. */
+  onEvent: (callback: (payload: ElectronAutoUpdaterEventPayload) => void) => void;
+  /** Remove all listeners registered via onEvent. */
+  offEvent: () => void;
+}
+
 // Electron API interface
 interface ElectronAPI {
   // File System Operations
@@ -454,6 +498,8 @@ interface ElectronAPI {
     /** Remove whisper status listener */
     offWhisperStatus: () => void;
   };
+  // Auto-Updater Operations (electron-updater + GitHub releases)
+  updater: ElectronAutoUpdaterApi;
   // App info
   platform: string;
   isElectron: boolean;

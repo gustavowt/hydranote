@@ -4,7 +4,7 @@ import type { MenuItemConstructorOptions } from 'electron';
 import { app, Menu, MenuItem, Tray, ipcMain, dialog, shell, globalShortcut, nativeImage, systemPreferences } from 'electron';
 import electronIsDev from 'electron-is-dev';
 import unhandled from 'electron-unhandled';
-import { autoUpdater } from 'electron-updater';
+import { autoUpdater, ProgressInfo, UpdateInfo } from 'electron-updater';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -74,6 +74,90 @@ if (electronIsDev) {
   setupReloadWatcher(myCapacitorApp);
 }
 
+// Minimize to tray on window close (instead of quitting) so global shortcuts keep working.
+// The actual quit happens via the tray menu "Quit" or Cmd+Q on macOS.
+let isQuitting = false;
+
+// ============================================
+// Auto-Updater (electron-updater + GitHub releases)
+// ============================================
+// Renderer-facing event payload. The UI subscribes via electronAPI.updater.onEvent.
+type AutoUpdaterEventPayload =
+  | { kind: 'checking' }
+  | { kind: 'available'; version: string; releaseName?: string | null; releaseNotes?: string | null; releaseDate?: string }
+  | { kind: 'not-available'; version: string }
+  | { kind: 'download-progress'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | { kind: 'downloaded'; version: string; releaseName?: string | null; releaseNotes?: string | null; releaseDate?: string }
+  | { kind: 'error'; message: string };
+
+function sendUpdaterEvent(payload: AutoUpdaterEventPayload): void {
+  const win = myCapacitorApp.getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('app-updater:event', payload);
+  }
+}
+
+function normalizeReleaseNotes(notes: UpdateInfo['releaseNotes']): string | null {
+  if (!notes) return null;
+  if (typeof notes === 'string') return notes;
+  if (Array.isArray(notes)) {
+    return notes
+      .map((n) => (typeof n === 'string' ? n : `## ${n.version}\n\n${n.note ?? ''}`))
+      .join('\n\n');
+  }
+  return null;
+}
+
+function setupAutoUpdater(): void {
+  // Ask the user before downloading. autoInstallOnAppQuit=true ensures the
+  // install still completes silently if the user closes the app after a
+  // download finishes but before clicking "Restart now".
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdaterEvent({ kind: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info: UpdateInfo) => {
+    sendUpdaterEvent({
+      kind: 'available',
+      version: info.version,
+      releaseName: info.releaseName ?? null,
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+      releaseDate: info.releaseDate,
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info: UpdateInfo) => {
+    sendUpdaterEvent({ kind: 'not-available', version: info.version });
+  });
+
+  autoUpdater.on('download-progress', (progress: ProgressInfo) => {
+    sendUpdaterEvent({
+      kind: 'download-progress',
+      percent: progress.percent,
+      bytesPerSecond: progress.bytesPerSecond,
+      transferred: progress.transferred,
+      total: progress.total,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+    sendUpdaterEvent({
+      kind: 'downloaded',
+      version: info.version,
+      releaseName: info.releaseName ?? null,
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+      releaseDate: info.releaseDate,
+    });
+  });
+
+  autoUpdater.on('error', (err: Error) => {
+    sendUpdaterEvent({ kind: 'error', message: err?.message || 'Auto-updater error' });
+  });
+}
+
 // Run Application
 (async () => {
   // Wait for electron app to be ready.
@@ -84,11 +168,12 @@ if (electronIsDev) {
   setupMediaPermissions();
   // Initialize our app, build windows, and load content.
   await myCapacitorApp.init();
-  // Check for updates if we are in a packaged app.
-  // Skip in dev mode or unpacked builds where app-update.yml doesn't exist.
+  // Wire auto-updater events so the renderer can drive the UI. In dev mode
+  // app-update.yml is not present, so the first check would throw — gate it.
+  setupAutoUpdater();
   if (!electronIsDev) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      console.warn('[AutoUpdater] Update check skipped:', err.message);
+    autoUpdater.checkForUpdates().catch((err) => {
+      sendUpdaterEvent({ kind: 'error', message: err?.message || 'Update check failed' });
     });
   }
   
@@ -106,9 +191,45 @@ if (electronIsDev) {
   }
 })();
 
-// Minimize to tray on window close (instead of quitting) so global shortcuts keep working.
-// The actual quit happens via the tray menu "Quit" or Cmd+Q on macOS.
-let isQuitting = false;
+// Auto-updater IPC handlers (renderer-driven check / download / install)
+ipcMain.handle('app-updater:check', async () => {
+  if (electronIsDev) {
+    return { success: false, error: 'Auto-update is disabled in development mode' };
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Update check failed' };
+  }
+});
+
+ipcMain.handle('app-updater:downloadUpdate', async () => {
+  if (electronIsDev) {
+    return { success: false, error: 'Auto-update is disabled in development mode' };
+  }
+  try {
+    await autoUpdater.downloadUpdate();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Download failed' };
+  }
+});
+
+ipcMain.handle('app-updater:quitAndInstall', async () => {
+  if (electronIsDev) {
+    return { success: false, error: 'Auto-update is disabled in development mode' };
+  }
+  try {
+    // Bypass the tray "close to hide" interceptor so the relaunch actually happens.
+    isQuitting = true;
+    autoUpdater.quitAndInstall();
+    return { success: true };
+  } catch (err) {
+    isQuitting = false;
+    return { success: false, error: err instanceof Error ? err.message : 'Install failed' };
+  }
+});
 
 // ============================================
 // Always-on System Tray

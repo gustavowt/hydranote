@@ -92,6 +92,15 @@ interface HFEmbeddingRuntimeStatus {
   progress?: number;
 }
 
+// Auto-Updater event payloads (must mirror electron/src/index.ts AutoUpdaterEventPayload)
+type AutoUpdaterEventPayload =
+  | { kind: 'checking' }
+  | { kind: 'available'; version: string; releaseName?: string | null; releaseNotes?: string | null; releaseDate?: string }
+  | { kind: 'not-available'; version: string }
+  | { kind: 'download-progress'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | { kind: 'downloaded'; version: string; releaseName?: string | null; releaseNotes?: string | null; releaseDate?: string }
+  | { kind: 'error'; message: string };
+
 // Expose Electron APIs to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // File System Operations
@@ -325,6 +334,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     offWhisperStatus: () => {
       ipcRenderer.removeAllListeners('dictation:whisper-status');
+    },
+  },
+  // Auto-Updater Operations (electron-updater + GitHub releases)
+  updater: {
+    check: () => ipcRenderer.invoke('app-updater:check'),
+    downloadUpdate: () => ipcRenderer.invoke('app-updater:downloadUpdate'),
+    quitAndInstall: () => ipcRenderer.invoke('app-updater:quitAndInstall'),
+    onEvent: (callback: (payload: AutoUpdaterEventPayload) => void) => {
+      ipcRenderer.on('app-updater:event', (_event, payload: AutoUpdaterEventPayload) => {
+        callback(payload);
+      });
+    },
+    offEvent: () => {
+      ipcRenderer.removeAllListeners('app-updater:event');
     },
   },
   // App info
