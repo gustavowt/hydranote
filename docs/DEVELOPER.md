@@ -300,19 +300,38 @@ Tracks events for monitoring AI behavior: `note_created`, `project_created`, `di
 
 ### Update Service (`updateService.ts`)
 
-Checks for new app releases by fetching the latest tag from the GitHub repository (`gustavowt/hydranote`). Compares the tag version against the current `package.json` version using semantic versioning. Runs on app startup and every 6 hours.
+Drives the in-app `UpdateBanner.vue` for new app releases. Has two modes that share the same reactive state and the same banner component:
+
+- **Electron (packaged builds):** uses `electron-updater` against the GitHub Releases provider configured in `electron/electron-builder.config.json`. The main process (`electron/src/index.ts`) wires `autoUpdater` lifecycle events (`checking-for-update`, `update-available`, `update-not-available`, `download-progress`, `update-downloaded`, `error`) and forwards each one to the renderer via `webContents.send('app-updater:event', payload)`. The renderer subscribes via `window.electronAPI.updater.onEvent` and drives a phase machine: `idle → checking → available → downloading → downloaded` (or `error`). The user is asked for consent before any download starts (`autoUpdater.autoDownload = false`), and `autoInstallOnAppQuit = true` ensures that even if the user dismisses the "Restart now" button, the install completes silently on next quit.
+- **Web / PWA / unpacked dev builds:** falls back to polling the GitHub repository tags API (`/repos/{owner}/{repo}/tags?per_page=1`), comparing against `package.json` version with semver. The banner shows a "View release" link to the GitHub Releases page (no in-app download).
+
+Both modes run on app startup and re-check every 6 hours.
+
+**Phases (Electron-only):**
+| Phase | Banner content |
+|-------|----------------|
+| `available` | "Version X is available — **Update now** — Later" |
+| `downloading` | "Downloading update X… NN%" + thin progress bar |
+| `downloaded` | "Update X downloaded — ready to install — **Restart now**" |
+| `error` | "Update failed: {message} — Retry / Dismiss" |
 
 **Key Functions:**
 | Function | Description |
 |----------|-------------|
-| `startUpdateChecker()` | Begin periodic checks (called on app mount) |
-| `stopUpdateChecker()` | Stop the periodic timer |
-| `checkForUpdates()` | Single check against GitHub API |
-| `dismissUpdate()` | Dismiss the banner for the current version |
+| `startUpdateChecker()` | Begin periodic checks + attach electron-updater listener (called on app mount) |
+| `stopUpdateChecker()` | Stop the periodic timer and detach the electron-updater listener |
+| `checkForUpdates()` | Single check (routes through `electron-updater` when available, otherwise GitHub tags) |
+| `requestUpdateDownload()` | Electron-only — starts the download (`autoUpdater.downloadUpdate`) |
+| `installUpdateNow()` | Electron-only — calls `autoUpdater.quitAndInstall` after flipping the tray's `isQuitting` guard so the relaunch isn't intercepted |
+| `dismissUpdate()` | Dismiss the banner for the `available` phase only — once a download starts/finishes the banner persists so the user can install |
 
-**Reactive State:** `hasUpdate`, `latestVersion`, `currentVersion`, `releaseUrl` (Vue refs).
+**Reactive State:** `hasUpdate`, `latestVersion`, `currentVersion`, `releaseUrl`, `updaterPhase`, `downloadPercent`, `downloadBytesPerSec`, `updaterError` (Vue refs).
 
-**UI:** `UpdateBanner.vue` — fixed bottom banner shown when a newer version exists, with a link to the GitHub release and a dismiss button. Dismissed version is remembered in `localStorage`.
+**Electron IPC (`electronAPI.updater`):** `check()`, `downloadUpdate()`, `quitAndInstall()`, `onEvent(callback)`, `offEvent()`. All three invocations short-circuit with a friendly error in dev mode (`app-update.yml` is not present in unpacked builds).
+
+**Signing requirements:** `electron-updater` requires code-signed + notarized bundles on macOS — your release CI (`.github/workflows/release.yml`) already sets `CSC_LINK`, `APPLE_ID`, etc. Local unsigned macOS builds surface the signing error inline in the banner (`phase: 'error'`) instead of crashing. Linux uses AppImage in-place updates (the user must run the AppImage directly, not extracted). Windows uses the NSIS installer's silent update path.
+
+**Dismiss persistence:** the dismissed version is remembered in `localStorage` (`hydranote_dismissed_update_version`). Re-checks against the same version stay quiet until a newer one ships.
 
 ---
 
@@ -394,7 +413,7 @@ User messages containing `@` references are parsed and rendered as styled UI com
 This is a display-only feature - the raw content is preserved for LLM processing.
 
 ### ProjectsTreeSidebar (`ProjectsTreeSidebar.vue`)
-Hierarchical project/file navigator with drag-and-drop between projects.
+Hierarchical project/file navigator with drag-and-drop between projects. Dropping a file onto a **directory row** moves it into that directory; dropping onto the **project header** moves it to that project's root — this also works within the same project, so a file can be dragged out of a subdirectory back to the project root (files already at root are ignored).
 
 ### PDFViewer (`PDFViewer.vue`)
 Read-only PDF viewer loading from file system path (Electron only).
@@ -646,7 +665,9 @@ The Ollama indexer config in `IndexerSettings.ollama` mirrors this shape (`mode`
 
 **Ollama (chat / vision — local-daemon-only with cloud-tagged model proxy):**
 
-The chat-side Ollama provider is **local-daemon-only**. The renderer always talks to the configured local daemon URL (default `http://localhost:11434`) via plain `fetch()`. Cloud-tagged models are first-class citizens because the local Ollama daemon (since v0.6+) transparently proxies them to ollama.com after the user runs `ollama signin` in a terminal once.
+The chat-side Ollama provider is **local-daemon-only**. It always targets the configured local daemon URL (default `http://localhost:11434`). Cloud-tagged models are first-class citizens because the local Ollama daemon (since v0.6+) transparently proxies them to ollama.com after the user runs `ollama signin` in a terminal once.
+
+> **CORS / Electron origin gotcha (why chat is IPC-routed):** the Ollama daemon rejects any request that carries the packaged renderer's custom-scheme origin (`Origin: capacitor-electron://-`) with `403 Forbidden` — this applies to `/api/chat` **and** `/api/tags`, for local *and* cloud-tagged models. "localhost" does **not** exempt the request; the daemon's CORS check keys off the `Origin` header. Therefore, under Electron, the chat/vision/tags calls are routed through the main-process `web:fetch` / `web:fetchStream` IPC bridge, where the request originates in Node with no browser origin attached. On the web/PWA build there is no custom scheme, so a native `fetch()` fallback is used.
 
 - `OllamaConfig` keeps a `mode: 'local' | 'cloud'` field on the type for backwards compatibility with persisted data, but `loadSettings()` migrates any persisted `mode: 'cloud'` config to `'local'` on read. The migration:
   - Sets `mode = 'local'`.
@@ -656,14 +677,15 @@ The chat-side Ollama provider is **local-daemon-only**. The renderer always talk
 - The settings UI in `AIProviderSelector.vue` no longer shows a Local/Cloud mode toggle or an API key field. It shows the daemon URL plus two model lists:
   - **Available Models** — pulled from `/api/tags` on the configured daemon.
   - **Cloud Models (via local daemon)** — the static `SUGGESTED_OLLAMA_CLOUD_MODELS` set (`src/types/index.ts`: `gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud`, `kimi-k2:1t-cloud`, etc.). A help hint reminds the user to run `ollama signin` once; on first use the daemon will pull the cloud-tagged model on demand.
-- Chat (`callOllama`, `streamOllama`), tag discovery (`getOllamaModels`), and vision (`visionService.describeWithOllama`) all hit `${baseUrl}/api/...` directly with `fetch()`. There is no IPC bridge involved on the chat path because the request never leaves localhost — the daemon owns the cloud proxy.
+- Chat non-streaming (`callOllama`), tag discovery (`getOllamaModels`), and vision (`visionService.describeWithOllama`) go through `ollamaJsonFetch(url, init)`, which uses the Electron `web:fetch` IPC bridge when available and falls back to native `fetch()` on web. Chat streaming (`streamOllama`) goes through the dedicated `web:fetchStream` IPC bridge under Electron (token-by-token chunks forwarded via `web:fetchStream:chunk` events, correlated by `requestId`), and falls back to a native streaming `fetch()` reader on web. All four Ollama timeouts are bumped to 300s to tolerate cold cloud-model pulls on first use.
+- The streaming IPC handler treats `timeout` as an **idle** timeout (it resets on every received chunk), so long generations are not aborted mid-stream as long as tokens keep flowing.
 - `getOllamaRequestConfig(config)` still tolerates `mode === 'cloud'` for one remaining caller: the **embeddings indexer**, whose own `OllamaEmbeddingConfig` retains a `mode: 'local' | 'cloud'` discriminator (see "Embedding service" below). For chat, `config.mode` is always `'local'` after migration, so the cloud branch is unreachable from the chat path.
 
 **Embeddings indexer Ollama (still has local + cloud modes):**
 
 `OllamaEmbeddingConfig` keeps the original `mode: 'local' | 'cloud'` shape. The cloud branch targets `https://ollama.com/api/embeddings` directly (with `Authorization: Bearer <apiKey>`), which the renderer's `capacitor-electron://-` origin can't reach because of CORS. To work around that, the embedding service's Ollama call goes through the Electron `web:fetch` IPC bridge via the shared `ollamaJsonFetch(url, init)` helper exported from `llmService.ts`:
 - `ollamaJsonFetch` detects `window.electronAPI?.web?.fetch`. When present, it routes through IPC (main process performs the request, no browser CORS). Otherwise it falls back to native `fetch` (web/PWA build, Vitest jsdom env, etc.).
-- This is the *only* remaining IPC-routed Ollama path. Chat does not need it.
+- The same IPC bridge is also used by the **chat path** now (the daemon 403s the renderer's custom-scheme origin even on localhost — see the chat section above). The embeddings indexer is no longer the only IPC-routed Ollama caller.
 - The embeddings indexer settings UI still surfaces both modes; nothing changed there.
 
 ---
@@ -771,7 +793,8 @@ If a user still encounters the issue, recommend:
 `shell:openExternal` - Open URL in system default browser
 
 **Web (CORS bypass):**
-`web:fetch` - One-shot HTTP request executed in the main process (bypasses renderer CORS). Returns `{ success, status, headers, body, finalUrl, error? }`. Used by the embeddings indexer's Ollama cloud mode (via `ollamaJsonFetch` in `llmService.ts`), `zoomService`, `googleWorkspaceAuthService`, `webSearchService`, and `deepgramProvider`. The chat-side Ollama provider does **not** use this bridge — it always talks to localhost, where browser CORS does not apply.
+`web:fetch` - One-shot HTTP request executed in the main process (bypasses renderer CORS). Returns `{ success, status, headers, body, finalUrl, error? }`. Used by the embeddings indexer's Ollama cloud mode and the chat-side Ollama non-streaming + tags calls (via `ollamaJsonFetch` in `llmService.ts`), `zoomService`, `googleWorkspaceAuthService`, `webSearchService`, and `deepgramProvider`.
+`web:fetchStream` - Streaming HTTP request executed in the main process. Body chunks are forwarded to the renderer via `web:fetchStream:chunk` events (correlated by a caller-supplied `requestId`); the `invoke` promise resolves with `{ success, status, error? }` when the stream ends. `timeout` is an **idle** timeout (resets on each chunk). Used by `streamOllama` so token-by-token streaming still works while keeping the request off the renderer's custom-scheme origin (the local Ollama daemon 403s `capacitor-electron://-`, even on localhost).
 
 **Dictation:**
 `dictation:registerShortcut` - Register a global OS-level keyboard shortcut for push-to-talk
