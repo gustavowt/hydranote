@@ -33,6 +33,33 @@ interface ElectronWebFetchResult {
   error?: string;
 }
 
+// Streaming Web Fetch Options
+interface ElectronWebFetchStreamOptions {
+  /** Correlation id so chunks are routed to the right caller */
+  requestId: string;
+  /** URL to fetch */
+  url: string;
+  /** HTTP method (default: 'POST') */
+  method?: string;
+  /** Request headers */
+  headers?: Record<string, string>;
+  /** Request body */
+  body?: string;
+  /** Idle timeout in milliseconds (resets on every received chunk) */
+  timeout?: number;
+}
+
+// Streaming Web Fetch Result (resolves when the stream ends)
+interface ElectronWebFetchStreamResult {
+  /** Whether the stream completed successfully */
+  success: boolean;
+  /** HTTP status code */
+  status?: number;
+  /** Error message if failed */
+  error?: string;
+}
+
+
 
 // File System Operation Results
 interface ElectronFsResult {
@@ -272,6 +299,11 @@ interface ElectronAPI {
   // Web Fetch Operations (bypasses CORS by running in main process)
   web: {
     fetch: (options: ElectronWebFetchOptions) => Promise<ElectronWebFetchResult>;
+    /** Streaming fetch: chunks delivered to onChunk; promise resolves on stream end. */
+    fetchStream: (
+      options: ElectronWebFetchStreamOptions,
+      onChunk: (chunk: string) => void,
+    ) => Promise<ElectronWebFetchStreamResult>;
   };
   // Google OAuth Operations
   google: {

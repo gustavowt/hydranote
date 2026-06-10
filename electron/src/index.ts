@@ -501,6 +501,21 @@ interface WebFetchResult {
   error?: string;
 }
 
+interface WebFetchStreamOptions {
+  requestId: string;
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
+}
+
+interface WebFetchStreamResult {
+  success: boolean;
+  status?: number;
+  error?: string;
+}
+
 /**
  * Validate URL - only allow http and https protocols
  */
@@ -625,6 +640,86 @@ ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<We
     }
     
     return { success: false, error: `Fetch failed: ${errorMessage}` };
+  }
+});
+
+/**
+ * Perform a streaming HTTP fetch in the main process and forward each decoded
+ * body chunk to the renderer via `web:fetchStream:chunk` events (correlated by
+ * `requestId`). Runs in the main process so requests carry no browser origin,
+ * which is required for the local Ollama daemon (it rejects the renderer's
+ * `capacitor-electron://-` origin with 403). The returned promise resolves
+ * once the stream ends, so callers can await completion while consuming chunks.
+ *
+ * `timeout` is treated as an idle timeout: it resets on every received chunk so
+ * long generations (and cold cloud-model pulls) are not aborted mid-stream.
+ */
+ipcMain.handle('web:fetchStream', async (event, options: WebFetchStreamOptions): Promise<WebFetchStreamResult> => {
+  const { requestId, url, method = 'POST', headers = {}, body, timeout = WEB_FETCH_TIMEOUT_MS } = options;
+
+  const validation = validateUrl(url);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+
+  const sendChunk = (chunk: string) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('web:fetchStream:chunk', { requestId, chunk });
+    }
+  };
+
+  const controller = new AbortController();
+  let timeoutId = setTimeout(() => controller.abort(), timeout);
+  const resetTimeout = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => controller.abort(), timeout);
+  };
+
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'User-Agent': 'HydraNote/1.0',
+        ...headers,
+      },
+      body: body || undefined,
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      clearTimeout(timeoutId);
+      const errorBody = await response.text().catch(() => '');
+      return { success: false, status: response.status, error: errorBody || `HTTP ${response.status}` };
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      clearTimeout(timeoutId);
+      return { success: false, status: response.status, error: 'Response body is not readable' };
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    let hasMore = true;
+    while (hasMore) {
+      const { done, value } = await reader.read();
+      if (done) {
+        hasMore = false;
+        continue;
+      }
+      resetTimeout();
+      sendChunk(decoder.decode(value, { stream: true }));
+    }
+
+    clearTimeout(timeoutId);
+    return { success: true, status: response.status };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    if (errorMessage.includes('aborted')) {
+      return { success: false, error: `Request timeout after ${timeout}ms of inactivity` };
+    }
+    return { success: false, error: `Stream fetch failed: ${errorMessage}` };
   }
 });
 

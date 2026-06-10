@@ -122,6 +122,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
       body?: string;
       timeout?: number;
     }) => ipcRenderer.invoke('web:fetch', options),
+    // Streaming fetch: chunks are delivered to onChunk as they arrive; the
+    // returned promise resolves when the stream ends. Used by the Ollama chat
+    // streaming path so requests originate from the main process (no browser
+    // origin -> not rejected by the local Ollama daemon's CORS check).
+    fetchStream: (
+      options: {
+        requestId: string;
+        url: string;
+        method?: string;
+        headers?: Record<string, string>;
+        body?: string;
+        timeout?: number;
+      },
+      onChunk: (chunk: string) => void,
+    ) => {
+      const listener = (_event: unknown, payload: { requestId: string; chunk: string }) => {
+        if (payload.requestId === options.requestId) {
+          onChunk(payload.chunk);
+        }
+      };
+      ipcRenderer.on('web:fetchStream:chunk', listener);
+      return ipcRenderer
+        .invoke('web:fetchStream', options)
+        .finally(() => ipcRenderer.removeListener('web:fetchStream:chunk', listener));
+    },
   },
   // Google OAuth Operations
   google: {
