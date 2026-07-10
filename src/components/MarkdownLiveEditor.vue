@@ -30,6 +30,7 @@ import {
 } from '@/services/markdownConverter';
 import { detectDates } from '@/services/dateDetectionService';
 import MermaidBlockNodeView from './MermaidBlockNodeView.vue';
+import CodeBlockNodeView from './CodeBlockNodeView.vue';
 
 const lowlight = createLowlight(common);
 
@@ -93,6 +94,18 @@ const MermaidBlock = Node.create({
   },
   addNodeView() {
     return VueNodeViewRenderer(MermaidBlockNodeView);
+  },
+});
+
+/**
+ * CodeBlockLowlight with a Vue node view that overlays a copy-to-clipboard
+ * button on each code block (see CodeBlockNodeView.vue). Serialization is
+ * untouched — getHTML() still uses the extension's default renderHTML, so the
+ * turndown round-trip in htmlToMarkdown is unaffected.
+ */
+const CodeBlockWithCopy = CodeBlockLowlight.extend({
+  addNodeView() {
+    return VueNodeViewRenderer(CodeBlockNodeView);
   },
 });
 
@@ -211,7 +224,7 @@ function buildEditor(): Editor {
       TableHeader,
       TaskList,
       TaskItem.configure({ nested: true }),
-      CodeBlockLowlight.configure({ lowlight }),
+      CodeBlockWithCopy.configure({ lowlight }),
       MermaidBlock,
       DateChipExtension,
     ],
@@ -405,5 +418,15 @@ void _hasEditor.value;
 /* Mermaid block node container */
 .live-editor-host :deep(.mermaid-block-node) {
   margin: 1.5em 0;
+}
+
+/* Code block node view: the wrapper owns the block margin so the copy button
+   (absolute, top-right) aligns with the pre instead of floating above it. */
+.live-editor-host :deep(.code-block-node) {
+  margin: 1.2em 0;
+}
+
+.live-editor-host :deep(.code-block-node pre) {
+  margin: 0;
 }
 </style>

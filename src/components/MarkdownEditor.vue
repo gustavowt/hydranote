@@ -773,8 +773,35 @@ const datePopover = ref<{
   anchorRect: null,
 });
 
+async function copyCodeBlock(btn: HTMLElement) {
+  const pre = btn.parentElement?.querySelector('pre');
+  if (!pre) return;
+  try {
+    await navigator.clipboard.writeText(pre.innerText.replace(/\n$/, ''));
+  } catch {
+    return;
+  }
+  // Direct DOM mutation is fine here: the button lives in v-html content that
+  // is regenerated wholesale whenever renderedContent recomputes.
+  btn.classList.add('copied');
+  btn.innerHTML = CHECK_ICON_SVG;
+  window.setTimeout(() => {
+    btn.classList.remove('copied');
+    btn.innerHTML = COPY_ICON_SVG;
+  }, 1500);
+}
+
 function handlePreviewClick(event: MouseEvent) {
   const target = event.target as HTMLElement;
+
+  const copyBtn = target.closest('.code-copy-btn') as HTMLElement | null;
+  if (copyBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    copyCodeBlock(copyBtn);
+    return;
+  }
+
   const chip = target.closest('.date-chip') as HTMLElement | null;
 
   if (chip) {
@@ -1016,6 +1043,36 @@ function injectDateChips(html: string, dates: DetectedDate[]): string {
   return result;
 }
 
+const COPY_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+
+/**
+ * Wrap each rendered code block in a `.code-block-wrapper` carrying a
+ * copy-to-clipboard button. Mermaid blocks are untouched (they render as
+ * `<div class="mermaid-diagram">`, not `<pre>`). Clicks are handled via the
+ * existing `handlePreviewClick` delegation.
+ */
+function injectCopyButtons(html: string): string {
+  if (!html.includes('<pre>')) return html;
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+  for (const pre of Array.from(root.querySelectorAll('pre'))) {
+    const wrapper = doc.createElement('div');
+    wrapper.className = 'code-block-wrapper';
+    const btn = doc.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-copy-btn';
+    btn.title = 'Copy code';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.innerHTML = COPY_ICON_SVG;
+    pre.replaceWith(wrapper);
+    wrapper.appendChild(btn);
+    wrapper.appendChild(pre);
+  }
+  return root.innerHTML;
+}
+
 const renderedContent = computed(() => {
   if (!content.value.trim()) {
     return '<p class="placeholder-text">Preview will appear here...</p>';
@@ -1028,7 +1085,7 @@ const renderedContent = computed(() => {
     html = injectDateChips(html, dates);
   }
 
-  return html;
+  return injectCopyButtons(html);
 });
 
 // Normalize a relative image path against the current file's directory
@@ -2820,6 +2877,52 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   font-size: 0.85em;
   line-height: 1.6;
   color: var(--hn-text-primary);
+}
+
+.markdown-preview :deep(.code-block-wrapper) {
+  position: relative;
+}
+
+.markdown-preview :deep(.code-copy-btn) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--hn-border-default);
+  background: var(--hn-bg-elevated);
+  color: var(--hn-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  z-index: 1;
+}
+
+.markdown-preview :deep(.code-block-wrapper:hover .code-copy-btn),
+.markdown-preview :deep(.code-copy-btn:focus-visible) {
+  opacity: 1;
+}
+
+.markdown-preview :deep(.code-copy-btn:hover) {
+  color: var(--hn-text-primary);
+  background: var(--hn-bg-hover);
+}
+
+.markdown-preview :deep(.code-copy-btn.copied) {
+  color: var(--hn-teal);
+  opacity: 1;
+}
+
+/* Touch devices have no hover: keep the button visible at reduced opacity */
+@media (hover: none) {
+  .markdown-preview :deep(.code-copy-btn) {
+    opacity: 0.6;
+  }
 }
 
 .markdown-preview :deep(blockquote) {
