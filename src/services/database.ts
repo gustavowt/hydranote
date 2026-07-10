@@ -70,6 +70,353 @@ export function isWalReplayError(err: unknown): boolean {
 }
 
 /**
+ * Detects DuckDB constraint / foreign-key violations surfaced during writes.
+ * Exported for testing.
+ */
+export function isConstraintError(err: unknown): boolean {
+  const message = err instanceof Error
+    ? err.message
+    : typeof err === 'string'
+      ? err
+      : '';
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  if (lower.includes('foreign key')) return true;
+  if (lower.includes('constraint error')) return true;
+  if (lower.includes('violates foreign key')) return true;
+  if (
+    message.includes('"exception_type":"Constraint"') ||
+    message.includes('"exception_type":"Integrity"')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * User-facing database error text for file-tree and chat UI alerts.
+ */
+export function formatDatabaseErrorMessage(error: unknown, action: string): string {
+  if (isConstraintError(error)) {
+    return `Failed to ${action}. The library was repaired — please try again.`;
+  }
+  return `Failed to ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+}
+
+const ORPHAN_HEAL_MIGRATION_KEY = 'hydranote.migration.orphanHeal.v2';
+
+interface TableRebuildSpec {
+  tableName: string;
+  tempTableName: string;
+  createDdl: string;
+  expectedColumns: string[];
+  indexDdls: string[];
+}
+
+/** Tables that historically carried FOREIGN KEY clauses (pre-79b91d3). Rebuild deepest-first. */
+const FK_STRIP_TABLE_SPECS: TableRebuildSpec[] = [
+  {
+    tableName: 'embeddings',
+    tempTableName: 'embeddings__fkfree',
+    createDdl: `
+      CREATE TABLE embeddings__fkfree (
+        id VARCHAR PRIMARY KEY,
+        chunk_id VARCHAR NOT NULL,
+        file_id VARCHAR NOT NULL,
+        project_id VARCHAR NOT NULL,
+        vector DOUBLE[] NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    expectedColumns: ['id', 'chunk_id', 'file_id', 'project_id', 'vector', 'created_at'],
+    indexDdls: [],
+  },
+  {
+    tableName: 'chunks',
+    tempTableName: 'chunks__fkfree',
+    createDdl: `
+      CREATE TABLE chunks__fkfree (
+        id VARCHAR PRIMARY KEY,
+        file_id VARCHAR NOT NULL,
+        project_id VARCHAR NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        start_offset INTEGER NOT NULL,
+        end_offset INTEGER NOT NULL,
+        page_number INTEGER,
+        section VARCHAR,
+        kind VARCHAR DEFAULT 'text',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    expectedColumns: [
+      'id', 'file_id', 'project_id', 'chunk_index', 'text',
+      'start_offset', 'end_offset', 'page_number', 'section', 'kind', 'created_at',
+    ],
+    indexDdls: ['CREATE INDEX IF NOT EXISTS idx_chunks_file_page ON chunks(file_id, page_number)'],
+  },
+  {
+    tableName: 'file_versions',
+    tempTableName: 'file_versions__fkfree',
+    createDdl: `
+      CREATE TABLE file_versions__fkfree (
+        id VARCHAR PRIMARY KEY,
+        file_id VARCHAR NOT NULL,
+        version_number INTEGER NOT NULL,
+        is_full_content BOOLEAN NOT NULL,
+        content_or_patch TEXT NOT NULL,
+        source VARCHAR NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    expectedColumns: [
+      'id', 'file_id', 'version_number', 'is_full_content',
+      'content_or_patch', 'source', 'created_at',
+    ],
+    indexDdls: [
+      'CREATE INDEX IF NOT EXISTS idx_file_versions_file_id ON file_versions(file_id)',
+      'CREATE INDEX IF NOT EXISTS idx_file_versions_version ON file_versions(file_id, version_number)',
+    ],
+  },
+  {
+    tableName: 'chat_messages',
+    tempTableName: 'chat_messages__fkfree',
+    createDdl: `
+      CREATE TABLE chat_messages__fkfree (
+        id VARCHAR PRIMARY KEY,
+        session_id VARCHAR NOT NULL,
+        role VARCHAR NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        attachments TEXT
+      )
+    `,
+    expectedColumns: ['id', 'session_id', 'role', 'content', 'created_at', 'attachments'],
+    indexDdls: ['CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)'],
+  },
+  {
+    tableName: 'web_search_chunks',
+    tempTableName: 'web_search_chunks__fkfree',
+    createDdl: `
+      CREATE TABLE web_search_chunks__fkfree (
+        id VARCHAR PRIMARY KEY,
+        cache_id VARCHAR NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        embedding DOUBLE[] NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    expectedColumns: ['id', 'cache_id', 'chunk_index', 'text', 'embedding', 'created_at'],
+    indexDdls: [],
+  },
+  {
+    tableName: 'files',
+    tempTableName: 'files__fkfree',
+    createDdl: `
+      CREATE TABLE files__fkfree (
+        id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        name VARCHAR NOT NULL,
+        type VARCHAR NOT NULL,
+        size INTEGER NOT NULL,
+        status VARCHAR NOT NULL DEFAULT 'pending',
+        content TEXT,
+        binary_data BLOB,
+        html_content TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        binary_data_base64 TEXT,
+        system_file_path TEXT,
+        content_hash VARCHAR
+      )
+    `,
+    expectedColumns: [
+      'id', 'project_id', 'name', 'type', 'size', 'status', 'content',
+      'binary_data', 'html_content', 'created_at', 'updated_at',
+      'binary_data_base64', 'system_file_path', 'content_hash',
+    ],
+    indexDdls: [],
+  },
+];
+
+/** SQL statements used by healOrphanRows — exported for unit tests. */
+export const ORPHAN_HEAL_STATEMENTS: string[] = [
+  `DELETE FROM files
+    WHERE project_id NOT IN (SELECT id FROM projects)`,
+  `DELETE FROM embeddings
+    WHERE chunk_id NOT IN (SELECT id FROM chunks)
+       OR file_id NOT IN (SELECT id FROM files)
+       OR project_id NOT IN (SELECT id FROM projects)`,
+  `DELETE FROM chunks
+    WHERE file_id NOT IN (SELECT id FROM files)
+       OR project_id NOT IN (SELECT id FROM projects)`,
+  `DELETE FROM file_versions
+    WHERE file_id NOT IN (SELECT id FROM files)`,
+  `DELETE FROM chat_messages
+    WHERE session_id NOT IN (SELECT id FROM chat_sessions)`,
+  `DELETE FROM web_search_chunks
+    WHERE cache_id NOT IN (SELECT id FROM web_search_cache)`,
+  `UPDATE chat_sessions
+    SET project_id = NULL
+    WHERE project_id IS NOT NULL
+      AND project_id NOT IN (SELECT id FROM projects)`,
+];
+
+async function getTableColumns(
+  conn: duckdb.AsyncDuckDBConnection,
+  tableName: string,
+): Promise<string[]> {
+  const result = await conn.query(`DESCRIBE ${tableName}`);
+  return result.toArray().map((row: Record<string, unknown>) => row.column_name as string);
+}
+
+/**
+ * Returns true when the database still has FOREIGN KEY constraints from
+ * pre-79b91d3 schemas (CREATE TABLE IF NOT EXISTS does not remove them).
+ * Exported for testing.
+ */
+export async function hasForeignKeyConstraints(
+  conn: duckdb.AsyncDuckDBConnection,
+): Promise<boolean> {
+  try {
+    const result = await conn.query(`
+      SELECT COUNT(*)::INTEGER AS cnt
+      FROM duckdb_constraints()
+      WHERE constraint_type = 'FOREIGN KEY'
+    `);
+    const row = result.toArray()[0] as Record<string, unknown> | undefined;
+    return Number(row?.cnt ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function rebuildTableWithoutForeignKeys(
+  conn: duckdb.AsyncDuckDBConnection,
+  spec: TableRebuildSpec,
+): Promise<void> {
+  const existingColumns = await getTableColumns(conn, spec.tableName);
+  const columnsToCopy = spec.expectedColumns.filter((col) => existingColumns.includes(col));
+  if (columnsToCopy.length === 0) return;
+
+  const columnList = columnsToCopy.join(', ');
+  const oldTableName = `${spec.tableName}__old`;
+
+  await conn.query(`DROP TABLE IF EXISTS ${spec.tempTableName}`);
+  await conn.query(`DROP TABLE IF EXISTS ${oldTableName}`);
+
+  await runInTransaction(conn, [
+    spec.createDdl,
+    `INSERT INTO ${spec.tempTableName} (${columnList}) SELECT ${columnList} FROM ${spec.tableName}`,
+    `ALTER TABLE ${spec.tableName} RENAME TO ${oldTableName}`,
+    `ALTER TABLE ${spec.tempTableName} RENAME TO ${spec.tableName}`,
+    `DROP TABLE ${oldTableName}`,
+  ]);
+
+  for (const indexDdl of spec.indexDdls) {
+    await conn.query(indexDdl);
+  }
+}
+
+/**
+ * Rebuild tables that still carry legacy FOREIGN KEY constraints.
+ * Exported for testing.
+ */
+export async function stripForeignKeyConstraints(
+  conn: duckdb.AsyncDuckDBConnection,
+): Promise<boolean> {
+  if (!(await hasForeignKeyConstraints(conn))) {
+    return false;
+  }
+
+  for (const spec of FK_STRIP_TABLE_SPECS) {
+    await rebuildTableWithoutForeignKeys(conn, spec);
+  }
+
+  if (await hasForeignKeyConstraints(conn)) {
+    throw new Error('Foreign key strip migration incomplete — constraints remain');
+  }
+
+  return true;
+}
+
+/**
+ * Remove orphaned child rows and detach chat sessions from deleted projects.
+ * Exported for testing.
+ */
+export async function healOrphanRows(
+  conn: duckdb.AsyncDuckDBConnection,
+): Promise<void> {
+  for (const statement of ORPHAN_HEAL_STATEMENTS) {
+    await conn.query(statement);
+  }
+}
+
+async function runInTransaction(
+  conn: duckdb.AsyncDuckDBConnection,
+  statements: string[],
+): Promise<void> {
+  await conn.query('BEGIN TRANSACTION');
+  try {
+    for (const statement of statements) {
+      await conn.query(statement);
+    }
+    await conn.query('COMMIT');
+  } catch (error) {
+    try {
+      await conn.query('ROLLBACK');
+    } catch {
+      // Rollback may fail if the transaction was already aborted.
+    }
+    throw error;
+  }
+}
+
+async function withConstraintRetry<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isConstraintError(error)) {
+      throw error;
+    }
+    console.warn('[HydraNote] Constraint error — healing orphans and retrying once:', error);
+    await healOrphanRows(getConnection());
+    return operation();
+  }
+}
+
+async function runSchemaIntegrityMigrations(): Promise<void> {
+  if (!connection) return;
+
+  try {
+    const stripped = await stripForeignKeyConstraints(connection);
+    if (stripped) {
+      console.info('[HydraNote] Removed legacy foreign key constraints from database schema');
+      await flushDatabase();
+    }
+  } catch (error) {
+    console.warn('[HydraNote] FK strip migration failed (database remains usable):', error);
+  }
+
+  const shouldHeal =
+    typeof localStorage === 'undefined' ||
+    !localStorage.getItem(ORPHAN_HEAL_MIGRATION_KEY);
+
+  if (!shouldHeal) return;
+
+  try {
+    await healOrphanRows(connection);
+    await flushDatabase();
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(ORPHAN_HEAL_MIGRATION_KEY, 'done');
+    }
+  } catch (error) {
+    console.warn('[HydraNote] Orphan heal failed:', error);
+  }
+}
+
+/**
  * Best-effort deletion of the orphaned WAL sidecar file(s) from the origin
  * private file system. Returns `true` if at least one entry was successfully
  * removed; `false` if OPFS is unavailable, none of the files existed, or every
@@ -165,6 +512,7 @@ async function doInitializeDatabase(): Promise<void> {
   }
 
   await createSchema();
+  await runSchemaIntegrityMigrations();
 
   // Register beforeunload to flush database
   window.addEventListener('beforeunload', handleBeforeUnload);
@@ -428,6 +776,33 @@ async function createSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(start_time, end_time)
   `);
 
+  // Note date index (parsed from md/txt content for Timeline)
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS note_dates (
+      id VARCHAR PRIMARY KEY,
+      file_id VARCHAR NOT NULL,
+      project_id VARCHAR NOT NULL,
+      file_name VARCHAR NOT NULL,
+      date_str VARCHAR NOT NULL,
+      date_text VARCHAR NOT NULL,
+      type VARCHAR NOT NULL,
+      context_snippet VARCHAR,
+      start_index INTEGER NOT NULL
+    )
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_dates_range ON note_dates(date_str)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_dates_project ON note_dates(project_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_dates_file ON note_dates(file_id)
+  `);
+
   // Migration: Add binary_data and html_content columns to files table
   // These columns store original file data for PDF/DOCX viewing
   try {
@@ -556,22 +931,18 @@ export async function getAllProjects(): Promise<Project[]> {
  */
 export async function deleteProject(projectId: string): Promise<void> {
   const conn = getConnection();
-  
-  // Delete embeddings for this project
-  await conn.query(`DELETE FROM embeddings WHERE project_id = '${projectId}'`);
-  
-  // Delete chunks for this project
-  await conn.query(`DELETE FROM chunks WHERE project_id = '${projectId}'`);
-  
-  // Delete file versions for files in this project
-  await conn.query(`DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE project_id = '${projectId}')`);
-  
-  // Delete files for this project
-  await conn.query(`DELETE FROM files WHERE project_id = '${projectId}'`);
-  
-  // Delete the project
-  await conn.query(`DELETE FROM projects WHERE id = '${projectId}'`);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM embeddings WHERE project_id = '${projectId}'`,
+      `DELETE FROM chunks WHERE project_id = '${projectId}'`,
+      `DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE project_id = '${projectId}')`,
+      `DELETE FROM files WHERE project_id = '${projectId}'`,
+      `UPDATE chat_sessions SET project_id = NULL WHERE project_id = '${projectId}'`,
+      `DELETE FROM projects WHERE id = '${projectId}'`,
+    ]);
+  });
+
   await flushDatabase();
 }
 
@@ -658,19 +1029,16 @@ export async function updateFileContent(fileId: string, content: string): Promis
  */
 export async function deleteFile(fileId: string): Promise<void> {
   const conn = getConnection();
-  
-  // Delete embeddings for this file
-  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
-  
-  // Delete chunks for this file
-  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
-  
-  // Delete file versions for this file
-  await conn.query(`DELETE FROM file_versions WHERE file_id = '${fileId}'`);
-  
-  // Delete the file
-  await conn.query(`DELETE FROM files WHERE id = '${fileId}'`);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM embeddings WHERE file_id = '${fileId}'`,
+      `DELETE FROM chunks WHERE file_id = '${fileId}'`,
+      `DELETE FROM file_versions WHERE file_id = '${fileId}'`,
+      `DELETE FROM files WHERE id = '${fileId}'`,
+    ]);
+  });
+
   await flushDatabase();
 }
 
@@ -695,25 +1063,39 @@ export async function updateFileName(fileId: string, newName: string): Promise<v
 export async function updateFileProject(fileId: string, newProjectId: string, newName: string): Promise<void> {
   const conn = getConnection();
   const escapedName = newName.replace(/'/g, "''");
-  
-  // Update the file's project_id and name
-  await conn.query(`
-    UPDATE files 
-    SET project_id = '${newProjectId}', name = '${escapedName}', updated_at = CURRENT_TIMESTAMP 
-    WHERE id = '${fileId}'
-  `);
-  
-  // Update project_id in chunks
-  await conn.query(`
-    UPDATE chunks SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
-  `);
-  
-  // Update project_id in embeddings
-  await conn.query(`
-    UPDATE embeddings SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'
-  `);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `UPDATE files SET project_id = '${newProjectId}', name = '${escapedName}', updated_at = CURRENT_TIMESTAMP WHERE id = '${fileId}'`,
+      `UPDATE chunks SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'`,
+      `UPDATE embeddings SET project_id = '${newProjectId}' WHERE file_id = '${fileId}'`,
+    ]);
+  });
+
   await flushDatabase();
+}
+
+/**
+ * Delete all chunks and embeddings for a file (for re-indexing).
+ * Uses child-first order inside a transaction with constraint retry.
+ */
+export async function deleteFileSearchData(fileId: string): Promise<void> {
+  const conn = getConnection();
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM embeddings WHERE file_id = '${fileId}'`,
+      `DELETE FROM chunks WHERE file_id = '${fileId}'`,
+    ]);
+  });
+}
+
+/**
+ * Update the content hash on a file row after indexing.
+ */
+export async function updateFileContentHash(fileId: string, contentHash: string): Promise<void> {
+  const conn = getConnection();
+  const escapedHash = contentHash.replace(/'/g, "''");
+  await conn.query(`UPDATE files SET content_hash = '${escapedHash}' WHERE id = '${fileId}'`);
 }
 
 // ============================================
@@ -1055,13 +1437,14 @@ export async function cleanExpiredWebCache(maxAgeMinutes: number = 60): Promise<
   if (expiredIds.length === 0) return 0;
   
   const idsStr = expiredIds.map(id => `'${id}'`).join(', ');
-  
-  // Delete chunks first
-  await conn.query(`DELETE FROM web_search_chunks WHERE cache_id IN (${idsStr})`);
-  
-  // Delete cache entries
-  await conn.query(`DELETE FROM web_search_cache WHERE id IN (${idsStr})`);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM web_search_chunks WHERE cache_id IN (${idsStr})`,
+      `DELETE FROM web_search_cache WHERE id IN (${idsStr})`,
+    ]);
+  });
+
   await flushDatabase();
   
   return expiredIds.length;
@@ -1293,13 +1676,14 @@ export async function touchChatSession(sessionId: string): Promise<void> {
  */
 export async function deleteChatSession(sessionId: string): Promise<void> {
   const conn = getConnection();
-  
-  // Delete messages first
-  await conn.query(`DELETE FROM chat_messages WHERE session_id = '${sessionId}'`);
-  
-  // Delete the session
-  await conn.query(`DELETE FROM chat_sessions WHERE id = '${sessionId}'`);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM chat_messages WHERE session_id = '${sessionId}'`,
+      `DELETE FROM chat_sessions WHERE id = '${sessionId}'`,
+    ]);
+  });
+
   await flushDatabase();
 }
 
@@ -1323,15 +1707,16 @@ export async function pruneOldChatSessions(projectId: string | null, keepCount: 
   const sessionsToDelete = result.toArray().map((row: Record<string, unknown>) => row.id as string);
   
   if (sessionsToDelete.length === 0) return 0;
-  
+
   const idsStr = sessionsToDelete.map(id => `'${id}'`).join(', ');
-  
-  // Delete messages first
-  await conn.query(`DELETE FROM chat_messages WHERE session_id IN (${idsStr})`);
-  
-  // Delete sessions
-  await conn.query(`DELETE FROM chat_sessions WHERE id IN (${idsStr})`);
-  
+
+  await withConstraintRetry(async () => {
+    await runInTransaction(conn, [
+      `DELETE FROM chat_messages WHERE session_id IN (${idsStr})`,
+      `DELETE FROM chat_sessions WHERE id IN (${idsStr})`,
+    ]);
+  });
+
   await flushDatabase();
   
   return sessionsToDelete.length;
@@ -1350,11 +1735,23 @@ export async function createChatMessage(message: DBChatMessage): Promise<void> {
   const attachmentsValue = message.attachments
     ? `'${message.attachments.replace(/'/g, "''")}'`
     : 'NULL';
-  
-  await conn.query(`
-    INSERT INTO chat_messages (id, session_id, role, content, created_at, attachments)
-    VALUES ('${message.id}', '${message.sessionId}', '${message.role}', '${escapedContent}', '${message.createdAt.toISOString()}', ${attachmentsValue})
-  `);
+
+  await withConstraintRetry(async () => {
+    const session = await getChatSession(message.sessionId);
+    if (!session) {
+      const escapedTitle = 'Recovered session'.replace(/'/g, "''");
+      await conn.query(`
+        INSERT INTO chat_sessions (id, project_id, title, created_at, updated_at)
+        VALUES ('${message.sessionId}', NULL, '${escapedTitle}', '${message.createdAt.toISOString()}', '${message.createdAt.toISOString()}')
+      `);
+    }
+
+    await conn.query(`
+      INSERT INTO chat_messages (id, session_id, role, content, created_at, attachments)
+      VALUES ('${message.id}', '${message.sessionId}', '${message.role}', '${escapedContent}', '${message.createdAt.toISOString()}', ${attachmentsValue})
+    `);
+  });
+
   await flushDatabase();
 }
 
@@ -1407,13 +1804,22 @@ export interface DBFileVersion {
  * Create a new file version
  */
 export async function createFileVersion(version: DBFileVersion): Promise<void> {
+  const file = await getFile(version.fileId);
+  if (!file) {
+    console.warn('[HydraNote] Skipping file version write — file not found:', version.fileId);
+    return;
+  }
+
   const conn = getConnection();
   const escapedContent = version.contentOrPatch.replace(/'/g, "''");
-  
-  await conn.query(`
-    INSERT INTO file_versions (id, file_id, version_number, is_full_content, content_or_patch, source, created_at)
-    VALUES ('${version.id}', '${version.fileId}', ${version.versionNumber}, ${version.isFullContent}, '${escapedContent}', '${version.source}', '${version.createdAt.toISOString()}')
-  `);
+
+  await withConstraintRetry(async () => {
+    await conn.query(`
+      INSERT INTO file_versions (id, file_id, version_number, is_full_content, content_or_patch, source, created_at)
+      VALUES ('${version.id}', '${version.fileId}', ${version.versionNumber}, ${version.isFullContent}, '${escapedContent}', '${version.source}', '${version.createdAt.toISOString()}')
+    `);
+  });
+
   await flushDatabase();
 }
 
@@ -1666,5 +2072,119 @@ export async function getCalendarEventsForDate(date: Date): Promise<DBCalendarEv
   const dayEnd = new Date(date);
   dayEnd.setHours(23, 59, 59, 999);
   return getCalendarEventsByDateRange(dayStart, dayEnd);
+}
+
+// ============================================
+// Note Date Index Operations (Timeline)
+// ============================================
+
+export interface DBNoteDate {
+  id: string;
+  fileId: string;
+  projectId: string;
+  fileName: string;
+  dateStr: string;
+  dateText: string;
+  type: 'regular' | 'deadline';
+  contextSnippet?: string;
+  startIndex: number;
+}
+
+function mapNoteDateRow(row: Record<string, unknown>): DBNoteDate {
+  return {
+    id: row.id as string,
+    fileId: row.file_id as string,
+    projectId: row.project_id as string,
+    fileName: row.file_name as string,
+    dateStr: row.date_str as string,
+    dateText: row.date_text as string,
+    type: row.type as 'regular' | 'deadline',
+    contextSnippet: row.context_snippet as string | undefined,
+    startIndex: row.start_index as number,
+  };
+}
+
+export async function countNoteDates(): Promise<number> {
+  const conn = getConnection();
+  const result = await conn.query(`SELECT COUNT(*) AS cnt FROM note_dates`);
+  const rows = result.toArray();
+  return Number(rows[0]?.cnt ?? 0);
+}
+
+export async function replaceNoteDatesForFile(
+  fileId: string,
+  rows: DBNoteDate[],
+): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM note_dates WHERE file_id = ${escapeSQL(fileId)}`);
+
+  for (const row of rows) {
+    await conn.query(`
+      INSERT INTO note_dates (
+        id, file_id, project_id, file_name, date_str, date_text, type, context_snippet, start_index
+      ) VALUES (
+        ${escapeSQL(row.id)},
+        ${escapeSQL(row.fileId)},
+        ${escapeSQL(row.projectId)},
+        ${escapeSQL(row.fileName)},
+        ${escapeSQL(row.dateStr)},
+        ${escapeSQL(row.dateText)},
+        ${escapeSQL(row.type)},
+        ${escapeSQL(row.contextSnippet)},
+        ${row.startIndex}
+      )
+    `);
+  }
+
+  await flushDatabase();
+}
+
+export async function deleteNoteDatesForFile(fileId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM note_dates WHERE file_id = ${escapeSQL(fileId)}`);
+  await flushDatabase();
+}
+
+export async function updateNoteDatesFileName(fileId: string, fileName: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    UPDATE note_dates SET file_name = ${escapeSQL(fileName)}
+    WHERE file_id = ${escapeSQL(fileId)}
+  `);
+  await flushDatabase();
+}
+
+export async function updateNoteDatesProject(
+  fileId: string,
+  projectId: string,
+  fileName: string,
+): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    UPDATE note_dates SET
+      project_id = ${escapeSQL(projectId)},
+      file_name = ${escapeSQL(fileName)}
+    WHERE file_id = ${escapeSQL(fileId)}
+  `);
+  await flushDatabase();
+}
+
+export async function getNoteDatesByRange(
+  startStr: string,
+  endStr: string,
+  projectId?: string,
+): Promise<DBNoteDate[]> {
+  const conn = getConnection();
+  const projectFilter = projectId
+    ? `AND project_id = ${escapeSQL(projectId)}`
+    : '';
+  const result = await conn.query(`
+    SELECT * FROM note_dates
+    WHERE date_str >= ${escapeSQL(startStr)}
+      AND date_str <= ${escapeSQL(endStr)}
+      ${projectFilter}
+    ORDER BY date_str ASC, file_name ASC, start_index ASC
+  `);
+  return result.toArray().map(mapNoteDateRow);
 }
 
