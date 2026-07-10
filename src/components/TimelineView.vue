@@ -10,6 +10,10 @@
         <div class="timeline-controls">
           <button class="tl-btn" @click="jumpToToday">Today</button>
           <label class="tl-toggle">
+            <input type="checkbox" v-model="deadlinesOnly" />
+            <span>Deadlines only</span>
+          </label>
+          <label class="tl-toggle">
             <input type="checkbox" v-model="showEmptyDays" />
             <span>Show empty days</span>
           </label>
@@ -38,7 +42,7 @@
     <!-- Loading -->
     <div v-if="loading" class="timeline-loading">
       <ion-spinner name="crescent" />
-      <span>Scanning notes for dates...</span>
+      <span>{{ loadingMessage }}</span>
     </div>
 
     <!-- Timeline Body -->
@@ -100,6 +104,9 @@
               <span class="tl-note-filename">{{ noteRef.fileName }}</span>
               <span class="tl-note-context">{{ noteRef.contextSnippet }}</span>
             </div>
+            <span v-if="noteRef.mentionCount && noteRef.mentionCount > 1" class="tl-mention-badge">
+              {{ noteRef.mentionCount }} mentions
+            </span>
             <span v-if="noteRef.type === 'deadline'" class="tl-deadline-badge">
               Deadline
             </span>
@@ -112,7 +119,18 @@
         </div>
       </div>
 
-      <div v-if="visibleDays.length === 0" class="timeline-empty-state">
+      <div v-if="showTeachableEmpty" class="timeline-empty-state teachable">
+        <ion-icon :icon="calendarClearOutline" />
+        <p>No dates in this range</p>
+        <span class="teachable-hint">Mention dates in notes and they'll show up here.</span>
+        <div class="teachable-examples">
+          <span class="example-chip">due next Friday</span>
+          <span class="example-chip">meeting on July 15</span>
+          <span class="example-chip">deadline tomorrow</span>
+        </div>
+        <span class="teachable-secondary">Try expanding the date range or switching projects</span>
+      </div>
+      <div v-else-if="visibleDays.length === 0" class="timeline-empty-state">
         <ion-icon :icon="calendarClearOutline" />
         <p>No dates found in this range</p>
         <span>Try expanding the date range or switching projects</span>
@@ -122,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { IonIcon, IonSpinner } from '@ionic/vue';
 import {
   timeOutline,
@@ -134,19 +152,15 @@ import {
   calendarClearOutline,
 } from 'ionicons/icons';
 import { getCalendarEventsByDateRange } from '@/services/database';
-import { detectDates } from '@/services/dateDetectionService';
-import { get_project_files, getAllProjects } from '@/services/projectService';
+import {
+  ensureNoteDatesBackfill,
+  onNoteDatesChanged,
+  queryTimelineNoteDates,
+} from '@/services/dateIndexService';
+import { groupNoteRefsByFile, type TimelineNoteReference } from '@/composables/groupTimelineNoteRefs';
 import type { DBCalendarEvent } from '@/services/database';
-import type { ProjectFile, Project } from '@/types';
 
-interface NoteReference {
-  fileId: string;
-  projectId: string;
-  fileName: string;
-  dateText: string;
-  type: 'regular' | 'deadline';
-  contextSnippet: string;
-}
+type NoteReference = TimelineNoteReference;
 
 interface TimelineDay {
   dateStr: string;
@@ -170,8 +184,12 @@ defineEmits<{
 }>();
 
 const loading = ref(true);
+const loadingMessage = ref('Loading timeline...');
 const showEmptyDays = ref(false);
+const deadlinesOnly = ref(false);
 const timelineBodyRef = ref<HTMLElement | null>(null);
+let unsubscribeNoteDates: (() => void) | null = null;
+let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
 const today = new Date();
 today.setHours(0, 0, 0, 0);
@@ -228,9 +246,27 @@ const allDays = computed<TimelineDay[]>(() => {
 });
 
 const visibleDays = computed(() => {
-  if (showEmptyDays.value) return allDays.value;
-  return allDays.value.filter(d => d.events.length > 0 || d.noteRefs.length > 0 || d.isToday);
+  let days = allDays.value;
+
+  if (deadlinesOnly.value) {
+    days = days.map(d => ({
+      ...d,
+      noteRefs: d.noteRefs.filter(nr => nr.type === 'deadline'),
+      hasDeadline: d.noteRefs.some(nr => nr.type === 'deadline'),
+    }));
+  }
+
+  if (showEmptyDays.value) return days;
+  return days.filter(d => d.events.length > 0 || d.noteRefs.length > 0 || d.isToday);
 });
+
+const hasAnyTimelineContent = computed(() =>
+  allDays.value.some(d => d.events.length > 0 || d.noteRefs.length > 0),
+);
+
+const showTeachableEmpty = computed(() =>
+  !loading.value && !hasAnyTimelineContent.value,
+);
 
 function toDateStr(date: Date): string {
   const y = date.getFullYear();
@@ -268,54 +304,39 @@ function jumpToToday() {
 
 async function loadData() {
   loading.value = true;
+  loadingMessage.value = 'Loading timeline...';
 
   try {
+    loadingMessage.value = 'Scanning notes for dates...';
+    await ensureNoteDatesBackfill(props.projectId);
+    loadingMessage.value = 'Loading timeline...';
+
     const endForQuery = new Date(rangeEnd.value);
     endForQuery.setHours(23, 59, 59, 999);
     calendarEvents.value = await getCalendarEventsByDateRange(rangeStart.value, endForQuery);
 
-    const refMap = new Map<string, NoteReference[]>();
-    let projects: Project[];
-    const filesByProject: Map<string, ProjectFile[]> = new Map();
+    const rows = await queryTimelineNoteDates(
+      rangeStart.value,
+      rangeEnd.value,
+      props.projectId,
+    );
 
-    if (props.projectId) {
-      const files = await get_project_files(props.projectId);
-      filesByProject.set(props.projectId, files);
-    } else {
-      projects = await getAllProjects();
-      for (const p of projects) {
-        try {
-          const files = await get_project_files(p.id);
-          filesByProject.set(p.id, files);
-        } catch {
-          // skip inaccessible projects
-        }
-      }
+    const refMap = new Map<string, NoteReference[]>();
+    for (const row of rows) {
+      const existing = refMap.get(row.dateStr) || [];
+      existing.push({
+        fileId: row.fileId,
+        projectId: row.projectId,
+        fileName: row.fileName,
+        dateText: row.dateText,
+        type: row.type,
+        contextSnippet: row.contextSnippet || row.dateText,
+      });
+      refMap.set(row.dateStr, existing);
     }
 
-    for (const [projectId, files] of filesByProject) {
-      for (const file of files) {
-        if (!file.content || (file.type !== 'md' && file.type !== 'txt')) continue;
-
-        const dates = detectDates(file.content);
-        for (const d of dates) {
-          const dateStr = toDateStr(d.date);
-          const rangeStartStr = toDateStr(rangeStart.value);
-          const rangeEndStr = toDateStr(rangeEnd.value);
-          if (dateStr < rangeStartStr || dateStr > rangeEndStr) continue;
-
-          const existing = refMap.get(dateStr) || [];
-          existing.push({
-            fileId: file.id,
-            projectId,
-            fileName: file.name,
-            dateText: d.text,
-            type: d.type,
-            contextSnippet: truncateContext(d.context || d.text, 100),
-          });
-          refMap.set(dateStr, existing);
-        }
-      }
+    for (const [dateStr, refs] of refMap) {
+      refMap.set(dateStr, groupNoteRefsByFile(refs));
     }
 
     noteReferences.value = refMap;
@@ -327,17 +348,32 @@ async function loadData() {
   }
 }
 
-function truncateContext(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen).trimEnd() + '...';
+function scheduleReload() {
+  if (reloadTimer) clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    loadData();
+  }, 150);
 }
 
 watch([rangeStart, rangeEnd], () => {
   loadData();
 });
 
+watch(() => props.projectId, () => {
+  loadData();
+});
+
 onMounted(() => {
   loadData();
+  unsubscribeNoteDates = onNoteDatesChanged((event) => {
+    if (props.projectId && event.projectId !== props.projectId) return;
+    scheduleReload();
+  });
+});
+
+onUnmounted(() => {
+  unsubscribeNoteDates?.();
+  if (reloadTimer) clearTimeout(reloadTimer);
 });
 </script>
 
@@ -706,6 +742,16 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.tl-mention-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--hn-purple-light, #a78bfa);
+  background: rgba(167, 139, 250, 0.12);
+  padding: 2px 8px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
 .tl-empty {
   padding: 6px 0;
   font-size: 0.78rem;
@@ -739,6 +785,37 @@ onMounted(() => {
 .timeline-empty-state span {
   font-size: 0.82rem;
   color: var(--hn-text-muted, #888);
+}
+
+.timeline-empty-state.teachable {
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.teachable-hint {
+  color: var(--hn-text-secondary, #aaa) !important;
+}
+
+.teachable-examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.example-chip {
+  font-size: 0.78rem;
+  color: var(--hn-purple-light, #a78bfa);
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.25);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.teachable-secondary {
+  margin-top: 4px;
 }
 
 .timeline-body::-webkit-scrollbar {
