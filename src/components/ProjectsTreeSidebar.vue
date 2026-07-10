@@ -21,6 +21,7 @@
             fill="clear" 
             size="small" 
             class="add-btn"
+            aria-label="Create project"
             @click="$emit('create-project')"
           >
             <ion-icon slot="icon-only" :icon="addOutline" />
@@ -29,6 +30,7 @@
             fill="clear" 
             size="small" 
             class="collapse-btn"
+            aria-label="Collapse projects panel"
             @click="toggleCollapse"
           >
             <ion-icon slot="icon-only" :icon="chevronBackOutline" />
@@ -146,7 +148,7 @@ import {
   addOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
-import { getProjectFileTree, deleteProject, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory, renameProject } from '@/services';
+import { getProjectFileTree, deleteProject, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory, renameProject, formatDatabaseErrorMessage } from '@/services';
 import {
   ingestExternalFiles,
   collectDroppedEntries,
@@ -621,7 +623,7 @@ async function performDeleteProject(projectId: string) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'delete project'),
       buttons: ['OK'],
     });
     await alert.present();
@@ -655,7 +657,7 @@ async function performDeleteFile(projectId: string, fileId: string) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'delete file'),
       buttons: ['OK'],
     });
     await alert.present();
@@ -685,12 +687,22 @@ async function confirmDeleteDirectory(projectId: string, directoryId: string, di
         text: 'Delete All',
         role: 'destructive',
         handler: async () => {
-          for (const fileId of filesInDirectory) {
-            await deleteFile(fileId);
+          try {
+            for (const fileId of filesInDirectory) {
+              await deleteFile(fileId);
+            }
+            delete projectFileTrees.value[projectId];
+            await loadProjectFiles(projectId);
+          } catch (error) {
+            delete projectFileTrees.value[projectId];
+            await loadProjectFiles(projectId);
+            const alert = await alertController.create({
+              header: 'Error',
+              message: formatDatabaseErrorMessage(error, 'delete directory'),
+              buttons: ['OK'],
+            });
+            await alert.present();
           }
-          // Refresh the file tree for this project
-          delete projectFileTrees.value[projectId];
-          await loadProjectFiles(projectId);
         },
       },
     ],
@@ -823,7 +835,7 @@ async function handleProjectDrop(event: DragEvent, targetProjectId: string) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'move file'),
       buttons: ['OK'],
     });
     await alert.present();
@@ -868,7 +880,7 @@ async function handleNodeDrop(targetProjectId: string, payload: DragDropEvent) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'move file'),
       buttons: ['OK'],
     });
     await alert.present();

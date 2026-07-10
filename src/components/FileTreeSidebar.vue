@@ -86,7 +86,7 @@ import {
   chevronBackOutline,
 } from 'ionicons/icons';
 import type { ProjectFileTree, FileTreeNode as FileTreeNodeType, ProjectFile, ContextMenuEvent, DragDropEvent, ContextMenuTargetType, ContextMenuAction } from '@/types';
-import { getProjectFileTree, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory } from '@/services';
+import { getProjectFileTree, deleteFile, moveFile, createEmptyMarkdownFile, renameFile, renameDirectory, formatDatabaseErrorMessage } from '@/services';
 import FileTreeNode from './FileTreeNode.vue';
 import FileTreeContextMenu from './FileTreeContextMenu.vue';
 
@@ -361,7 +361,7 @@ async function performDeleteFile(fileId: string) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'delete file'),
       buttons: ['OK'],
     });
     await alert.present();
@@ -392,11 +392,22 @@ async function confirmDeleteDirectory(directoryId: string, directoryName: string
         text: 'Delete All',
         role: 'destructive',
         handler: async () => {
-          for (const fileId of filesInDirectory) {
-            await deleteFile(fileId);
+          try {
+            for (const fileId of filesInDirectory) {
+              await deleteFile(fileId);
+            }
+            await loadFileTree();
+            emit('files-changed');
+          } catch (error) {
+            await loadFileTree();
+            emit('files-changed');
+            const alert = await alertController.create({
+              header: 'Error',
+              message: formatDatabaseErrorMessage(error, 'delete directory'),
+              buttons: ['OK'],
+            });
+            await alert.present();
           }
-          await loadFileTree();
-          emit('files-changed');
         },
       },
     ],
@@ -439,7 +450,7 @@ async function handleNodeDrop(payload: DragDropEvent) {
   } catch (error) {
     const alert = await alertController.create({
       header: 'Error',
-      message: `Failed to move file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      message: formatDatabaseErrorMessage(error, 'move file'),
       buttons: ['OK'],
     });
     await alert.present();
@@ -463,13 +474,17 @@ async function handleRootDrop(event: DragEvent) {
   try {
     const sourceNode = JSON.parse(data) as FileTreeNodeType;
     if (sourceNode.type !== 'file') return;
-    
-    // Move to root (no directory)
+
     await moveFile(sourceNode.id, props.projectId, undefined);
     await loadFileTree();
     emit('files-changed');
-  } catch {
-    // Invalid data or move failed, ignore
+  } catch (error) {
+    const alert = await alertController.create({
+      header: 'Error',
+      message: formatDatabaseErrorMessage(error, 'move file'),
+      buttons: ['OK'],
+    });
+    await alert.present();
   }
   
   draggingNode.value = null;
