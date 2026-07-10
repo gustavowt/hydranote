@@ -15,6 +15,42 @@ import type { TranscriptionProviderInterface } from './transcriptionProviders/ba
 // Reactive state visible to the UI
 export const dictationState = ref<DictationState>({ status: 'idle' });
 
+// Stage timeouts so the pipeline never spins forever (e.g. local Whisper
+// hanging on silence-only audio, or an LLM cleanup call that never resolves).
+export const TRANSCRIPTION_TIMEOUT_MS = 60_000;
+export const CLEANUP_TIMEOUT_MS = 45_000;
+
+const ERROR_AUTO_CLEAR_MS = 5_000;
+
+/**
+ * Reject if `promise` doesn't settle within `ms`. The underlying operation is
+ * not cancelled (fetch/IPC keep running), but the pipeline stops waiting on it.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+/**
+ * Put the dictation state into `error` and auto-clear back to idle after a
+ * few seconds, unless another flow has already moved the state on.
+ */
+export function setDictationError(message: string): void {
+  dictationState.value = { status: 'error', error: message };
+  setTimeout(() => {
+    if (dictationState.value.status === 'error') {
+      dictationState.value = { status: 'idle' };
+    }
+  }, ERROR_AUTO_CLEAR_MS);
+}
+
 export type MicPermissionStatus =
   | 'granted'
   | 'denied'
@@ -234,7 +270,11 @@ export async function stopRecording(): Promise<TranscriptionResult | null> {
         const provider = getProvider(settings);
         const language = getLanguage(settings);
         console.log('[Dictation] Transcribing with provider:', settings.provider);
-        const result = await provider.transcribe(audioBlob, language);
+        const result = await withTimeout(
+          provider.transcribe(audioBlob, language),
+          TRANSCRIPTION_TIMEOUT_MS,
+          'Transcription',
+        );
 
         console.log('[Dictation] Transcription complete:', result.text?.substring(0, 100));
         dictationState.value = {
@@ -247,16 +287,10 @@ export async function stopRecording(): Promise<TranscriptionResult | null> {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Transcription failed';
         console.error('[Dictation] Transcription error:', err);
-        dictationState.value = {
-          status: 'error',
-          error: errorMsg,
-        };
-        // Auto-clear error after 5 seconds
-        setTimeout(() => {
-          if (dictationState.value.status === 'error') {
-            dictationState.value = { status: 'idle' };
-          }
-        }, 5000);
+        // Drop any pending one-shot push-to-talk handler so it can't hijack
+        // the next recording's result.
+        rawTranscriptionHandler = null;
+        setDictationError(errorMsg);
         resolve(null);
       }
     };

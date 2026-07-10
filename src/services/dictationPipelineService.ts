@@ -9,7 +9,12 @@ import type { TranscriptionResult, DictationPipelineAction } from '../types';
 import { loadDictationSettings } from './dictationSettingsService';
 import { formatNote } from './noteService';
 import { globalAddNote } from './noteService';
-import { dictationState } from './dictationService';
+import {
+  dictationState,
+  setDictationError,
+  withTimeout,
+  CLEANUP_TIMEOUT_MS,
+} from './dictationService';
 
 type PipelineEventType = 'insert_at_cursor' | 'send_to_chat';
 type PipelineEventCallback = (text: string) => void;
@@ -66,6 +71,8 @@ async function executeAction(action: DictationPipelineAction, text: string): Pro
 /**
  * Run only the cleanup stage (LLM post-processing).
  * Returns the cleaned text, or the original text if cleanup is disabled.
+ * If the LLM call fails or times out, falls back to the raw text so the
+ * dictation flow can still continue (the user only loses the cleanup pass).
  */
 export async function runCleanup(rawText: string): Promise<string> {
   const settings = loadDictationSettings();
@@ -73,11 +80,18 @@ export async function runCleanup(rawText: string): Promise<string> {
 
   dictationState.value = { status: 'cleaning_up' };
   const prompt = `${settings.cleanup.instructions}\n\n${rawText}`;
-  return await formatNote(prompt);
+  try {
+    return await withTimeout(formatNote(prompt), CLEANUP_TIMEOUT_MS, 'Cleanup');
+  } catch (err) {
+    console.warn('[Dictation] Cleanup failed, falling back to raw text:', err);
+    return rawText;
+  }
 }
 
 /**
  * Run only the pipeline actions stage on already-confirmed text.
+ * A failing action doesn't block the remaining ones; failures are surfaced
+ * via the dictation error state and the status always leaves 'processing'.
  */
 export async function runActions(text: string): Promise<void> {
   const settings = loadDictationSettings();
@@ -89,10 +103,21 @@ export async function runActions(text: string): Promise<void> {
   }
 
   dictationState.value = { status: 'processing' };
+  const failures: string[] = [];
   for (const action of enabledActions) {
-    await executeAction(action, text);
+    try {
+      await executeAction(action, text);
+    } catch (err) {
+      console.error(`[Dictation] Action "${action.type}" failed:`, err);
+      failures.push(action.type.replace(/_/g, ' '));
+    }
   }
-  dictationState.value = { status: 'idle' };
+
+  if (failures.length > 0) {
+    setDictationError(`Dictation action failed: ${failures.join(', ')}`);
+  } else {
+    dictationState.value = { status: 'idle' };
+  }
 }
 
 /**

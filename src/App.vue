@@ -31,6 +31,7 @@ import {
   onTranscriptionComplete,
   offTranscriptionComplete,
   refreshMicPermissionState,
+  setDictationError,
 } from '@/services/dictationService';
 import { runCleanup, runActions } from '@/services/dictationPipelineService';
 import {
@@ -62,9 +63,12 @@ function handleToggleDictation() {
 }
 
 const handleTranscription = async (result: TranscriptionResult) => {
-  if (!result.text) return;
+  const raw = result.text?.trim() ?? '';
+  if (!raw) {
+    setDictationError('No speech detected');
+    return;
+  }
   try {
-    const raw = result.text;
     const cleaned = await runCleanup(raw);
 
     reviewRawText.value = raw;
@@ -74,6 +78,7 @@ const handleTranscription = async (result: TranscriptionResult) => {
     reviewModalOpen.value = true;
   } catch (err) {
     console.error('[Dictation] Pipeline error:', err);
+    setDictationError(err instanceof Error ? err.message : 'Dictation pipeline failed');
   }
 };
 
@@ -87,6 +92,7 @@ async function handleReviewConfirm(text: string) {
     await runActions(text);
   } catch (err) {
     console.error('[Dictation] Pipeline actions error:', err);
+    setDictationError(err instanceof Error ? err.message : 'Dictation actions failed');
   }
 }
 
