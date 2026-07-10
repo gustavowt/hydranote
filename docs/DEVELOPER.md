@@ -345,7 +345,7 @@ Full markdown editor with edit, split, **Live** (hybrid), and preview modes, Mer
 
 **Default mode:** Existing `.md` files open in **Live** (`viewMode === 'hybrid'`); brand-new notes start in `edit` so the user can type raw markdown.
 
-**Live mode:** `MarkdownLiveEditor.vue` mounts a Tiptap editor with the same extensions as `RichTextEditor.vue` (StarterKit, Link, Image, Table*, TaskList/Item, CodeBlockLowlight) plus a custom **`MermaidBlock`** node (`MermaidBlockNodeView.vue`) that renders the diagram inline and toggles to a textarea on click for source editing (⌘/Ctrl+Enter to apply, Esc to cancel). YAML frontmatter (`---\n…\n---`) is split off via `splitFrontmatter` (in `services/markdownConverter.ts`) before sending the body to Tiptap and re-prepended on every emit, so it round-trips losslessly.
+**Live mode:** `MarkdownLiveEditor.vue` mounts a Tiptap editor with the same extensions as `RichTextEditor.vue` (StarterKit, Link, Image, Table*, TaskList/Item, CodeBlockLowlight — extended with a Vue node view (`CodeBlockNodeView.vue`) that overlays a copy-to-clipboard button on each code block without affecting HTML serialization) plus a custom **`MermaidBlock`** node (`MermaidBlockNodeView.vue`) that renders the diagram inline and toggles to a textarea on click for source editing (⌘/Ctrl+Enter to apply, Esc to cancel). YAML frontmatter (`---\n…\n---`) is split off via `splitFrontmatter` (in `services/markdownConverter.ts`) before sending the body to Tiptap and re-prepended on every emit, so it round-trips losslessly.
 
 Markdown ↔ HTML conversion lives in `services/markdownConverter.ts`:
 
@@ -363,6 +363,7 @@ Markdown ↔ HTML conversion lives in `services/markdownConverter.ts`:
 **Live mode scrolling:** `MarkdownLiveEditor`'s root `.live-editor-host` owns its own scroll container (`overflow-y: auto`). The parent `MarkdownEditor.vue` must not pass `class="editor-pane full"` to it, because `.editor-pane`'s `overflow: hidden` would clip the editor and prevent scrolling on long documents. The component already declares `flex: 1; width: 100%; height: 100%` on its host, so it fills the flex parent without the extra class.
 
 **Features:**
+- Copy-to-clipboard button on code blocks (top-right, hover-revealed). In `view` / `split` the `marked` output is post-processed by `injectCopyButtons()` (wraps each `<pre>` in a `.code-block-wrapper`; clicks are handled by the existing `handlePreviewClick` delegation). In Live mode the same button is rendered by the `CodeBlockNodeView.vue` Tiptap node view. Mermaid blocks are excluded.
 - Send selected text to chat (`@selection:file:lines` reference)
 - AI Format Studio via 3-dots menu (iterative formatting with version navigation)
 - Export as PDF/DOCX/Markdown
@@ -877,6 +878,18 @@ After the user confirms the review modal, enabled actions run in order:
 | `copy_to_clipboard` | Copy text to system clipboard |
 
 `WorkspacePage.vue` registers listeners via `onPipelineAction()` / `offPipelineAction()` on mount to wire `insert_at_cursor` → `MarkdownEditor.insertAtCursor()` and `send_to_chat` → `ChatSidebar.sendMessage()`.
+
+### Error Handling & Timeouts
+
+Every pipeline stage is guarded so the floating indicator can never spin forever:
+
+| Stage | Guard | On failure |
+|-------|-------|------------|
+| Transcription | 60s timeout (`TRANSCRIPTION_TIMEOUT_MS`) around `provider.transcribe()` | Error state shown, auto-clears after 5s |
+| Cleanup | 45s timeout (`CLEANUP_TIMEOUT_MS`) around the LLM call | Falls back to the raw transcription; review modal still opens |
+| Actions | Per-action try/catch in `runActions()` | Remaining actions still run; failed action names shown via error state |
+
+Helpers live in `dictationService.ts`: `withTimeout(promise, ms, label)` rejects when a stage exceeds its budget (the underlying fetch/IPC is not cancelled, but the pipeline stops waiting), and `setDictationError(message)` sets the `error` status and auto-clears it back to `idle` after 5 seconds. Empty transcriptions (e.g. dictation started but nothing said) surface a brief "No speech detected" error instead of silently dropping. A transcription failure also clears any pending one-shot push-to-talk handler so it cannot hijack the next recording.
 
 ### Services
 
