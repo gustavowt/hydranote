@@ -356,7 +356,7 @@ export interface WorkingContext {
 /**
  * Available tools for the LLM
  */
-export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch' | 'generateImage' | 'listEvents' | 'createEvent' | 'searchTranscripts' | 'prepareMeeting';
+export type ToolName = 'read' | 'search' | 'summarize' | 'write' | 'updateFile' | 'createProject' | 'listProjects' | 'moveFile' | 'deleteFile' | 'deleteProject' | 'webResearch' | 'generateImage' | 'listEvents' | 'createEvent' | 'searchTranscripts' | 'prepareMeeting';
 
 /**
  * Tool definition for system prompt
@@ -679,6 +679,13 @@ export interface ToolResult {
     hasCalendarEvent?: boolean;
     relatedNotesCount?: number;
     htmlLink?: string;
+    projects?: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      status: string;
+      fileCount: number;
+    }>;
   };
 }
 
