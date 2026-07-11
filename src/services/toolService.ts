@@ -48,7 +48,6 @@ import {
   findFileGlobal,
   searchAllProjects,
   createFile as projectCreateFile,
-  indexFileForSearch,
 } from "./projectService";
 import { chatCompletion, chatCompletionStreaming, loadImageGenerationSettings } from "./llmService";
 import { generateDocument } from "./documentGeneratorService";
@@ -68,6 +67,7 @@ import {
 } from "./googleCalendarService";
 import { loadGoogleWorkspaceSettings } from "./googleWorkspaceAuthService";
 import { isGoogleAppEnabled } from "./integrationService";
+import { FILE_MAP_WIKILINK_PLANNER_RULES } from "./fileMapPlannerRules";
 
 // ============================================
 // Execution Log Types
@@ -764,16 +764,13 @@ export async function executeWriteTool(
         ? formattedContent
         : `# ${finalTitle}\n\n${formattedContent}`;
 
-      // Use centralized createFile (handles DB + file system sync)
+      // Use centralized createFile (handles DB + file system sync + indexing)
       const file = await projectCreateFile(
         projectId,
         fullPath,
         finalContent,
         "md",
       );
-
-      // Index for search using centralized function
-      await indexFileForSearch(projectId, file.id, finalContent, "md");
 
       return {
         success: true,
@@ -919,6 +916,56 @@ export async function executeCreateProjectTool(params: {
       tool: "createProject",
       error:
         error instanceof Error ? error.message : "Failed to create project",
+    };
+  }
+}
+
+// ============================================
+// ListProjects Tool Implementation
+// ============================================
+
+export async function executeListProjectsTool(): Promise<ToolResult> {
+  try {
+    const projects = await getAllProjects();
+    const projectsWithCounts = await Promise.all(
+      projects.map(async (project) => {
+        const files = await get_project_files(project.id);
+        return {
+          id: project.id,
+          name: project.name,
+          description: project.description,
+          status: project.status,
+          fileCount: files.length,
+        };
+      }),
+    );
+
+    if (projectsWithCounts.length === 0) {
+      return {
+        success: true,
+        tool: "listProjects",
+        data: "No projects found.",
+      };
+    }
+
+    const formatted = projectsWithCounts
+      .map((project) => {
+        const suffix = project.description ? `: ${project.description}` : "";
+        return `- ${project.name} (${project.fileCount} file${project.fileCount === 1 ? "" : "s"})${suffix}`;
+      })
+      .join("\n");
+
+    return {
+      success: true,
+      tool: "listProjects",
+      data: formatted,
+      metadata: { projects: projectsWithCounts },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tool: "listProjects",
+      error: error instanceof Error ? error.message : "Failed to list projects",
     };
   }
 }
@@ -1945,13 +1992,8 @@ export async function applyFileUpdate(
   }
 
   try {
-    const { getConnection, flushDatabase } = await import("./database");
-    const { reindexFile, getProject } = await import("./projectService");
-    const { syncFileToFileSystem } = await import("./syncService");
+    const { updateFile, getProject, reindexFile, getFile } = await import("./projectService");
 
-    const conn = getConnection();
-
-    // Get the file to retrieve projectId
     const file = await getFile(preview.fileId);
     if (!file) {
       return {
@@ -1963,47 +2005,46 @@ export async function applyFileUpdate(
       };
     }
 
-    // Update file content in database
-    const escapedContent = preview.newFullContent.replace(/'/g, "''");
-    await conn.query(`
-      UPDATE files 
-      SET content = '${escapedContent}', 
-          size = ${preview.newFullContent.length},
-          updated_at = CURRENT_TIMESTAMP 
-      WHERE id = '${preview.fileId}'
-    `);
+    const updated = await updateFile(preview.fileId, preview.newFullContent);
+    if (!updated) {
+      return {
+        success: false,
+        fileId: preview.fileId,
+        fileName: preview.fileName,
+        error: "Failed to update file.",
+        reIndexed: false,
+      };
+    }
 
-    await flushDatabase();
-
-    // Re-index the file using shared function
-    let reIndexed = false;
-    if (preview.fileType === "md" || preview.fileType === "docx") {
+    let reIndexed = preview.fileType === "md";
+    if (preview.fileType === "docx") {
       try {
         await reindexFile(
           preview.fileId,
           preview.newFullContent,
-          preview.fileType === "md" ? "md" : "txt"
+          "txt",
         );
         reIndexed = true;
       } catch (reindexError) {
         console.warn("Failed to re-index file:", reindexError);
-        // Don't fail the whole operation if re-indexing fails
       }
     }
 
-    // Sync to file system
-    try {
-      const project = await getProject(file.projectId);
-      if (project && preview.fileType === "md") {
-        await syncFileToFileSystem(
-          project.name,
-          preview.fileName,
-          preview.newFullContent,
-        );
+    // Sync to file system for docx (updateFile only syncs md)
+    if (preview.fileType === "docx") {
+      try {
+        const project = await getProject(file.projectId);
+        if (project) {
+          const { syncFileToFileSystem } = await import("./syncService");
+          await syncFileToFileSystem(
+            project.name,
+            preview.fileName,
+            preview.newFullContent,
+          );
+        }
+      } catch (syncError) {
+        console.error("Failed to sync file to file system:", syncError);
       }
-    } catch (syncError) {
-      console.error("Failed to sync file to file system:", syncError);
-      // Don't fail the whole operation if sync fails
     }
 
     // Clean up the preview
@@ -2711,6 +2752,9 @@ async function executeToolInternal(
         description: call.params.description,
       });
 
+    case "listProjects":
+      return executeListProjectsTool();
+
     case "moveFile":
       return executeMoveFileTool({
         file: call.params.file || call.params.fileName,
@@ -2921,6 +2965,20 @@ export function shouldAutoExecutePlan(plan: ExecutionPlan): boolean {
   return plan.complexity === 'low';
 }
 
+/**
+ * Skip LLM interpretation for single-step list enumeration tools when execution succeeded.
+ */
+export function shouldPassthroughInterpretation(
+  plan: ExecutionPlan,
+  executionResult: ExecutionResult,
+): boolean {
+  if (!executionResult.allSuccessful || plan.steps.length !== 1) {
+    return false;
+  }
+  const tool = plan.steps[0].tool;
+  return tool === 'listProjects' || tool === 'listEvents';
+}
+
 // ============================================
 // Planner Prompt
 // ============================================
@@ -2936,7 +2994,7 @@ STEP 1 - PROJECT CONTEXT CHECK:
 - If NO to both (Global mode) → Go to STEP 2
 
 STEP 2 - GLOBAL MODE DECISION:
-- Is the request ONLY for project-independent tools (search, webResearch, generateImage, listEvents, createEvent, prepareMeeting)?
+- Is the request ONLY for project-independent tools (search, webResearch, generateImage, listEvents, createEvent, prepareMeeting, listProjects)?
   - YES → Proceed to STEP 3 without a project. These tools work without project context.
 - Is the user explicitly asking to "create a project" or "new project"?
   - YES → First step must be createProject, all following steps use projectId from it, proceed to STEP 3
@@ -2956,7 +3014,7 @@ STEP 5 - ASSESS COMPLEXITY:
 Determine if this plan is LOW or HIGH complexity. Default to LOW unless HIGH criteria are clearly met.
 
 LOW complexity (auto-execute without confirmation) - USE THIS WHEN:
-- Read-only operations: read, search, summarize, listEvents, searchTranscripts (ALWAYS low)
+- Read-only operations: read, search, summarize, listProjects, listEvents, searchTranscripts (ALWAYS low)
 - Image generation: generateImage (ALWAYS low, no project needed)
 - Calendar queries: listEvents (ALWAYS low, no project needed)
 - Meeting preparation: prepareMeeting (ALWAYS low)
@@ -2973,6 +3031,7 @@ HIGH complexity (requires user confirmation) - ONLY USE WHEN:
 - Ambiguous requests where you're uncertain what the user wants
 
 Examples:
+- "what projects do I have?" → LOW (listProjects, 1 step)
 - "search for meeting notes" → LOW (read-only, 1 step)
 - "read my todo list" → LOW (read-only, 1 step)
 - "summarize document.md" → LOW (read-only, 1 step)
@@ -2994,6 +3053,7 @@ Available tools:
 - write: Create a file. AI generates title if not provided and decides directory for all formats. For MD: also formats content. Params: {format: "md"|"pdf"|"docx", content: "content", title?: "title", path?: "directory", project?: "project name"}
 - updateFile: Update an existing file. The tool itself analyzes the file and generates precise changes. Params: {file: "filename", instruction: "natural language description of what to change", selectionContext?: {filePath, startLine, endLine, selectedText}}
 - createProject: Create a new project. Params: {name: "project name", description?: "description"}
+- listProjects: List all projects with file counts. No params. No project needed.
 - moveFile: Rename or move a file. Params: {file: "filename", newName?: "new-name.md" (for rename), directory?: "target/dir" (for move within project), fromProject?: "source", toProject?: "destination" (for cross-project move)}
 - deleteFile: Delete a file. Params: {file: "filename", project?: "project name"}
 - deleteProject: Delete a project. Params: {project: "project name", confirm: "yes"}
@@ -3012,6 +3072,8 @@ User message references:
   Example: @selection:notes/meeting.md:15-22 followed by the selected text in a code block
 
 When you see @file:ProjectName/path, extract the project name to resolve the correct project and use just the path portion (without the project name) as the fileName param.
+
+${FILE_MAP_WIKILINK_PLANNER_RULES}
 
 IMPORTANT RULES:
 1. If a step needs data from a previous step, mark it in dependsOn and contextNeeded
@@ -3343,6 +3405,7 @@ export function getToolIcon(tool: ToolName): string {
     write: "📝",
     updateFile: "✏️",
     createProject: "📁",
+    listProjects: "📂",
     moveFile: "📦",
     deleteFile: "🗑️",
     deleteProject: "🗑️",
@@ -4148,10 +4211,14 @@ Did we fully satisfy the user's request?`,
       },
     ],
     temperature: 0,
-    maxTokens: 1000,
+    maxTokens: 2048,
   });
 
   try {
+    if (!response.content.trim()) {
+      throw new Error('Empty checker response');
+    }
+
     let jsonStr = response.content.trim();
     const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {
@@ -4501,9 +4568,12 @@ export async function runPlannerFlow(
     for (const cs of executionResult.completedSteps) {
       const logEntry = allToolLogs.find((l) => l.id === cs.stepId);
       if (logEntry && cs.result.success && cs.result.data) {
-        logEntry.resultPreview = cs.result.data.length > 200
-          ? cs.result.data.substring(0, 200) + "..."
-          : cs.result.data;
+        const isListTool = cs.tool === 'listProjects' || cs.tool === 'listEvents';
+        logEntry.resultPreview = isListTool
+          ? cs.result.data
+          : cs.result.data.length > 200
+            ? cs.result.data.substring(0, 200) + "..."
+            : cs.result.data;
         logEntry.resultData = cs.result.data;
         onToolLog?.(logEntry);
       }
@@ -4534,9 +4604,9 @@ export async function runPlannerFlow(
       );
 
       let interpretation: string;
-      if (skipInterpretation) {
-        // For simple single-tool queries, don't add extra interpretation
-        interpretation = "";
+      const passthrough = shouldPassthroughInterpretation(currentPlan, executionResult);
+      if (skipInterpretation || passthrough) {
+        interpretation = passthrough ? formattedOutputs.join('\n\n') : '';
       } else {
         interpretation = await generateInterpretation(
           currentPlan.originalQuery,

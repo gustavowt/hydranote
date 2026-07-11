@@ -436,7 +436,7 @@ export async function ollamaJsonFetch(url: string, init: OllamaFetchInit = {}): 
 }
 
 interface OllamaChatResponse {
-  message?: { content?: string };
+  message?: { content?: string; thinking?: string };
   done?: boolean;
   eval_count?: number;
   prompt_eval_count?: number;
@@ -471,8 +471,11 @@ async function callOllama(
 
   const data = result.json<OllamaChatResponse>();
 
+  const content = data.message?.content?.trim() ?? '';
+  const thinking = data.message?.thinking?.trim() ?? '';
+
   return {
-    content: data.message?.content || '',
+    content: content || thinking,
     finishReason: data.done ? 'stop' : undefined,
     usage: data.eval_count ? {
       promptTokens: data.prompt_eval_count || 0,
@@ -742,20 +745,26 @@ async function streamOllama(
   // Shared NDJSON line handler: accumulates content, forwards deltas via
   // onChunk, and captures the terminal response when Ollama sends `done`.
   let fullContent = '';
+  let fullThinking = '';
   let finalResponse: LLMCompletionResponse | null = null;
   const handleLine = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     try {
       const json = JSON.parse(trimmed) as OllamaChatResponse;
+      const thinking = json.message?.thinking;
+      if (thinking) {
+        fullThinking += thinking;
+        onChunk(thinking, false, 'reasoning');
+      }
       const content = json.message?.content;
       if (content) {
         fullContent += content;
-        onChunk(content, false);
+        onChunk(content, false, 'content');
       }
       if (json.done) {
         finalResponse = {
-          content: fullContent,
+          content: fullContent || fullThinking,
           finishReason: 'stop',
           usage: json.eval_count ? {
             promptTokens: json.prompt_eval_count || 0,
@@ -796,7 +805,7 @@ async function streamOllama(
 
     if (buffer.trim()) handleLine(buffer);
     onChunk('', true);
-    return finalResponse ?? { content: fullContent, finishReason: 'stop' };
+    return finalResponse ?? { content: fullContent || fullThinking, finishReason: 'stop' };
   }
 
   // Web/PWA fallback: native streaming fetch (no custom-scheme origin there).
@@ -848,7 +857,7 @@ async function streamOllama(
   onChunk('', true);
 
   return finalResponse ?? {
-    content: fullContent,
+    content: fullContent || fullThinking,
     finishReason: 'stop',
   };
 }
@@ -1340,12 +1349,20 @@ export async function testConnection(): Promise<{ success: boolean; message: str
       messages: [
         { role: 'user', content: 'Say "Connection successful!" in exactly those words.' },
       ],
-      maxTokens: 50,
+      maxTokens: 512,
     });
+
+    const message = response.content?.trim() ?? '';
+    if (!message) {
+      return {
+        success: false,
+        message: 'Connected but model returned empty content (try a higher token budget or a non-thinking model).',
+      };
+    }
     
     return {
       success: true,
-      message: response.content,
+      message,
     };
   } catch (error) {
     return {
