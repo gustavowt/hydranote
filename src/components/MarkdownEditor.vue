@@ -1,5 +1,5 @@
 <template>
-  <div class="markdown-editor-container">
+  <div class="markdown-editor-container" ref="editorContainerRef">
     <!-- Editor Header -->
     <div class="editor-header">
       <div class="header-left">
@@ -37,6 +37,7 @@
             {{ displayFileName }}
           </span>
           <span v-if="hasChanges" class="unsaved-indicator">•</span>
+          <span v-if="autoSaveStatusText" class="autosave-status">{{ autoSaveStatusText }}</span>
           <button
             class="shortcuts-hint-btn"
             @click="showShortcutsModal = true"
@@ -53,7 +54,8 @@
             class="version-nav-btn"
             :disabled="!canGoBack || navigatingVersion"
             @click="handleVersionBack"
-            :title="canGoBack ? `Go to version ${currentVersionIndex - 1}` : 'No older version'"
+            :title="canGoBack ? `Go to version ${currentVersionIndex + 1}` : 'No older version'"
+            :aria-label="canGoBack ? `Go to version ${currentVersionIndex + 1}` : 'No older version'"
           >
             <ion-icon :icon="chevronBackOutline" />
           </button>
@@ -70,7 +72,8 @@
             class="version-nav-btn"
             :disabled="!canGoForward || navigatingVersion"
             @click="handleVersionForward"
-            :title="canGoForward ? `Go to version ${currentVersionIndex + 1}` : 'At latest version'"
+            :title="canGoForward ? (currentVersionIndex === 1 ? 'Go to latest version' : `Go to version ${currentVersionIndex - 1}`) : 'At latest version'"
+            :aria-label="canGoForward ? (currentVersionIndex === 1 ? 'Go to latest version' : `Go to version ${currentVersionIndex - 1}`) : 'At latest version'"
           >
             <ion-icon :icon="chevronForwardOutline" />
           </button>
@@ -88,6 +91,14 @@
             {{ isViewingOldVersion ? 'Restore' : 'Save' }}
           </ion-button>
         </div>
+        <button
+          v-if="hasOutlineHeadings"
+          :class="['mode-btn', { active: outlineVisible }]"
+          @click="outlineVisible = !outlineVisible"
+          title="Document outline"
+        >
+          <ion-icon :icon="readerOutline" />
+        </button>
         <div class="mode-toggle">
           <button 
             :class="['mode-btn', { active: viewMode === 'edit' }]" 
@@ -97,9 +108,10 @@
             <ion-icon :icon="codeOutline" />
           </button>
           <button 
-            :class="['mode-btn', { active: viewMode === 'split' }]" 
-            @click="viewMode = 'split'"
-            title="Split"
+            :class="['mode-btn', { active: viewMode === 'split', disabled: splitViewDisabled }]" 
+            @click="setSplitViewMode"
+            :title="splitViewDisabled ? 'Not enough space for split view' : 'Split'"
+            :disabled="splitViewDisabled"
           >
             <ion-icon :icon="gridOutline" />
           </button>
@@ -129,6 +141,7 @@
           <ion-icon :icon="ellipsisVertical" />
         </button>
         <ion-popover
+          v-if="currentFile"
           :is-open="showActionsMenu"
           @didDismiss="showActionsMenu = false"
           trigger="editor-actions-trigger"
@@ -239,7 +252,7 @@
     </ion-modal>
 
     <!-- Manual / Hybrid Save Modal -->
-    <ion-modal :is-open="showManualSaveModal" @didDismiss="handleSaveModalDismiss">
+    <ion-modal :is-open="showManualSaveModal" :can-dismiss="canDismissSaveModal" @didDismiss="handleSaveModalDismiss">
       <ion-header>
         <ion-toolbar>
           <ion-title>Save Note</ion-title>
@@ -269,6 +282,8 @@
               :class="{ 'field-locked': hybridProjectLocked }"
               :disabled="hybridProjectLocked"
               @ionChange="handleManualProjectChange"
+              @ionFocus="saveSelectOpen = true"
+              @ionBlur="saveSelectOpen = false"
             >
               <ion-select-option
                 v-for="project in availableProjects"
@@ -311,6 +326,8 @@
               class="manual-save-select"
               :class="{ 'field-locked': hybridDirectoryLocked }"
               :disabled="hybridDirectoryLocked"
+              @ionFocus="saveSelectOpen = true"
+              @ionBlur="saveSelectOpen = false"
             >
               <ion-select-option value="">Root (no directory)</ion-select-option>
               <ion-select-option
@@ -418,6 +435,14 @@
 
     <!-- Editor Content -->
     <div class="editor-content" ref="editorContentRef">
+      <div class="editor-workspace">
+        <EditorOutline
+          :content="outlineContent"
+          :visible="outlineVisible"
+          @navigate="handleOutlineNavigate"
+          @toggle="outlineVisible = !outlineVisible"
+        />
+        <div class="editor-main">
       <!-- Floating Send to Chat Button -->
       <Teleport to="body">
         <Transition name="selection-fade">
@@ -471,6 +496,7 @@
           class="markdown-textarea"
           placeholder="Start writing your note..."
           @input="handleInput"
+          @paste="handleEditorPaste"
           @mouseup="handleEditorMouseUp"
           @keyup="handleEditorMouseUp"
           :disabled="saving"
@@ -486,6 +512,7 @@
             class="markdown-textarea"
             placeholder="Start writing your note..."
             @input="handleInput"
+            @paste="handleEditorPaste"
             @mouseup="handleEditorMouseUp"
             @keyup="handleEditorMouseUp"
             :disabled="saving"
@@ -508,6 +535,7 @@
         ref="hybridEditorRef"
         v-model="content"
         :disabled="saving"
+        :project-id="currentProject?.id"
         @update:modelValue="handleInput"
         @selection-snapshot="onHybridSelectionSnapshot"
         @date-chip-click="onHybridDateChipClick"
@@ -515,6 +543,8 @@
 
       <!-- View Mode -->
       <div v-else-if="viewMode === 'view'" class="preview-pane full markdown-preview" v-html="renderedContent" @click="handlePreviewClick"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Date Chip Popover -->
@@ -526,6 +556,25 @@
       :context="datePopover.context"
       :anchor-rect="datePopover.anchorRect"
       @close="closeDatePopover"
+    />
+
+    <!-- Slash command & wikilink autocomplete (edit/split textarea modes) -->
+    <MarkdownSlashMenu
+      v-if="viewMode === 'edit' || viewMode === 'split'"
+      :commands="slashMenuState.commands"
+      :is-visible="slashMenuState.visible"
+      :anchor-rect="slashMenuState.anchorRect"
+      @select="onTextareaSlashSelect"
+      @close="closeTextareaSlashMenu"
+    />
+    <WikilinkAutocomplete
+      v-if="viewMode === 'edit' || viewMode === 'split'"
+      :project-id="currentProject?.id"
+      :search-query="wikilinkMenuState.query"
+      :is-visible="wikilinkMenuState.visible"
+      :anchor-rect="wikilinkMenuState.anchorRect"
+      @select="onTextareaWikilinkSelect"
+      @close="closeTextareaWikilinkMenu"
     />
 
     <!-- Status Bar -->
@@ -610,6 +659,13 @@ import type { Project, ProjectFile, GlobalAddNoteResult, FileVersionMeta, Versio
 import type { NoteExecutionStep } from '@/services';
 import { useMarkdownShortcuts, SHORTCUTS_CATALOG, SHORTCUT_CATEGORIES } from '@/composables/useMarkdownShortcuts';
 import type { ShortcutEntry } from '@/composables/useMarkdownShortcuts';
+import { rewriteCalloutHtml } from '@/services/calloutConverter';
+import { useEditorSlashCommands, type SlashMenuState } from '@/composables/useEditorSlashCommands';
+import { useEditorWikilinkAutocomplete, type WikilinkMenuState } from '@/composables/useEditorWikilinkAutocomplete';
+import MarkdownSlashMenu from '@/components/MarkdownSlashMenu.vue';
+import WikilinkAutocomplete, { type WikilinkFileItem } from '@/components/WikilinkAutocomplete.vue';
+import type { SlashCommand } from '@/composables/markdownSlashCommands';
+import { useIdleAutoSave, autoSaveStatusLabel } from '@/composables/useIdleAutoSave';
 import { 
   globalAddNote, 
   formatNote, 
@@ -636,6 +692,7 @@ import {
   updateProjectStatus,
   flushDatabase,
   findFileByPath,
+  findFileGlobal,
   chatCompletion,
   detectDates,
 } from '@/services';
@@ -643,11 +700,16 @@ import type { DocumentFormat, DetectedDate } from '@/types';
 import FormatStudio from '@/components/FormatStudio.vue';
 import DateChipPopover from '@/components/DateChipPopover.vue';
 import MarkdownLiveEditor from '@/components/MarkdownLiveEditor.vue';
+import EditorOutline, { type OutlineItem } from '@/components/EditorOutline.vue';
+import { parseDocumentStructure } from '@/services/documentProcessor';
+import { savePastedImage, readClipboardImage } from '@/services/editorImagePaste';
 
 interface Props {
   currentFile?: ProjectFile | null;
   currentProject?: Project | null;
   initialContent?: string;
+  defaultProjectId?: string;
+  onAutosave?: (content: string, file: ProjectFile) => Promise<boolean>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -671,6 +733,7 @@ const emit = defineEmits<{
   (e: 'note-saved', result: GlobalAddNoteResult): void;
   (e: 'rename', fileId: string, newName: string): void;
   (e: 'selection-to-chat', selection: SelectionContext): void;
+  (e: 'open-file', fileId: string, projectId: string): void;
 }>();
 
 // Initialize mermaid with dark theme
@@ -751,6 +814,136 @@ const content = ref('');
 const originalContent = ref('');
 const viewMode = ref<'edit' | 'split' | 'hybrid' | 'view'>('edit');
 const saving = ref(false);
+const editorContentRef = ref<HTMLElement | null>(null);
+const OUTLINE_VISIBLE_KEY = 'hn-editor-outline-visible';
+const outlineVisible = ref(
+  typeof localStorage !== 'undefined' && localStorage.getItem(OUTLINE_VISIBLE_KEY) !== 'false',
+);
+const outlineContent = ref('');
+let outlineDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+watch(outlineVisible, (visible) => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(OUTLINE_VISIBLE_KEY, String(visible));
+  }
+});
+
+watch(
+  content,
+  (value) => {
+    if (outlineDebounceTimer) clearTimeout(outlineDebounceTimer);
+    outlineDebounceTimer = setTimeout(() => {
+      outlineContent.value = value;
+    }, 200);
+  },
+  { immediate: true },
+);
+
+const hasOutlineHeadings = computed(() =>
+  parseDocumentStructure(outlineContent.value).some((s) => s.type === 'heading'),
+);
+
+function slugifyHeading(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return slug || 'heading';
+}
+
+function headingDomId(title: string, outlineIndex: number): string {
+  const base = slugifyHeading(title);
+  let duplicateIndex = 0;
+  const sections = parseDocumentStructure(outlineContent.value).filter(
+    (s) => s.type === 'heading' && s.title,
+  );
+  for (let i = 0; i < outlineIndex; i++) {
+    const other = sections[i];
+    if (other?.title && slugifyHeading(other.title) === base) {
+      duplicateIndex++;
+    }
+  }
+  return duplicateIndex === 0 ? base : `${base}-${duplicateIndex}`;
+}
+
+function injectHeadingIds(html: string): string {
+  if (!html.includes('<h')) return html;
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+
+  const slugCounts = new Map<string, number>();
+  for (const heading of Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))) {
+    const text = heading.textContent?.trim() || '';
+    const base = slugifyHeading(text);
+    const count = slugCounts.get(base) || 0;
+    slugCounts.set(base, count + 1);
+    heading.id = count === 0 ? base : `${base}-${count}`;
+  }
+  return root.innerHTML;
+}
+
+function scrollTextareaToOffset(textarea: HTMLTextAreaElement, offset: number): void {
+  textarea.focus();
+  textarea.setSelectionRange(offset, offset);
+  const textBefore = textarea.value.substring(0, offset);
+  const lineNum = textBefore.split('\n').length;
+  const lineHeight = Number.parseInt(getComputedStyle(textarea).lineHeight, 10) || 20;
+  textarea.scrollTop = Math.max(0, (lineNum - 1) * lineHeight - textarea.clientHeight / 3);
+}
+
+function handleOutlineNavigate(item: OutlineItem, index: number): void {
+  if (viewMode.value === 'edit' || viewMode.value === 'split') {
+    const textarea = viewMode.value === 'split' ? splitEditorRef.value : editorRef.value;
+    if (!textarea) return;
+    scrollTextareaToOffset(textarea, item.startOffset);
+    return;
+  }
+
+  if (viewMode.value === 'hybrid') {
+    hybridEditorRef.value?.scrollToHeading(index);
+    return;
+  }
+
+  const pane = editorContentRef.value?.querySelector('.preview-pane, .split-preview');
+  const id = headingDomId(item.title, index);
+  pane?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function showPasteImageToast(message: string, color: 'warning' | 'danger' = 'warning'): Promise<void> {
+  const toast = await toastController.create({ message, duration: 3000, color });
+  await toast.present();
+}
+
+async function handleEditorPaste(event: ClipboardEvent): Promise<void> {
+  const clipboard = event.clipboardData;
+  if (!clipboard) return;
+
+  const image = await readClipboardImage(clipboard);
+  if (!image) return;
+
+  event.preventDefault();
+
+  const projectId = props.currentProject?.id || props.currentFile?.projectId;
+  if (!projectId) {
+    await showPasteImageToast('Open or select a project to paste images');
+    return;
+  }
+
+  try {
+    const { markdown } = await savePastedImage({
+      projectId,
+      binaryData: image.binaryData,
+      mimeType: image.mimeType,
+    });
+    insertAtCursor(markdown);
+  } catch {
+    await showPasteImageToast('Failed to save pasted image', 'danger');
+  }
+}
+
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const hybridEditorRef = ref<InstanceType<typeof MarkdownLiveEditor> | null>(null);
@@ -802,6 +995,14 @@ function handlePreviewClick(event: MouseEvent) {
     return;
   }
 
+  const wikilink = target.closest('.wikilink') as HTMLElement | null;
+  if (wikilink) {
+    event.preventDefault();
+    event.stopPropagation();
+    void openWikilink(wikilink.dataset.wikilink || '');
+    return;
+  }
+
   const chip = target.closest('.date-chip') as HTMLElement | null;
 
   if (chip) {
@@ -816,6 +1017,27 @@ function handlePreviewClick(event: MouseEvent) {
       context: chip.dataset.context || '',
       anchorRect: rect,
     };
+  }
+}
+
+async function openWikilink(rawPath: string) {
+  const path = rawPath.trim();
+  if (!path) return;
+
+  try {
+    if (props.currentProject?.id) {
+      const local = await findFileByPath(props.currentProject.id, path);
+      if (local) {
+        emit('open-file', local.id, props.currentProject.id);
+        return;
+      }
+    }
+    const global = await findFileGlobal(path);
+    if (global) {
+      emit('open-file', global.file.id, global.projectId);
+    }
+  } catch (err) {
+    console.warn('Failed to open wikilink:', path, err);
   }
 }
 
@@ -861,6 +1083,74 @@ const shortcutsByCategory = shortcutCategories.reduce((acc, cat) => {
 const onShortcutContentChange = (val: string) => emit('content-change', val);
 useMarkdownShortcuts({ textareaRef: editorRef, content, onContentChange: onShortcutContentChange, onToggleShortcuts: toggleShortcutsModal });
 useMarkdownShortcuts({ textareaRef: splitEditorRef, content, onContentChange: onShortcutContentChange, onToggleShortcuts: toggleShortcutsModal });
+
+const slashMenuState = ref<SlashMenuState>({
+  visible: false,
+  query: '',
+  startIndex: -1,
+  commands: [],
+  anchorRect: null,
+});
+const wikilinkMenuState = ref<WikilinkMenuState>({
+  visible: false,
+  query: '',
+  startIndex: -1,
+  anchorRect: null,
+});
+
+function onSlashMenuChange(state: SlashMenuState) {
+  slashMenuState.value = state;
+}
+function onWikilinkMenuChange(state: WikilinkMenuState) {
+  wikilinkMenuState.value = state;
+}
+
+const slashEdit = useEditorSlashCommands({
+  textareaRef: editorRef,
+  content,
+  onContentChange: onShortcutContentChange,
+  onMenuChange: onSlashMenuChange,
+});
+const slashSplit = useEditorSlashCommands({
+  textareaRef: splitEditorRef,
+  content,
+  onContentChange: onShortcutContentChange,
+  onMenuChange: onSlashMenuChange,
+});
+const wikilinkEdit = useEditorWikilinkAutocomplete({
+  textareaRef: editorRef,
+  content,
+  onContentChange: onShortcutContentChange,
+  onMenuChange: onWikilinkMenuChange,
+});
+const wikilinkSplit = useEditorWikilinkAutocomplete({
+  textareaRef: splitEditorRef,
+  content,
+  onContentChange: onShortcutContentChange,
+  onMenuChange: onWikilinkMenuChange,
+});
+
+function onTextareaSlashSelect(command: SlashCommand) {
+  slashEdit.applyCommand(command);
+  slashSplit.applyCommand(command);
+  if (command.id === 'file') {
+    // Ensure wikilink autocomplete opens after [[ is inserted.
+    wikilinkEdit.refreshMenu();
+    wikilinkSplit.refreshMenu();
+  }
+}
+function closeTextareaSlashMenu() {
+  slashEdit.closeMenu();
+  slashSplit.closeMenu();
+}
+function onTextareaWikilinkSelect(file: WikilinkFileItem) {
+  wikilinkEdit.applyFile(file);
+  wikilinkSplit.applyFile(file);
+}
+function closeTextareaWikilinkMenu() {
+  wikilinkEdit.closeMenu();
+  wikilinkSplit.closeMenu();
+}
 
 // Split resizer state
 const splitLeftWidth = ref(50); // percentage
@@ -939,6 +1229,27 @@ const manualSaveCreatingNewDirectory = ref(false);
 const availableProjects = ref<Project[]>([]);
 const availableDirectories = ref<string[]>([]);
 const manualSaving = ref(false);
+const saveSelectOpen = ref(false);
+
+async function canDismissSaveModal(): Promise<boolean> {
+  return !saveSelectOpen.value;
+}
+
+const editorContainerRef = ref<HTMLElement | null>(null);
+const editorContainerWidth = ref(0);
+const splitViewDisabled = computed(() => editorContainerWidth.value > 0 && editorContainerWidth.value < 560);
+let editorContainerObserver: ResizeObserver | null = null;
+
+function setSplitViewMode() {
+  if (splitViewDisabled.value) return;
+  viewMode.value = 'split';
+}
+
+watch(splitViewDisabled, (disabled) => {
+  if (disabled && viewMode.value === 'split') {
+    viewMode.value = 'edit';
+  }
+});
 
 // Hybrid save mode: tracks which fields were AI-decided (shown as disabled)
 const hybridMode = ref(false);
@@ -954,7 +1265,6 @@ const selectionEndLine = ref(1);
 const selectionPosition = ref<{ x: number; y: number } | null>(null);
 const showSelectionButton = ref(false);
 let selectionHideTimeout: ReturnType<typeof setTimeout> | null = null;
-const editorContentRef = ref<HTMLElement | null>(null);
 
 // Helper to calculate line number from character offset
 function getLineNumberFromOffset(text: string, offset: number): number {
@@ -969,6 +1279,22 @@ const isNewNote = computed(() => !props.currentFile);
 const isViewingOldVersion = computed(() => currentVersionIndex.value > 0 && currentVersionIndex.value < totalVersions.value);
 const canGoBack = computed(() => currentVersionIndex.value < totalVersions.value);
 const canGoForward = computed(() => currentVersionIndex.value > 0);
+
+const autosaveEnabled = computed(() => !!props.onAutosave);
+
+const { status: autoSaveStatus, cancelPending: cancelAutoSave } = useIdleAutoSave({
+  content,
+  savedBaseline: originalContent,
+  fileId: computed(() => props.currentFile?.id ?? null),
+  isBlocked: isViewingOldVersion,
+  enabled: autosaveEnabled,
+  onAutosave: async (contentToSave) => {
+    if (!props.currentFile || !props.onAutosave) return false;
+    return props.onAutosave(contentToSave, props.currentFile);
+  },
+});
+
+const autoSaveStatusText = computed(() => autoSaveStatusLabel(autoSaveStatus.value));
 
 // Mermaid rendering with debounce
 let mermaidRenderTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -1073,6 +1399,55 @@ function injectCopyButtons(html: string): string {
   return root.innerHTML;
 }
 
+/**
+ * Turn literal [[path]] text in preview HTML into clickable .wikilink spans.
+ * Skips text inside code/pre/anchors.
+ */
+function injectWikilinks(html: string): string {
+  if (!html.includes('[[')) return html;
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const parent = node.parentElement;
+    if (!parent) continue;
+    if (parent.closest('code, pre, a, .wikilink, script, style')) continue;
+    if (!/\[\[[^\]]+\]\]/.test(node.textContent || '')) continue;
+    targets.push(node);
+  }
+
+  for (const node of targets) {
+    const text = node.textContent || '';
+    const frag = doc.createDocumentFragment();
+    let last = 0;
+    const re = /\[\[([^\]]+)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) {
+        frag.appendChild(doc.createTextNode(text.slice(last, m.index)));
+      }
+      const raw = m[1].trim();
+      const span = doc.createElement('span');
+      span.className = 'wikilink';
+      span.dataset.wikilink = raw;
+      span.textContent = raw;
+      span.title = `Open ${raw}`;
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) {
+      frag.appendChild(doc.createTextNode(text.slice(last)));
+    }
+    node.parentNode?.replaceChild(frag, node);
+  }
+
+  return root.innerHTML;
+}
+
 const renderedContent = computed(() => {
   if (!content.value.trim()) {
     return '<p class="placeholder-text">Preview will appear here...</p>';
@@ -1085,7 +1460,10 @@ const renderedContent = computed(() => {
     html = injectDateChips(html, dates);
   }
 
-  return injectCopyButtons(html);
+  html = injectWikilinks(html);
+  html = rewriteCalloutHtml(html);
+
+  return injectCopyButtons(injectHeadingIds(html));
 });
 
 // Normalize a relative image path against the current file's directory
@@ -1186,10 +1564,15 @@ watch(() => props.currentFile, (newFile, oldFile) => {
     // Open existing markdown files in Live (WYSIWYG) mode by default
     if (newFile.id !== oldFile?.id) {
       viewMode.value = 'hybrid';
+      resetVersionNavigation();
+      void loadVersionCount();
     }
   } else {
     // New note - use edit mode (raw markdown textarea)
     viewMode.value = 'edit';
+    showActionsMenu.value = false;
+    resetVersionNavigation();
+    void loadVersionCount();
   }
 }, { immediate: true });
 
@@ -1210,6 +1593,10 @@ watch(renderedContent, () => {
 
 // Watch for view mode changes to render mermaid diagrams
 watch(viewMode, (newMode) => {
+  if (newMode !== 'edit' && newMode !== 'split') {
+    closeTextareaSlashMenu();
+    closeTextareaWikilinkMenu();
+  }
   if (newMode === 'view' || newMode === 'split' || newMode === 'hybrid') {
     debouncedRenderMermaid();
   }
@@ -1399,11 +1786,24 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('selectionchange', handleDocumentSelectionChange);
   document.addEventListener('keydown', handleGlobalKeydown);
+
+  if (editorContainerRef.value) {
+    editorContainerWidth.value = editorContainerRef.value.clientWidth;
+    editorContainerObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        editorContainerWidth.value = entry.contentRect.width;
+      }
+    });
+    editorContainerObserver.observe(editorContainerRef.value);
+  }
 });
 
 onUnmounted(() => {
   document.removeEventListener('selectionchange', handleDocumentSelectionChange);
   document.removeEventListener('keydown', handleGlobalKeydown);
+  editorContainerObserver?.disconnect();
+  editorContainerObserver = null;
   if (selectionHideTimeout) {
     clearTimeout(selectionHideTimeout);
   }
@@ -1413,6 +1813,8 @@ onUnmounted(() => {
 
 async function handleSave() {
   if (!content.value.trim()) return;
+
+  cancelAutoSave();
   
   if (props.currentFile) {
     // Save existing file (or restore old version)
@@ -1627,10 +2029,16 @@ async function saveNewNoteHybrid(autoFormat: boolean, autoProject: boolean, auto
         availableDirectories.value = await getProjectDirectories(aiProjectId);
       } catch { availableDirectories.value = []; }
     } else {
-      manualSaveProjectId.value = null;
+      manualSaveProjectId.value = props.defaultProjectId ?? props.currentProject?.id ?? null;
       hybridProjectLocked.value = false;
       manualSaveCreatingNewProject.value = false;
-      availableDirectories.value = [];
+      if (manualSaveProjectId.value) {
+        try {
+          availableDirectories.value = await getProjectDirectories(manualSaveProjectId.value);
+        } catch { availableDirectories.value = []; }
+      } else {
+        availableDirectories.value = [];
+      }
     }
 
     if (autoDirectory && aiDirectory) {
@@ -1684,7 +2092,7 @@ async function openManualSaveModal() {
   hybridFormattedContent.value = null;
   hybridRunningAI.value = false;
 
-  manualSaveProjectId.value = null;
+  manualSaveProjectId.value = props.defaultProjectId ?? props.currentProject?.id ?? null;
   manualSaveNewProjectName.value = '';
   manualSaveDirectory.value = '';
   manualSaveNewDirectoryName.value = '';
@@ -1695,6 +2103,9 @@ async function openManualSaveModal() {
 
   try {
     availableProjects.value = await getAllProjects();
+    if (manualSaveProjectId.value) {
+      availableDirectories.value = await getProjectDirectories(manualSaveProjectId.value);
+    }
   } catch {
     availableProjects.value = [];
   }
@@ -2284,6 +2695,15 @@ function clearContent() {
   originalContent.value = '';
 }
 
+function discardChanges() {
+  if (props.currentFile) {
+    content.value = originalContent.value;
+  } else {
+    clearContent();
+  }
+  cancelAutoSave();
+}
+
 function focusEditor() {
   if (viewMode.value === 'hybrid') {
     hybridEditorRef.value?.focusEditor();
@@ -2333,7 +2753,15 @@ function insertAtCursor(text: string) {
   });
 }
 
-defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor });
+defineExpose({
+  setContent,
+  clearContent,
+  focusEditor,
+  hasChanges,
+  insertAtCursor,
+  saveCurrent: handleSave,
+  discardChanges,
+});
 </script>
 
 <style scoped>
@@ -2391,6 +2819,14 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   color: var(--hn-warning);
   line-height: 1;
   flex-shrink: 0;
+}
+
+.autosave-status {
+  font-size: 12px;
+  color: var(--hn-text-muted);
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: 2px;
 }
 
 .shortcuts-hint-btn {
@@ -2522,6 +2958,12 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
 .mode-btn.active {
   background: var(--hn-bg-hover);
   color: var(--hn-teal);
+}
+
+.mode-btn.disabled,
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .mode-btn ion-icon {
@@ -2720,6 +3162,28 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   display: flex;
   position: relative;
   min-width: 0; /* Allow flexbox to shrink */
+}
+
+.editor-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.editor-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-main :deep(.live-editor-host) {
+  flex: 1;
+  min-height: 0;
 }
 
 .editor-pane {
@@ -2934,6 +3398,40 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   border-radius: 0 8px 8px 0;
 }
 
+.markdown-preview :deep(aside.callout) {
+  margin: 1.2em 0;
+  padding: 0.75em 1em;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+
+.markdown-preview :deep(aside.callout .callout-body) {
+  margin: 0;
+}
+
+.markdown-preview :deep(aside.callout .callout-body > :first-child) {
+  margin-top: 0;
+}
+
+.markdown-preview :deep(aside.callout .callout-body > :last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-preview :deep(aside.callout-note) {
+  background: rgba(59, 130, 246, 0.1);
+  border-left-color: #3b82f6;
+}
+
+.markdown-preview :deep(aside.callout-tip) {
+  background: rgba(34, 197, 94, 0.1);
+  border-left-color: #22c55e;
+}
+
+.markdown-preview :deep(aside.callout-warning) {
+  background: rgba(245, 158, 11, 0.12);
+  border-left-color: #f59e0b;
+}
+
 .markdown-preview :deep(a) {
   color: var(--hn-purple);
   text-decoration: none;
@@ -3010,6 +3508,19 @@ defineExpose({ setContent, clearContent, focusEditor, hasChanges, insertAtCursor
   font-style: italic;
   padding: 12px;
   text-align: center;
+}
+
+/* Wikilink Styles */
+.markdown-preview :deep(.wikilink) {
+  color: var(--hn-purple-light, #a78bfa);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.markdown-preview :deep(.wikilink:hover) {
+  color: var(--hn-text-primary, #e0e0e0);
 }
 
 /* Date Chip Styles */

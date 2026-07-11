@@ -1,4 +1,29 @@
 import { describe, expect, test, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('@/services/documentProcessor', () => ({
+  chunkText: vi.fn(),
+  chunkMarkdownText: vi.fn(),
+  processDocument: vi.fn(),
+  isFileTypeSupported: vi.fn(),
+  detectFileType: vi.fn(),
+  getFileBinaryData: vi.fn(),
+  convertDOCXToHTML: vi.fn(),
+}));
+
+vi.mock('@/services/editorImagePaste', () => ({
+  savePastedImage: vi.fn(),
+  readClipboardImage: vi.fn(),
+}));
+
+vi.mock('@/components/WikilinkAutocomplete.vue', () => ({
+  default: {
+    name: 'WikilinkAutocomplete',
+    template: '<div />',
+    props: ['projectId', 'searchQuery', 'isVisible', 'anchorRect'],
+    emits: ['select', 'close'],
+  },
+}));
+
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import MarkdownLiveEditor from '@/components/MarkdownLiveEditor.vue';

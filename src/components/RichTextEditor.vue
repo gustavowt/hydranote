@@ -8,6 +8,7 @@
           {{ fileName }}
         </span>
         <span v-if="hasChanges" class="unsaved-indicator">•</span>
+        <span v-if="autoSaveStatusText" class="autosave-status">{{ autoSaveStatusText }}</span>
       </div>
       <div class="header-actions">
         <div class="save-btn-wrapper">
@@ -237,6 +238,7 @@ import {
   reorderTwoOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile } from '@/types';
+import { useIdleAutoSave, autoSaveStatusLabel } from '@/composables/useIdleAutoSave';
 
 const lowlight = createLowlight(common);
 
@@ -244,6 +246,7 @@ interface Props {
   currentFile?: ProjectFile | null;
   currentProject?: Project | null;
   htmlContent?: string;
+  onAutosave?: (content: string, file: ProjectFile) => Promise<boolean>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -258,6 +261,7 @@ const emit = defineEmits<{
 }>();
 
 const editor = shallowRef<Editor | null>(null);
+const currentHtml = ref('');
 const originalContent = ref('');
 const saving = ref(false);
 
@@ -272,10 +276,22 @@ const fileTypeLabel = computed(() => {
   return type;
 });
 
-const hasChanges = computed(() => {
-  if (!editor.value) return false;
-  return editor.value.getHTML() !== originalContent.value;
+const hasChanges = computed(() => currentHtml.value !== originalContent.value);
+
+const autosaveEnabled = computed(() => !!props.onAutosave);
+
+const { status: autoSaveStatus, cancelPending: cancelAutoSave } = useIdleAutoSave({
+  content: currentHtml,
+  savedBaseline: originalContent,
+  fileId: computed(() => props.currentFile?.id ?? null),
+  enabled: autosaveEnabled,
+  onAutosave: async (contentToSave) => {
+    if (!props.currentFile || !props.onAutosave) return false;
+    return props.onAutosave(contentToSave, props.currentFile);
+  },
 });
+
+const autoSaveStatusText = computed(() => autoSaveStatusLabel(autoSaveStatus.value));
 
 const wordCount = computed(() => {
   if (!editor.value) return 0;
@@ -294,6 +310,7 @@ onMounted(() => {
     extensions: [
       StarterKit.configure({
         codeBlock: false, // We use CodeBlockLowlight instead
+        link: false,
       }),
       Placeholder.configure({
         placeholder: 'Start writing your document...',
@@ -330,13 +347,15 @@ onMounted(() => {
       }),
     ],
     content: props.htmlContent || '',
-    onUpdate: ({ editor }) => {
-      emit('content-change', editor.getHTML());
+    onUpdate: ({ editor: ed }) => {
+      currentHtml.value = ed.getHTML();
+      emit('content-change', currentHtml.value);
     },
   });
 
   if (editor.value) {
-    originalContent.value = editor.value.getHTML();
+    currentHtml.value = editor.value.getHTML();
+    originalContent.value = currentHtml.value;
   }
 });
 
@@ -350,6 +369,7 @@ watch(() => props.htmlContent, (newContent) => {
     const currentContent = editor.value.getHTML();
     if (newContent !== currentContent) {
       editor.value.commands.setContent(newContent, { emitUpdate: false });
+      currentHtml.value = newContent;
       originalContent.value = newContent;
     }
   }
@@ -358,19 +378,22 @@ watch(() => props.htmlContent, (newContent) => {
 // Watch for file changes
 watch(() => props.currentFile, (newFile) => {
   if (newFile && editor.value) {
-    // Content will be set via htmlContent prop
-    originalContent.value = editor.value.getHTML();
+    currentHtml.value = editor.value.getHTML();
+    originalContent.value = currentHtml.value;
   }
 });
 
 function handleSave() {
   if (!editor.value) return;
+
+  cancelAutoSave();
   
   saving.value = true;
   const html = editor.value.getHTML();
   const text = editor.value.getText();
   
   emit('save', text, html, props.currentFile || undefined);
+  currentHtml.value = html;
   originalContent.value = html;
   
   setTimeout(() => {
@@ -415,7 +438,14 @@ function getText(): string {
   return editor.value?.getText() || '';
 }
 
-defineExpose({ setContent, getHTML, getText, hasChanges });
+function discardChanges() {
+  if (!editor.value) return;
+  editor.value.commands.setContent(originalContent.value, { emitUpdate: false });
+  currentHtml.value = originalContent.value;
+  cancelAutoSave();
+}
+
+defineExpose({ setContent, getHTML, getText, hasChanges, saveCurrent: handleSave, discardChanges });
 </script>
 
 <style scoped>
@@ -469,6 +499,14 @@ defineExpose({ setContent, getHTML, getText, hasChanges });
   color: var(--hn-warning);
   line-height: 1;
   flex-shrink: 0;
+}
+
+.autosave-status {
+  font-size: 12px;
+  color: var(--hn-text-muted);
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: 2px;
 }
 
 .header-actions {

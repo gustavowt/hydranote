@@ -24,14 +24,19 @@
           
           <!-- Right: Actions -->
           <div class="header-actions">
-            <ion-button fill="clear" @click="showTimeline = !showTimeline" :class="{ 'timeline-active': showTimeline }">
-              <ion-icon slot="icon-only" :icon="timeOutline" />
+            <ion-button fill="clear" @click="toggleTimeline" :class="{ 'timeline-active': showTimeline }" aria-label="Open timeline" title="Timeline">
+              <ion-icon slot="start" :icon="timeOutline" />
+              Timeline
+            </ion-button>
+            <ion-button fill="clear" @click="toggleFileMap" :class="{ 'file-map-active': showFileMap }" aria-label="Open file map" title="File Map">
+              <ion-icon slot="start" :icon="gitNetworkOutline" />
+              Map
             </ion-button>
             <ion-button @click="handleNewNote" class="add-note-btn">
               <ion-icon slot="start" :icon="addOutline" />
               New Note
             </ion-button>
-            <ion-button fill="clear" @click="router.push('/settings')">
+            <ion-button fill="clear" @click="router.push('/settings')" aria-label="Open settings">
               <ion-icon slot="icon-only" :icon="settingsOutline" />
             </ion-button>
           </div>
@@ -65,10 +70,16 @@
         @mousedown="startLeftResize"
       ></div>
 
-      <!-- Center: Timeline or Editor -->
+      <!-- Center: File Map, Timeline, or Editor -->
+      <FileMapView
+        v-if="showFileMap"
+        :project-id="selectedProjectId"
+        @close="showFileMap = false"
+        @open-file="handleFileMapOpenFile"
+      />
       <!-- Timeline View -->
       <TimelineView
-        v-if="showTimeline"
+        v-else-if="showTimeline"
         :project-id="selectedProjectId"
         @close="showTimeline = false"
         @open-file="handleTimelineOpenFile"
@@ -82,6 +93,12 @@
         :system-file-path="currentFile.systemFilePath"
         :pdf-data="pdfData"
       />
+      <!-- Image Viewer -->
+      <ImageViewer
+        v-else-if="isImageFile(currentFile)"
+        :current-file="currentFile"
+        :current-project="currentProject"
+      />
       <!-- Rich Text Editor (DOCX) -->
       <RichTextEditor
         v-else-if="currentFile && currentFile.type === 'docx'"
@@ -89,6 +106,7 @@
         :current-file="currentFile"
         :current-project="currentProject"
         :html-content="currentFile.htmlContent || ''"
+        :on-autosave="handleAutosaveDocxFile"
         @save="handleSaveDocxFile"
         @content-change="handleContentChange"
       />
@@ -99,11 +117,14 @@
         :current-file="currentFile"
         :current-project="currentProject"
         :initial-content="editorInitialContent"
+        :default-project-id="selectedProjectId"
+        :on-autosave="handleAutosaveExistingFile"
         @save="handleSaveExistingFile"
         @content-change="handleContentChange"
         @note-saved="handleNoteSaved"
         @rename="handleRename"
         @selection-to-chat="handleSelectionToChat"
+        @open-file="handleWikilinkOpenFile"
       />
 
       <!-- Right Resizer -->
@@ -182,7 +203,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage,
@@ -200,12 +221,14 @@ import {
   IonInput,
   IonTextarea,
   toastController,
+  alertController,
   onIonViewWillEnter,
 } from '@ionic/vue';
 import {
   addOutline,
   settingsOutline,
   timeOutline,
+  gitNetworkOutline,
 } from 'ionicons/icons';
 import type { Project, ProjectFile, GlobalAddNoteResult } from '@/types';
 import {
@@ -219,8 +242,6 @@ import {
   renameFile,
   onSyncEvent,
   base64ToArrayBuffer,
-  createFile,
-  loadImageGenerationSettings,
   ELECTRON_TRAY_WORKSPACE_EVENT,
   onPipelineAction,
   offPipelineAction,
@@ -229,9 +250,12 @@ import ProjectsTreeSidebar from '@/components/ProjectsTreeSidebar.vue';
 import MarkdownEditor from '@/components/MarkdownEditor.vue';
 import RichTextEditor from '@/components/RichTextEditor.vue';
 import PDFViewer from '@/components/PDFViewer.vue';
+import ImageViewer from '@/components/ImageViewer.vue';
 import ChatSidebar from '@/components/ChatSidebar.vue';
 import SearchAutocomplete from '@/components/SearchAutocomplete.vue';
 import TimelineView from '@/components/TimelineView.vue';
+import FileMapView from '@/components/FileMapView.vue';
+import { savePastedImage } from '@/services/editorImagePaste';
 
 const router = useRouter();
 
@@ -255,8 +279,19 @@ const currentFile = ref<ProjectFile | null>(null);
 const editorInitialContent = ref('');
 const pdfData = ref<ArrayBuffer | null>(null);
 
-// Timeline view state
+// Timeline / File Map view state
 const showTimeline = ref(false);
+const showFileMap = ref(false);
+
+function toggleTimeline() {
+  showTimeline.value = !showTimeline.value;
+  if (showTimeline.value) showFileMap.value = false;
+}
+
+function toggleFileMap() {
+  showFileMap.value = !showFileMap.value;
+  if (showFileMap.value) showTimeline.value = false;
+}
 
 // Sidebar resizer state
 const leftSidebarWidth = ref(280); // px
@@ -352,7 +387,7 @@ function onElectronTrayWorkspaceAction(ev: Event) {
   const ce = ev as CustomEvent<{ action: string }>;
   const action = ce.detail?.action;
   if (action === 'new-note') {
-    handleNewNote();
+    void handleNewNote();
   } else if (action === 'focus-chat') {
     chatSidebarRef.value?.focusChatInput?.();
   }
@@ -368,6 +403,17 @@ function handleDictationSendToChat(text: string) {
 
 onMounted(async () => {
   await initialize();
+
+  // Auto-collapse sidebars on mobile
+  const mobileQuery = window.matchMedia('(max-width: 767px)');
+  const applyMobileLayout = (matches: boolean) => {
+    if (matches) {
+      leftCollapsed.value = true;
+      rightCollapsed.value = true;
+    }
+  };
+  applyMobileLayout(mobileQuery.matches);
+  mobileQuery.addEventListener('change', (e) => applyMobileLayout(e.matches));
 
   // Listen for sync events to refresh file tree when sync completes
   unsubscribeSyncEvent = onSyncEvent(async (event) => {
@@ -415,6 +461,60 @@ async function loadProjects() {
   projects.value = await getAllProjects();
 }
 
+const IMAGE_FILE_TYPES = new Set(['png', 'jpg', 'jpeg', 'webp']);
+
+function isImageFile(file: ProjectFile | null | undefined): boolean {
+  return !!file && IMAGE_FILE_TYPES.has(file.type);
+}
+
+function editorHasUnsavedChanges(): boolean {
+  if (currentFile.value?.type === 'docx') {
+    return richTextEditorRef.value?.hasChanges ?? false;
+  }
+  return markdownEditorRef.value?.hasChanges ?? false;
+}
+
+async function confirmLeaveEditor(): Promise<boolean> {
+  if (!editorHasUnsavedChanges()) return true;
+
+  return new Promise((resolve) => {
+    void alertController
+      .create({
+        header: 'Unsaved changes',
+        message: 'You have unsaved changes. What would you like to do?',
+        buttons: [
+          { text: 'Cancel', role: 'cancel', handler: () => resolve(false) },
+          {
+            text: 'Discard',
+            role: 'destructive',
+            handler: () => {
+              if (currentFile.value?.type === 'docx') {
+                richTextEditorRef.value?.discardChanges?.();
+              } else {
+                markdownEditorRef.value?.discardChanges();
+              }
+              resolve(true);
+            },
+          },
+          {
+            text: 'Save',
+            handler: () => {
+              void (async () => {
+                if (currentFile.value?.type === 'docx') {
+                  await richTextEditorRef.value?.saveCurrent?.();
+                } else {
+                  await markdownEditorRef.value?.saveCurrent();
+                }
+                resolve(!editorHasUnsavedChanges());
+              })();
+            },
+          },
+        ],
+      })
+      .then((alert) => alert.present());
+  });
+}
+
 // Project selection handlers
 async function handleProjectSelect(projectId: string) {
   selectedProjectId.value = projectId;
@@ -425,6 +525,13 @@ async function handleProjectSelect(projectId: string) {
 }
 
 async function handleFileSelect(projectId: string, file: { id: string; path: string; type: string }) {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
+  // Selecting a file always returns to the editor (close overlay views).
+  showFileMap.value = false;
+  showTimeline.value = false;
+
   selectedProjectId.value = projectId;
   selectedFileId.value = file.id;
   currentProject.value = await getProject(projectId) || null;
@@ -433,7 +540,12 @@ async function handleFileSelect(projectId: string, file: { id: string; path: str
   
   if (projectFile) {
     currentFile.value = projectFile;
-    editorInitialContent.value = projectFile.content || '';
+    if (!isImageFile(projectFile)) {
+      editorInitialContent.value = projectFile.content || '';
+      // Editor may not be mounted yet if we just closed File Map / Timeline.
+      await nextTick();
+      markdownEditorRef.value?.setContent(projectFile.content || '');
+    }
     
     // For PDF files: prefer systemFilePath, fallback to binaryData for legacy files
     if (projectFile.type === 'pdf') {
@@ -456,8 +568,15 @@ function handleChatProjectChange(projectId: string) {
   selectedProjectId.value = projectId;
 }
 
+async function handleFileMapOpenFile(fileId: string, projectId: string) {
+  await handleFileSelect(projectId, { id: fileId, path: '', type: 'md' });
+}
+
 async function handleTimelineOpenFile(fileId: string, projectId: string) {
-  showTimeline.value = false;
+  await handleFileSelect(projectId, { id: fileId, path: '', type: 'md' });
+}
+
+async function handleWikilinkOpenFile(fileId: string, projectId: string) {
   await handleFileSelect(projectId, { id: fileId, path: '', type: 'md' });
 }
 
@@ -468,7 +587,7 @@ async function handleProjectsChanged() {
 }
 
 // Handle file updated from chat (updateFile tool)
-async function handleFileUpdated(fileId: string, _fileName: string) {
+async function handleFileUpdated(fileId: string) {
   // If the updated file is currently open in the editor, refresh it
   if (currentFile.value && currentFile.value.id === fileId && selectedProjectId.value) {
     const files = await get_project_files(selectedProjectId.value);
@@ -494,7 +613,10 @@ async function handleFileUpdated(fileId: string, _fileName: string) {
 }
 
 // Handle file created from chat (write/addNote tools)
-async function handleFileCreatedFromChat(projectId: string, fileId: string, _fileName: string) {
+async function handleFileCreatedFromChat(projectId: string, fileId: string) {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
   // Refresh projects and file trees first
   await loadProjects();
   await projectsTreeRef.value?.refresh();
@@ -510,8 +632,10 @@ async function handleFileCreatedFromChat(projectId: string, fileId: string, _fil
   
   if (file) {
     currentFile.value = file;
-    editorInitialContent.value = file.content || '';
-    markdownEditorRef.value?.setContent(file.content || '');
+    if (!isImageFile(file)) {
+      editorInitialContent.value = file.content || '';
+      markdownEditorRef.value?.setContent(file.content || '');
+    }
   }
   
   // Reveal the file in the sidebar (expand parents + scroll into view)
@@ -536,12 +660,6 @@ async function handleInsertImage(payload: { fileName?: string; fileId?: string; 
   const targetProjectId = currentFile.value?.projectId || payload.projectId;
   if (!targetProjectId) return;
 
-  const imgSettings = loadImageGenerationSettings();
-  const dir = imgSettings.defaultImageDirectory || 'images';
-  const ext = (payload.imageMimeType || 'image/png').split('/')[1] || 'png';
-  const timestamp = Date.now();
-  const filePath = `${dir}/generated-${timestamp}.${ext}`;
-
   try {
     const binaryStr = atob(payload.imageData);
     const binaryData = new Uint8Array(binaryStr.length);
@@ -549,16 +667,14 @@ async function handleInsertImage(payload: { fileName?: string; fileId?: string; 
       binaryData[i] = binaryStr.charCodeAt(i);
     }
 
-    await createFile(
-      targetProjectId,
-      filePath,
-      `[Generated image: ${payload.altText}]`,
-      ext as 'png' | 'jpg' | 'webp',
+    const { markdown } = await savePastedImage({
+      projectId: targetProjectId,
       binaryData,
-    );
-
-    const imageMarkdown = `![${payload.altText}](${filePath})`;
-    markdownEditorRef.value.insertAtCursor(imageMarkdown);
+      mimeType: payload.imageMimeType || 'image/png',
+      altText: payload.altText,
+      filenamePrefix: 'generated',
+    });
+    markdownEditorRef.value.insertAtCursor(markdown);
   } catch {
     // Fallback: insert data URL if saving fails
     const dataUrl = `data:${payload.imageMimeType || 'image/png'};base64,${payload.imageData}`;
@@ -568,14 +684,47 @@ async function handleInsertImage(payload: { fileName?: string; fileId?: string; 
 }
 
 // New Note handler
-function handleNewNote() {
+async function handleNewNote() {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
   // Clear current file and reset editor for a new note
   currentFile.value = null;
-  currentProject.value = null;
+  if (!selectedProjectId.value) {
+    currentProject.value = null;
+  } else {
+    currentProject.value = projects.value.find(p => p.id === selectedProjectId.value) || null;
+  }
   selectedFileId.value = undefined;
   editorInitialContent.value = '';
   markdownEditorRef.value?.clearContent();
   markdownEditorRef.value?.focusEditor();
+}
+
+async function handleAutosaveExistingFile(content: string, file: ProjectFile): Promise<boolean> {
+  try {
+    const updatedFile = await updateFile(file.id, content, { createVersion: false });
+    if (updatedFile) {
+      currentFile.value = updatedFile;
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function handleAutosaveDocxFile(html: string, file: ProjectFile): Promise<boolean> {
+  try {
+    const updatedFile = await updateFile(file.id, html, { createVersion: false });
+    if (updatedFile) {
+      currentFile.value = updatedFile;
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 // Save handlers
@@ -659,13 +808,24 @@ async function handleNoteSaved(result: GlobalAddNoteResult) {
   if (result.projectId && result.fileId) {
     selectedProjectId.value = result.projectId;
     selectedFileId.value = result.fileId;
+
+    currentProject.value = projects.value.find(p => p.id === result.projectId)
+      || await getProject(result.projectId)
+      || null;
+
+    const file = await getFile(result.fileId);
+    if (file) {
+      currentFile.value = file;
+      editorInitialContent.value = file.content || '';
+      markdownEditorRef.value?.setContent(file.content || '');
+    }
     
     // Reveal the file in the sidebar (expand parents + scroll into view)
     await projectsTreeRef.value?.revealFile(result.projectId, result.fileId);
   }
 }
 
-function handleContentChange(_content: string) {
+function handleContentChange() {
   // Could be used for auto-save or draft saving
 }
 
@@ -699,13 +859,16 @@ function handleDeleteProject(projectId: string) {
 }
 
 // Project rename handler
-async function handleProjectRenamed(_projectId: string, _newName: string) {
+async function handleProjectRenamed() {
   // Refresh the projects list to reflect the new name
   await loadProjects();
 }
 
 // Search result selection handlers
 async function handleSearchSelectFile(file: { id: string; projectId: string; name: string; path: string; type: string; projectName: string }) {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
   // Select the project and file
   selectedProjectId.value = file.projectId;
   selectedFileId.value = file.id;
@@ -729,6 +892,9 @@ async function handleSearchSelectFile(file: { id: string; projectId: string; nam
 }
 
 async function handleSearchSelectProject(project: Project) {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
   // Select the project
   selectedProjectId.value = project.id;
   currentProject.value = project;
@@ -745,12 +911,16 @@ async function handleSearchSelectProject(project: Project) {
 
 // Handle file created from sidebar
 async function handleFileCreatedFromSidebar(projectId: string, file: ProjectFile) {
+  const canLeave = await confirmLeaveEditor();
+  if (!canLeave) return;
+
   // Select the project and file
   selectedProjectId.value = projectId;
   selectedFileId.value = file.id;
   currentProject.value = await getProject(projectId) || null;
   currentFile.value = file;
   editorInitialContent.value = file.content || '';
+  markdownEditorRef.value?.setContent(file.content || '');
 
   // Reveal the file in the sidebar (expand parents + scroll into view)
   await projectsTreeRef.value?.revealFile(projectId, file.id);
@@ -964,6 +1134,10 @@ async function handleCreateProject() {
   --color: var(--hn-purple-light) !important;
 }
 
+.file-map-active {
+  --color: var(--hn-purple-light) !important;
+}
+
 /* Workspace Layout */
 .workspace-layout {
   display: flex;
@@ -1038,6 +1212,54 @@ ion-modal ion-button[strong] {
 
 .modal-confirm-btn:disabled {
   opacity: 0.5;
+}
+
+@media (max-width: 767px) {
+  .header-brand span {
+    display: none;
+  }
+
+  .search-shortcut {
+    display: none;
+  }
+
+  .add-note-btn {
+    --padding-start: 10px;
+    --padding-end: 10px;
+  }
+
+  .add-note-btn ion-icon[slot='start'] {
+    margin: 0;
+  }
+
+  .add-note-btn::part(native) {
+    font-size: 0;
+  }
+
+  .workspace-layout {
+    position: relative;
+  }
+
+  .workspace-layout > :deep(.projects-tree-sidebar),
+  .workspace-layout > :deep(.chat-sidebar) {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .workspace-layout > :deep(.projects-tree-sidebar) {
+    left: 0;
+  }
+
+  .workspace-layout > :deep(.chat-sidebar) {
+    right: 0;
+  }
+
+  .workspace-resizer {
+    display: none;
+  }
 }
 </style>
 

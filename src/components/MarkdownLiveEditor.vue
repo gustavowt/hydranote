@@ -1,6 +1,22 @@
 <template>
   <div class="live-editor-host markdown-preview" @click="handleHostClick">
     <editor-content v-if="editor" :editor="editor" class="live-editor-surface" />
+    <MarkdownTableBubbleMenu v-if="editor" :editor="editor" />
+    <MarkdownSlashMenu
+      :commands="slashMenu.commands"
+      :is-visible="slashMenu.visible"
+      :anchor-rect="slashMenu.anchorRect"
+      @select="onSlashSelect"
+      @close="closeSlashMenu"
+    />
+    <WikilinkAutocomplete
+      :project-id="projectId"
+      :search-query="wikilinkMenu.query"
+      :is-visible="wikilinkMenu.visible"
+      :anchor-rect="wikilinkMenu.anchorRect"
+      @select="onWikilinkSelect"
+      @close="closeWikilinkMenu"
+    />
   </div>
 </template>
 
@@ -27,10 +43,29 @@ import {
   joinFrontmatter,
   markdownToHtml,
   htmlToMarkdown,
+  rewriteTaskListHtml,
 } from '@/services/markdownConverter';
 import { detectDates } from '@/services/dateDetectionService';
+import { rewriteCalloutHtml } from '@/services/calloutConverter';
 import MermaidBlockNodeView from './MermaidBlockNodeView.vue';
 import CodeBlockNodeView from './CodeBlockNodeView.vue';
+import MarkdownSlashMenu from './MarkdownSlashMenu.vue';
+import WikilinkAutocomplete, { type WikilinkFileItem } from './WikilinkAutocomplete.vue';
+import {
+  SlashCommandExtension,
+  applySlashCommandToEditor,
+  type SlashCommandPayload,
+} from '@/extensions/slashCommandExtension';
+import {
+  WikilinkAutocompleteExtension,
+  applyWikilinkToEditor,
+  type WikilinkPayload,
+} from '@/extensions/wikilinkAutocompleteExtension';
+import type { SlashCommand } from '@/composables/markdownSlashCommands';
+import { Callout } from '@/extensions/calloutExtension';
+import MarkdownTableBubbleMenu from './MarkdownTableBubbleMenu.vue';
+import { savePastedImage, readClipboardImage } from '@/services/editorImagePaste';
+import { toastController } from '@ionic/vue';
 
 const lowlight = createLowlight(common);
 
@@ -39,6 +74,7 @@ const props = withDefaults(
     modelValue: string;
     disabled?: boolean;
     placeholder?: string;
+    projectId?: string;
   }>(),
   { disabled: false, placeholder: 'Start writing...' },
 );
@@ -59,6 +95,88 @@ const emit = defineEmits<{
 
 const editor = shallowRef<Editor | null>(null);
 const frontmatter = ref('');
+
+const slashMenu = ref<{
+  visible: boolean;
+  query: string;
+  from: number;
+  to: number;
+  commands: SlashCommand[];
+  anchorRect: DOMRect | null;
+}>({
+  visible: false,
+  query: '',
+  from: 0,
+  to: 0,
+  commands: [],
+  anchorRect: null,
+});
+
+const wikilinkMenu = ref<{
+  visible: boolean;
+  query: string;
+  from: number;
+  to: number;
+  anchorRect: DOMRect | null;
+}>({
+  visible: false,
+  query: '',
+  from: 0,
+  to: 0,
+  anchorRect: null,
+});
+
+function onSlashPayload(payload: SlashCommandPayload | null) {
+  if (!payload) {
+    slashMenu.value.visible = false;
+    return;
+  }
+  slashMenu.value = {
+    visible: true,
+    query: payload.query,
+    from: payload.from,
+    to: payload.to,
+    commands: payload.commands,
+    anchorRect: payload.anchorRect,
+  };
+}
+
+function onWikilinkPayload(payload: WikilinkPayload | null) {
+  if (!payload) {
+    wikilinkMenu.value.visible = false;
+    return;
+  }
+  wikilinkMenu.value = {
+    visible: true,
+    query: payload.query,
+    from: payload.from,
+    to: payload.to,
+    anchorRect: payload.anchorRect,
+  };
+}
+
+function closeSlashMenu() {
+  slashMenu.value.visible = false;
+}
+
+function closeWikilinkMenu() {
+  wikilinkMenu.value.visible = false;
+}
+
+function onSlashSelect(command: SlashCommand) {
+  const ed = editor.value;
+  if (!ed) return;
+  applySlashCommandToEditor(ed, command, slashMenu.value.from, slashMenu.value.to);
+  closeSlashMenu();
+}
+
+function onWikilinkSelect(file: WikilinkFileItem) {
+  const ed = editor.value;
+  if (!ed) return;
+  const linkPath = file.path || file.name;
+  applyWikilinkToEditor(ed, linkPath, wikilinkMenu.value.from, wikilinkMenu.value.to);
+  closeWikilinkMenu();
+}
 
 /**
  * Custom Tiptap node for Mermaid diagrams. Replaces fenced ` ```mermaid ` code
@@ -202,15 +320,50 @@ function rewriteMermaidBlocks(html: string): string {
 
 let suppressUpdate = false;
 
+async function handleImagePaste(clipboardData: DataTransfer): Promise<boolean> {
+  const image = await readClipboardImage(clipboardData);
+  if (!image) return false;
+
+  const projectId = props.projectId;
+  if (!projectId) {
+    const toast = await toastController.create({
+      message: 'Open or select a project to paste images',
+      duration: 3000,
+      color: 'warning',
+    });
+    await toast.present();
+    return true;
+  }
+
+  try {
+    const { markdown } = await savePastedImage({
+      projectId,
+      binaryData: image.binaryData,
+      mimeType: image.mimeType,
+    });
+    insertAtCursor(markdown);
+    return true;
+  } catch {
+    const toast = await toastController.create({
+      message: 'Failed to save pasted image',
+      duration: 3000,
+      color: 'danger',
+    });
+    await toast.present();
+    return true;
+  }
+}
+
 function buildEditor(): Editor {
   const { frontmatter: fm, body } = splitFrontmatter(props.modelValue);
   frontmatter.value = fm;
-  const html = rewriteMermaidBlocks(markdownToHtml(body));
+  const html = rewriteCalloutHtml(rewriteTaskListHtml(rewriteMermaidBlocks(markdownToHtml(body))));
 
   return new Editor({
     extensions: [
       StarterKit.configure({
         codeBlock: false, // CodeBlockLowlight replaces it
+        link: false,
       }),
       Placeholder.configure({ placeholder: props.placeholder }),
       Link.configure({
@@ -226,7 +379,10 @@ function buildEditor(): Editor {
       TaskItem.configure({ nested: true }),
       CodeBlockWithCopy.configure({ lowlight }),
       MermaidBlock,
+      Callout,
       DateChipExtension,
+      SlashCommandExtension.configure({ onChange: onSlashPayload }),
+      WikilinkAutocompleteExtension.configure({ onChange: onWikilinkPayload }),
     ],
     content: html,
     editable: !props.disabled,
@@ -234,6 +390,15 @@ function buildEditor(): Editor {
       attributes: {
         class: 'tiptap-live-content',
         spellcheck: 'true',
+      },
+      handlePaste: (_view, event) => {
+        const clipboard = event.clipboardData;
+        if (!clipboard) return false;
+        const hasImage = Array.from(clipboard.items || []).some((item) => item.type.startsWith('image/'));
+        if (!hasImage) return false;
+        event.preventDefault();
+        void handleImagePaste(clipboard);
+        return true;
       },
     },
     onUpdate: ({ editor: ed }) => {
@@ -270,7 +435,7 @@ watch(
     if (current === next) return;
     const { frontmatter: fm, body } = splitFrontmatter(next);
     frontmatter.value = fm;
-    const html = rewriteMermaidBlocks(markdownToHtml(body));
+    const html = rewriteCalloutHtml(rewriteTaskListHtml(rewriteMermaidBlocks(markdownToHtml(body))));
     suppressUpdate = true;
     ed.commands.setContent(html, { emitUpdate: false });
     suppressUpdate = false;
@@ -295,16 +460,22 @@ function handleHostClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null;
   if (!target) return;
   const chip = target.closest('.date-chip') as HTMLElement | null;
-  if (!chip) return;
-  event.preventDefault();
-  event.stopPropagation();
-  emit('date-chip-click', {
-    date: chip.dataset.date || '',
-    type: chip.dataset.type || 'regular',
-    original: chip.dataset.original || '',
-    context: chip.dataset.context || '',
-    anchorRect: chip.getBoundingClientRect(),
-  });
+  if (chip) {
+    event.preventDefault();
+    event.stopPropagation();
+    emit('date-chip-click', {
+      date: chip.dataset.date || '',
+      type: chip.dataset.type || 'regular',
+      original: chip.dataset.original || '',
+      context: chip.dataset.context || '',
+      anchorRect: chip.getBoundingClientRect(),
+    });
+    return;
+  }
+  const host = event.currentTarget as HTMLElement;
+  if (target === host || !target.closest('.ProseMirror')) {
+    editor.value?.commands.focus();
+  }
 }
 
 function focusEditor() {
@@ -318,7 +489,7 @@ function focusEditor() {
 function insertAtCursor(text: string) {
   const ed = editor.value;
   if (!ed) return;
-  const html = rewriteMermaidBlocks(markdownToHtml(text));
+  const html = rewriteTaskListHtml(rewriteMermaidBlocks(markdownToHtml(text)));
   ed.chain().focus().insertContent(html).run();
 }
 
@@ -329,11 +500,40 @@ function getSelectionText(): { text: string; from: number; to: number } {
   return { text: ed.state.doc.textBetween(from, to, '\n'), from, to };
 }
 
+function scrollToHeading(outlineIndex: number): void {
+  const ed = editor.value;
+  if (!ed) return;
+
+  let headingIndex = 0;
+  let targetPos = -1;
+
+  ed.state.doc.descendants((node, pos) => {
+    if (targetPos >= 0) return false;
+    if (node.type.name !== 'heading') return;
+    if (headingIndex === outlineIndex) {
+      targetPos = pos + 1;
+      return false;
+    }
+    headingIndex++;
+  });
+
+  if (targetPos < 0 || targetPos > ed.state.doc.content.size) return;
+
+  ed.chain().focus().setTextSelection(targetPos).run();
+  const domPos = ed.view.domAtPos(targetPos);
+  const element =
+    domPos.node instanceof HTMLElement
+      ? domPos.node
+      : domPos.node.parentElement;
+  element?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+}
+
 defineExpose({
   focusEditor,
   insertAtCursor,
   getSelectionText,
   getEditor: () => editor.value,
+  scrollToHeading,
 });
 
 // Surface line-height + spelling hints aren't strictly needed; computed only
@@ -352,6 +552,7 @@ void _hasEditor.value;
   overflow-x: hidden;
   background: var(--hn-bg-deep);
   padding: 20px 24px;
+  position: relative;
 }
 
 .live-editor-surface {
@@ -364,6 +565,8 @@ void _hasEditor.value;
 .live-editor-host :deep(.ProseMirror) {
   outline: none;
   min-height: 100%;
+  color: var(--hn-text-primary);
+  caret-color: var(--hn-text-primary);
 }
 
 .live-editor-host :deep(.ProseMirror p.is-editor-empty:first-child::before) {
@@ -428,5 +631,27 @@ void _hasEditor.value;
 
 .live-editor-host :deep(.code-block-node pre) {
   margin: 0;
+}
+
+.live-editor-host :deep(aside.callout) {
+  margin: 1.2em 0;
+  padding: 0.75em 1em;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+
+.live-editor-host :deep(aside.callout-note) {
+  background: rgba(59, 130, 246, 0.1);
+  border-left-color: #3b82f6;
+}
+
+.live-editor-host :deep(aside.callout-tip) {
+  background: rgba(34, 197, 94, 0.1);
+  border-left-color: #22c55e;
+}
+
+.live-editor-host :deep(aside.callout-warning) {
+  background: rgba(245, 158, 11, 0.12);
+  border-left-color: #f59e0b;
 }
 </style>
