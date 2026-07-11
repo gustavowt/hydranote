@@ -13,6 +13,7 @@
 import { Marked } from 'marked';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
+import { calloutAsideToMarkdown } from './calloutConverter';
 
 const marked = new Marked();
 
@@ -65,6 +66,16 @@ turndown.addRule('mermaidBlock', {
   },
 });
 
+/**
+ * Obsidian callouts rendered as `<aside data-callout="…">` round-trip back to
+ * `> [!type]` markdown.
+ */
+turndown.addRule('calloutAside', {
+  filter: (node) =>
+    node.nodeName === 'ASIDE' && (node as HTMLElement).hasAttribute('data-callout'),
+  replacement: (_content, node) => calloutAsideToMarkdown(node as HTMLElement),
+});
+
 /** Frontmatter (`---\n…\n---`) at the start of a markdown document. */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -86,6 +97,61 @@ export function joinFrontmatter(frontmatter: string, body: string): string {
   if (!frontmatter) return body;
   const fm = frontmatter.endsWith('\n') ? frontmatter : frontmatter + '\n';
   return fm + body;
+}
+
+/** Convert marked GFM checkbox lists into TipTap taskList HTML. */
+export function rewriteTaskListHtml(html: string): string {
+  if (!html.includes('type="checkbox"')) return html;
+
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+
+  for (const ul of Array.from(root.querySelectorAll('ul'))) {
+    const items = Array.from(ul.children).filter((el) => el.tagName === 'LI');
+    const checkboxItems = items.filter((li) => li.querySelector('input[type="checkbox"]'));
+    if (checkboxItems.length === 0) continue;
+
+    const taskUl = doc.createElement('ul');
+    taskUl.setAttribute('data-type', 'taskList');
+
+    for (const li of checkboxItems) {
+      const checkbox = li.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+      if (!checkbox) continue;
+
+      const checked = checkbox.checked || checkbox.hasAttribute('checked');
+      const taskLi = doc.createElement('li');
+      taskLi.setAttribute('data-type', 'taskItem');
+      taskLi.setAttribute('data-checked', checked ? 'true' : 'false');
+
+      const label = doc.createElement('label');
+      const input = doc.createElement('input');
+      input.type = 'checkbox';
+      if (checked) input.setAttribute('checked', 'checked');
+      label.appendChild(input);
+      label.appendChild(doc.createElement('span'));
+
+      const contentDiv = doc.createElement('div');
+      const clone = li.cloneNode(true) as HTMLElement;
+      clone.querySelector('input[type="checkbox"]')?.remove();
+      const inner = clone.innerHTML.trim();
+      if (inner) {
+        contentDiv.innerHTML = inner.startsWith('<') ? inner : `<p>${inner}</p>`;
+      } else {
+        contentDiv.innerHTML = '<p></p>';
+      }
+
+      taskLi.appendChild(label);
+      taskLi.appendChild(contentDiv);
+      taskUl.appendChild(taskLi);
+    }
+
+    if (taskUl.children.length > 0) {
+      ul.replaceWith(taskUl);
+    }
+  }
+
+  return root.innerHTML;
 }
 
 /** Convert markdown body → HTML for Tiptap.setContent(). */
