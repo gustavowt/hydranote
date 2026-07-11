@@ -12,7 +12,7 @@
  */
 
 import { ref } from 'vue';
-import { createFile, indexFileForSearch } from './projectService';
+import { createFile } from './projectService';
 import { detectFileType, getFileBinaryData, convertDOCXToHTML } from './documentProcessor';
 import {
   ingestPdfForSearch,
@@ -25,7 +25,7 @@ import type { ProjectFile, SupportedFileType } from '../types';
  * Stage labels exposed to the UI. The UI only needs three states beyond
  * "indexing"; we map PDF-internal stages to these for a unified label.
  */
-export type IngestionStage = PdfIngestionStage | 'indexing';
+export type IngestionStage = PdfIngestionStage | 'indexing' | 'complete';
 
 export interface IngestionProgressEntry {
   /** Display name for the file (without directory prefix). */
@@ -255,14 +255,7 @@ async function ingestSingleFile(params: IngestSingleFileParams): Promise<Project
       publishProgress(transientId, fileName, 50, 'indexing');
       const projectFile = await createFile(projectId, dropPath, content, fileType);
       await notifyCreated(projectFile);
-      publishProgress(projectFile.id, fileName, 50, 'indexing');
-      try {
-        await indexFileForSearch(projectId, projectFile.id, content, fileType);
-      } catch (err) {
-        // Indexing failure should not undo the createFile; mirror the existing
-        // pattern in `updateFile` where index errors are warnings.
-        console.warn(`Failed to index ${dropPath} for search:`, err);
-      }
+      publishProgress(projectFile.id, fileName, 100, 'complete');
       return projectFile;
     }
 

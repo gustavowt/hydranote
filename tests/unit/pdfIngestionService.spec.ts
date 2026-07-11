@@ -71,6 +71,7 @@ vi.mock('../../src/services/database', () => {
       query: vi.fn(async () => ({ toArray: () => [] })),
     }),
     flushDatabase: vi.fn(async () => {}),
+    deleteFileSearchData: vi.fn(async () => {}),
     createChunks: vi.fn(async (chunks: Chunk[]) => {
       insertedChunks.push(...chunks);
     }),

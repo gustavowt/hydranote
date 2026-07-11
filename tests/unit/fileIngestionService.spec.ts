@@ -76,24 +76,16 @@ describe('fileIngestionService', () => {
     extractFullPdfTextMock.mockReset();
   });
 
-  test('text files: routes through createFile + indexFileForSearch and reports progress', async () => {
+  test('text files: routes through createFile and reports progress', async () => {
     detectFileTypeMock.mockReturnValue('md');
     const created = makeProjectFile('file-1', 'note.md');
     createFileMock.mockResolvedValue(created);
-    indexFileForSearchMock.mockResolvedValue(undefined);
 
     const { ingestExternalFiles, ingestionProgress, _resetIngestionProgressForTests } =
       await import('../../src/services/fileIngestionService');
     _resetIngestionProgressForTests();
 
     const file = makeTextFile('note.md', '# hello', 'text/markdown');
-
-    // Capture an in-flight progress reading at the moment indexFileForSearch
-    // is invoked — by then the row should be at 50% with the persisted id.
-    let midflightSnapshot: ReturnType<typeof ingestionProgress.value.get> | null = null;
-    indexFileForSearchMock.mockImplementation(async () => {
-      midflightSnapshot = ingestionProgress.value.get('file-1');
-    });
 
     const result = await ingestExternalFiles(
       [{ file, relativePath: 'note.md' }],
@@ -105,14 +97,12 @@ describe('fileIngestionService', () => {
     expect(result.failed).toEqual([]);
 
     expect(createFileMock).toHaveBeenCalledWith('proj-1', 'note.md', '# hello', 'md');
-    expect(indexFileForSearchMock).toHaveBeenCalledWith('proj-1', 'file-1', '# hello', 'md');
+    expect(indexFileForSearchMock).not.toHaveBeenCalled();
 
-    expect(midflightSnapshot).toBeTruthy();
-    expect(midflightSnapshot!.fileName).toBe('note.md');
-    expect(midflightSnapshot!.percent).toBeGreaterThanOrEqual(50);
-
-    // The settle delay (600ms) keeps the entry in the map briefly so the UI
-    // can finish animating. We don't wait for it here.
+    const finalSnapshot = ingestionProgress.value.get('file-1');
+    expect(finalSnapshot).toBeTruthy();
+    expect(finalSnapshot!.fileName).toBe('note.md');
+    expect(finalSnapshot!.percent).toBe(100);
   });
 
   test('publishes a ghost row before createFile and clears it once the row exists', async () => {

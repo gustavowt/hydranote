@@ -32,8 +32,8 @@ import type {
 } from 'pdfjs-dist/types/src/display/api';
 import { OPS } from 'pdfjs-dist';
 import {
-  getConnection,
   flushDatabase,
+  deleteFileSearchData,
   createChunks as dbCreateChunks,
   createEmbeddings as dbCreateEmbeddings,
 } from './database';
@@ -238,9 +238,7 @@ export async function ingestPdfFromDocument(
 
   // Stage 4 — persist. Replace any prior chunks/embeddings for this file so
   // re-ingestion is idempotent.
-  const conn = getConnection();
-  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
-  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
+  await deleteFileSearchData(fileId);
 
   await dbCreateChunks(chunks);
 
