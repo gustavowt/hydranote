@@ -1,11 +1,12 @@
 import { type Ref, watch, onUnmounted } from 'vue';
+import { scaffoldTableAfterHeader } from './tableScaffold';
 
 type ContentUpdater = (newValue: string) => void;
 
 export interface ShortcutEntry {
   keys: string;
   description: string;
-  category: 'lists' | 'formatting' | 'editing';
+  category: 'lists' | 'formatting' | 'editing' | 'navigation';
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -29,12 +30,15 @@ export const SHORTCUTS_CATALOG: ShortcutEntry[] = [
   { keys: `${MOD}+Shift+D`, description: 'Duplicate line', category: 'editing' },
   { keys: `${MOD}+Shift+Backspace`, description: 'Delete line', category: 'editing' },
   { keys: `${MOD}+/`, description: 'Show keyboard shortcuts', category: 'editing' },
+
+  { keys: `${MOD}+P`, description: 'Focus file search', category: 'navigation' },
 ];
 
 export const SHORTCUT_CATEGORIES: Record<ShortcutEntry['category'], string> = {
   lists: 'Lists & Blocks',
   formatting: 'Formatting',
   editing: 'Editing',
+  navigation: 'Navigation',
 };
 
 interface UseMarkdownShortcutsOptions {
@@ -51,6 +55,13 @@ const FENCED_CODE_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
 const HR_RE = /^(\s*)([-*_])\2{2,}\s*$/;
 const CHECKBOX_RE = /^(\s*[-*+]\s+\[)([ x])(\].*)$/;
 
+function getLineAt(text: string, pos: number): { line: string; lineStart: number; lineEnd: number } {
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+  let lineEnd = text.indexOf('\n', pos);
+  if (lineEnd === -1) lineEnd = text.length;
+  return { line: text.substring(lineStart, lineEnd), lineStart, lineEnd };
+}
+
 const PAIR_CHARS: Record<string, string> = {
   '*': '*',
   '`': '`',
@@ -63,13 +74,6 @@ const CLOSE_SKIP: Record<string, string> = {
   ']': '[',
   ')': '(',
 };
-
-function getLineAt(text: string, pos: number): { line: string; lineStart: number; lineEnd: number } {
-  const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
-  let lineEnd = text.indexOf('\n', pos);
-  if (lineEnd === -1) lineEnd = text.length;
-  return { line: text.substring(lineStart, lineEnd), lineStart, lineEnd };
-}
 
 function replaceRange(
   textarea: HTMLTextAreaElement,
@@ -98,7 +102,22 @@ function handleEnter(e: KeyboardEvent, textarea: HTMLTextAreaElement): boolean {
   const { selectionStart, selectionEnd, value } = textarea;
   if (selectionStart !== selectionEnd) return false;
 
-  const { line, lineStart } = getLineAt(value, selectionStart);
+  const { line, lineStart, lineEnd } = getLineAt(value, selectionStart);
+
+  // Table header scaffolding
+  const nextLineStart = lineEnd < value.length && value[lineEnd] === '\n' ? lineEnd + 1 : -1;
+  let nextLine = '';
+  if (nextLineStart >= 0) {
+    const nextLineEnd = value.indexOf('\n', nextLineStart);
+    nextLine = value.substring(nextLineStart, nextLineEnd === -1 ? value.length : nextLineEnd);
+  }
+  const tableScaffold = scaffoldTableAfterHeader(line, selectionStart, nextLine || undefined);
+  if (tableScaffold) {
+    e.preventDefault();
+    replaceRange(textarea, selectionStart, selectionStart, tableScaffold.insertion);
+    setCursor(textarea, tableScaffold.cursor);
+    return true;
+  }
 
   // Ordered list
   const orderedMatch = line.match(ORDERED_LIST_RE);
