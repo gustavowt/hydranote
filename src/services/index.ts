@@ -4,8 +4,8 @@
  */
 
 // Database
-export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles, updateProjectStatus, upsertCalendarEvent, getCalendarEventsByDateRange, getCalendarEventByGoogleId, getCalendarEventsForDate, deleteCalendarEventsByCalendarId, getAllCalendarEvents } from './database';
-export type { FuzzySearchResult, DBCalendarEvent } from './database';
+export { initializeDatabase, getConnection, flushDatabase, fuzzySearchFiles, updateProjectStatus, upsertCalendarEvent, getCalendarEventsByDateRange, getCalendarEventByGoogleId, getCalendarEventsForDate, deleteCalendarEventsByCalendarId, getAllCalendarEvents, countNoteDates, getNoteDatesByRange, formatDatabaseErrorMessage } from './database';
+export type { FuzzySearchResult, DBCalendarEvent, DBNoteDate } from './database';
 
 // Project Service
 export {
@@ -200,6 +200,7 @@ export {
   computeContentHash,
   detectStaleEmbeddings,
   reindexStaleFiles,
+  reindexFilesMissingChunks,
   reindexAllFiles,
   // Hugging Face local embeddings (Electron only)
   isHuggingFaceLocalAvailable,
@@ -458,6 +459,30 @@ export {
   formatDetectedDate,
   getRelativeTime,
 } from './dateDetectionService';
+
+// Note Date Index Service (Timeline)
+export {
+  reindexFileDates,
+  clearFileDates,
+  queryTimelineNoteDates,
+  ensureNoteDatesBackfill,
+  onNoteDatesChanged,
+  detectedDatesToRows,
+} from './dateIndexService';
+
+// Note Link Index Service (File Map)
+export {
+  reindexFileLinks,
+  clearFileLinks,
+  queryResolvedNoteLinks,
+  ensureNoteLinksBackfill,
+  onNoteLinksChanged,
+  detectedLinksToRows,
+} from './linkIndexService';
+
+export {
+  detectLinks,
+} from './linkDetectionService';
 
 // Google Calendar Service
 export {

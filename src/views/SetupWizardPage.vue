@@ -22,7 +22,7 @@
       </div>
 
       <!-- Step Content -->
-      <div class="step-content">
+      <div class="step-content" ref="stepContentRef">
         <!-- Step 1: Welcome -->
         <div v-if="currentStep === 0" class="step-panel welcome-step">
           <div class="step-icon-container">
@@ -129,8 +129,10 @@
 
           <div class="config-section">
             <div class="field-group">
-              <label>Format Instructions</label>
+              <label for="wizard-format-instructions">Format Instructions</label>
               <textarea
+                id="wizard-format-instructions"
+                name="wizard-format-instructions"
                 v-model="llmSettings.noteSettings.formatInstructions"
                 placeholder="e.g., 'Always use bullet points', 'Include a summary at the top', 'Write in Portuguese'"
                 rows="4"
@@ -141,8 +143,10 @@
             </div>
 
             <div class="field-group">
-              <label>Project Rotation Instructions</label>
+              <label for="wizard-project-rotation">Project Rotation Instructions</label>
               <textarea
+                id="wizard-project-rotation"
+                name="wizard-project-rotation"
                 v-model="llmSettings.noteSettings.projectRotationInstructions"
                 placeholder="e.g., 'Always use the Work project for meeting notes', 'Create a new project for each client'"
                 rows="3"
@@ -153,8 +157,10 @@
             </div>
 
             <div class="field-group">
-              <label>Directory Rotation Instructions</label>
+              <label for="wizard-directory-rotation">Directory Rotation Instructions</label>
               <textarea
+                id="wizard-directory-rotation"
+                name="wizard-directory-rotation"
                 v-model="llmSettings.noteSettings.directoryRotationInstructions"
                 placeholder="e.g., 'Put all meeting notes in meetings/', 'Never create new directories'"
                 rows="3"
@@ -165,8 +171,10 @@
             </div>
 
             <div class="field-group">
-              <label>Default Notes Directory</label>
+              <label for="wizard-default-directory">Default Notes Directory</label>
               <input
+                id="wizard-default-directory"
+                name="wizard-default-directory"
                 v-model="llmSettings.noteSettings.defaultDirectory"
                 type="text"
                 placeholder="notes"
@@ -240,7 +248,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { IonPage, IonIcon, toastController } from '@ionic/vue';
 import {
@@ -288,6 +296,15 @@ const steps = [
 ];
 
 const currentStep = ref(0);
+const stepContentRef = ref<HTMLElement | null>(null);
+
+function scrollStepToTop() {
+  nextTick(() => {
+    if (stepContentRef.value) {
+      stepContentRef.value.scrollTop = 0;
+    }
+  });
+}
 
 // Settings state
 const llmSettings = ref<LLMSettings>({ ...DEFAULT_LLM_SETTINGS });
@@ -327,6 +344,7 @@ function nextStep() {
   if (currentStep.value < steps.length - 1) {
     saveCurrentStepSettings();
     currentStep.value++;
+    scrollStepToTop();
   }
 }
 
@@ -334,6 +352,7 @@ function previousStep() {
   if (currentStep.value > 0) {
     saveCurrentStepSettings();
     currentStep.value--;
+    scrollStepToTop();
   }
 }
 
@@ -550,6 +569,8 @@ async function handleSelectDirectory() {
   overflow-x: hidden;
   min-height: 0;
   padding-bottom: 16px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent 100%);
 }
 
 .step-panel {
@@ -580,8 +601,8 @@ async function handleSelectDirectory() {
 }
 
 .app-logo {
-  width: 100px;
-  height: 100px;
+  width: 80px;
+  height: 80px;
   object-fit: contain;
 }
 
@@ -621,7 +642,7 @@ async function handleSelectDirectory() {
   background: var(--hn-bg-surface);
   border: 1px solid var(--hn-border-default);
   border-radius: 12px;
-  padding: 24px;
+  padding: 16px;
   text-align: center;
   transition: all 0.2s ease;
 }

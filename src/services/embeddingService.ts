@@ -481,6 +481,14 @@ export async function testIndexerConnection(): Promise<{
   message: string;
   provider: string;
 }> {
+  if (!isIndexerConfigured()) {
+    return {
+      success: false,
+      message: 'Indexer is not configured. Add an API key or select a model in Settings.',
+      provider: getIndexerProviderName(),
+    };
+  }
+
   try {
     // Generate a test embedding
     const testText = "This is a test sentence for embedding generation.";
@@ -598,6 +606,50 @@ export async function detectStaleEmbeddings(
   }
 
   return staleFiles;
+}
+
+/**
+ * Re-index md/txt files that have content but no search chunks (legacy imports).
+ */
+export async function reindexFilesMissingChunks(): Promise<{
+  reindexed: number;
+  failed: number;
+}> {
+  const { getConnection, flushDatabase } = await import('./database');
+  const { reindexFile } = await import('./projectService');
+  const conn = getConnection();
+
+  const result = await conn.query(`
+    SELECT f.id, f.content, f.type
+    FROM files f
+    LEFT JOIN chunks c ON c.file_id = f.id
+    WHERE f.type IN ('md', 'txt')
+      AND f.content IS NOT NULL
+      AND TRIM(f.content) != ''
+      AND c.id IS NULL
+  `);
+
+  let reindexed = 0;
+  let failed = 0;
+
+  for (const row of result.toArray()) {
+    const fileId = row.id as string;
+    const content = row.content as string;
+    const fileType = row.type as 'md' | 'txt';
+    try {
+      await reindexFile(fileId, content, fileType);
+      reindexed++;
+    } catch (err) {
+      failed++;
+      console.warn('Failed to index legacy file:', fileId, err);
+    }
+  }
+
+  if (reindexed > 0) {
+    await flushDatabase();
+  }
+
+  return { reindexed, failed };
 }
 
 /**
