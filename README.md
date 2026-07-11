@@ -50,7 +50,9 @@
 - **Multi-Provider AI Chat** — Connect to OpenAI, Anthropic (Claude), Google (Gemini), Ollama, or run models locally via Hugging Face GGUF
 - **Semantic Search** — Vector embeddings index your documents for meaning-based retrieval across entire projects
 - **Document Ingestion** — Import PDF, DOCX, TXT, Markdown, and images (with OCR via Tesseract.js)
-- **Markdown Editor** — Full editor with edit, split, and preview modes, Mermaid diagram support, and syntax highlighting
+- **Markdown Editor** — Outline navigation, Obsidian-style callouts and slash commands, paste images into the project, table editing, and idle auto-save — with edit, split, Live, and preview modes
+- **File Map** — Interactive force-directed graph of `[[wikilinks]]` across a project; click a node to open the linked file
+- **Timeline** — Surface dates mentioned in notes and browse the project chronologically, with live updates as you write
 - **AI Tool Execution** — The LLM can read, search, summarize, write, update files, and perform web research on your behalf
 - **File System Sync** — Bidirectional sync with local directories using the File System Access API
 - **Project Organization** — Group files into projects with hierarchical folder structures and drag-and-drop
@@ -58,6 +60,7 @@
 - **Export** — Generate and download PDF, DOCX, or Markdown from any document
 - **Local Models (Desktop)** — Run GGUF models offline with GPU acceleration on macOS (Metal), Windows/Linux (CUDA, Vulkan)
 - **MCP Server (Desktop)** — Expose your workspace to external LLM tools like Claude Desktop
+- **Auto Updates (Desktop)** — Check for new versions and install updates from inside the app
 - **Web Research** — AI-powered web search with caching and semantic indexing of results
 
 ---

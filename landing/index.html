@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>HydraNote — AI-Powered Document Intelligence</title>
-  <meta name="description" content="Organize projects, ingest documents, chat with your files using multiple AI providers, generate images with AI, and create rich Markdown notes — all from a single workspace." />
+  <meta name="description" content="Organize projects, chat with your files using multiple AI providers, explore linked notes with File Map and Timeline, and write in a rich Markdown editor — all from a single workspace." />
   <meta property="og:title" content="HydraNote — AI-Powered Document Intelligence" />
-  <meta property="og:description" content="Organize projects, ingest documents, chat with your files using multiple AI providers, generate images with AI, and create rich Markdown notes." />
+  <meta property="og:description" content="Organize projects, chat with your files using multiple AI providers, explore linked notes with File Map and Timeline, and write in a rich Markdown editor." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://gustavowt.github.io/hydranote/" />
   <link rel="icon" type="image/png" href="favicon.png" />
@@ -698,8 +698,8 @@
       <span class="gradient-text">Document Workspace</span>
     </h1>
     <p class="hero-sub">
-      Organize projects, ingest documents, chat with your files using multiple AI providers,
-      generate images with AI, and create rich Markdown notes — all from a single workspace.
+      Organize projects, ingest documents, and chat with your files using multiple AI providers.
+      Link notes with wikilinks, explore them in File Map and Timeline, and write in a first-class Markdown editor.
     </p>
     <div class="hero-actions">
       <a href="#download" class="btn btn-primary">
@@ -723,6 +723,18 @@
           <div class="carousel-slide">
             <img src="screenshot-workspace.png" alt="HydraNote workspace with Markdown editor and AI formatting" loading="lazy" />
             <span class="slide-label">Workspace — Markdown editor with AI formatting</span>
+          </div>
+          <div class="carousel-slide">
+            <img src="screenshot-file-map.png" alt="File Map showing linked notes across a project" loading="lazy" />
+            <span class="slide-label">File Map — Explore how notes connect via [[wikilinks]]</span>
+          </div>
+          <div class="carousel-slide">
+            <img src="screenshot-timeline.png" alt="Timeline view of dated references across notes" loading="lazy" />
+            <span class="slide-label">Timeline — Browse dated references across your project</span>
+          </div>
+          <div class="carousel-slide">
+            <img src="screenshot-editor.png" alt="Markdown editor with document outline navigation" loading="lazy" />
+            <span class="slide-label">Editor — Outline navigation, callouts, and slash commands</span>
           </div>
           <div class="carousel-slide">
             <img src="screenshot-ai-providers.png" alt="AI provider selection with local model support" loading="lazy" />
@@ -780,7 +792,17 @@
       <div class="feature-card">
         <div class="feature-icon purple">&#x270f;&#xfe0f;</div>
         <h3>Markdown Editor</h3>
-        <p>Full editor with edit, split, and preview modes. Mermaid diagrams, syntax highlighting, and export.</p>
+        <p>Outline navigation, Obsidian-style callouts and slash commands, paste images into the project, and practical table editing — with idle auto-save.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon teal">&#x1f5fa;&#xfe0f;</div>
+        <h3>File Map</h3>
+        <p>See how your notes connect. A force-directed map of [[wikilinks]] across the project — click a node to open the file.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">&#x1f4c5;</div>
+        <h3>Timeline</h3>
+        <p>Surface dates mentioned in your notes and browse the project by time, with live updates as you write.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon teal">&#x1f6e0;&#xfe0f;</div>
@@ -795,7 +817,7 @@
       <div class="feature-card">
         <div class="feature-icon teal">&#x1f4ca;</div>
         <h3>Version History</h3>
-        <p>Track every file change with diff-based version storage. Restore any previous version.</p>
+        <p>Diff-based version storage with restore for any previous revision.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon green">&#x1f310;</div>
@@ -810,7 +832,7 @@
       <div class="feature-card">
         <div class="feature-icon teal">&#x1f517;</div>
         <h3>External Integrations</h3>
-        <p>Connect Google Meet, Zoom, and Google Calendar to capture meeting notes, transcripts, and event-linked reminders.</p>
+        <p>Connect Google Meet, Zoom, and Google Calendar for meeting notes and event-linked reminders.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon purple">&#x1f3a4;</div>
@@ -860,7 +882,7 @@
     <div class="section-header">
       <span class="section-label">Download</span>
       <h2 class="section-title">Get HydraNote for your platform</h2>
-      <p class="section-desc">Native desktop app with GPU-accelerated local models, file system sync, and MCP server.</p>
+      <p class="section-desc">Native desktop app with GPU-accelerated local models, file system sync, MCP server, and automatic update checks.</p>
     </div>
     <div class="download-cards">
       <!-- macOS -->
@@ -889,6 +911,7 @@
       </div>
     </div>
     <p class="download-note">
+      Desktop builds check for new versions and prompt you to update without leaving the app.
       Or browse <a href="https://github.com/gustavowt/hydranote/releases" target="_blank">all releases</a> for previous versions and checksums.
     </p>
   </div>
