@@ -6,25 +6,35 @@
         ref="inputRef"
         v-model="searchQuery"
         type="text"
-        placeholder="Search files..."
+        placeholder="Search files by name…"
         class="search-input"
+        role="combobox"
+        aria-autocomplete="list"
+        :aria-expanded="showDropdown && filteredResults.length > 0"
+        aria-controls="search-results-listbox"
+        :aria-activedescendant="activeOptionId"
         @input="handleInput"
         @keydown="handleKeydown"
         @focus="handleFocus"
         @blur="handleBlur"
       />
-      <ion-icon
+      <button
         v-if="searchQuery"
-        :icon="closeCircleOutline"
-        class="clear-icon"
+        type="button"
+        class="clear-icon-btn"
+        aria-label="Clear search"
         @click="clearSearch"
-      />
+      >
+        <ion-icon :icon="closeCircleOutline" class="clear-icon" />
+      </button>
     </div>
 
     <!-- Dropdown Results -->
     <Teleport to="body">
       <div
         v-if="showDropdown && (filteredResults.length > 0 || isLoading)"
+        id="search-results-listbox"
+        role="listbox"
         class="search-dropdown"
         :style="dropdownStyle"
       >
@@ -43,6 +53,9 @@
             <div
               v-for="(item, index) in filteredProjects"
               :key="'project-' + item.id"
+              :id="'search-option-project-' + item.id"
+              role="option"
+              :aria-selected="index === selectedIndex"
               class="search-result-item is-project"
               :class="{ 'is-selected': index === selectedIndex }"
               @click="selectProject(item)"
@@ -75,6 +88,9 @@
             <div
               v-for="(item, index) in filteredFiles"
               :key="'file-' + item.id"
+              :id="'search-option-file-' + item.id"
+              role="option"
+              :aria-selected="index + filteredProjects.length === selectedIndex"
               class="search-result-item"
               :class="{
                 'is-selected':
@@ -125,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { IonIcon, IonSpinner } from "@ionic/vue";
 import {
   searchOutline,
@@ -149,12 +165,6 @@ interface FileItem {
   projectName: string;
 }
 
-interface SearchResult {
-  item: FileItem | Project;
-  type: "file" | "project";
-  score: number;
-}
-
 // Emits
 const emit = defineEmits<{
   (e: "select-file", file: FileItem): void;
@@ -176,6 +186,10 @@ const allProjects = ref<Project[]>([]);
 let dataLoaded = false;
 
 // Fuzzy match scoring function
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[-_]+/g, ' ');
+}
+
 function fuzzyScore(text: string, query: string): number {
   const textLower = text.toLowerCase();
   const queryLower = query.toLowerCase();
@@ -247,6 +261,7 @@ const filteredFiles = computed(() => {
       item: file,
       score: Math.max(
         fuzzyScore(file.name, query),
+        fuzzyScore(normalizeSearchText(file.name), query),
         fuzzyScore(file.path, query) * 0.8,
         fuzzyScore(file.projectName, query) * 0.3,
       ),
@@ -259,6 +274,18 @@ const filteredFiles = computed(() => {
 
 const filteredResults = computed(() => {
   return [...filteredProjects.value, ...filteredFiles.value];
+});
+
+const activeOptionId = computed(() => {
+  if (!showDropdown.value || filteredResults.value.length === 0) return undefined;
+  const index = selectedIndex.value;
+  if (index < filteredProjects.value.length) {
+    const project = filteredProjects.value[index];
+    return project ? `search-option-project-${project.id}` : undefined;
+  }
+  const fileIndex = index - filteredProjects.value.length;
+  const file = filteredFiles.value[fileIndex];
+  return file ? `search-option-file-${file.id}` : undefined;
 });
 
 // Dropdown positioning
@@ -516,13 +543,22 @@ defineExpose({
 .clear-icon {
   color: var(--hn-text-muted);
   font-size: 18px;
-  cursor: pointer;
-  margin-left: 8px;
   flex-shrink: 0;
   transition: color 0.2s;
 }
 
-.clear-icon:hover {
+.clear-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-left: 8px;
+  cursor: pointer;
+}
+
+.clear-icon-btn:hover .clear-icon {
   color: var(--hn-text-secondary);
 }
 </style>

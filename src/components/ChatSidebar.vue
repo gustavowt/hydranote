@@ -12,44 +12,57 @@
       <!-- Unified Compact Header -->
       <div class="chat-header">
         <!-- Left: Project/Scope selector -->
-        <div class="scope-selector" @click="showScopeDropdown = !showScopeDropdown">
+        <button
+          type="button"
+          class="scope-selector"
+          :aria-expanded="showScopeDropdown"
+          aria-haspopup="listbox"
+          :aria-label="`Chat scope: ${currentScopeName}`"
+          @click="showScopeDropdown = !showScopeDropdown"
+        >
           <span class="scope-icon">{{ isGlobalMode ? '🌐' : '📁' }}</span>
           <span class="scope-name">{{ currentScopeName }}</span>
           <ion-icon :icon="chevronDownOutline" class="scope-chevron" />
           
           <!-- Scope Dropdown -->
-          <div v-if="showScopeDropdown" class="scope-dropdown" @click.stop>
-            <div 
-              class="scope-item" 
+          <div v-if="showScopeDropdown" class="scope-dropdown" role="listbox" @click.stop>
+            <button
+              type="button"
+              class="scope-item"
+              role="option"
+              :aria-selected="isGlobalMode"
               :class="{ active: isGlobalMode }"
               @click="selectScope('__all__')"
             >
               <span class="scope-item-icon">🌐</span>
               <span>All Projects</span>
-            </div>
+            </button>
             <div class="scope-divider"></div>
-            <div 
-              v-for="project in projects" 
+            <button
+              v-for="project in projects"
               :key="project.id"
+              type="button"
               class="scope-item"
+              role="option"
+              :aria-selected="selectedScope === project.id"
               :class="{ active: selectedScope === project.id }"
               @click="selectScope(project.id)"
             >
               <span class="scope-item-icon">📁</span>
               <span>{{ project.name }}</span>
-            </div>
+            </button>
           </div>
-        </div>
+        </button>
 
         <!-- Right: Action buttons -->
         <div class="header-actions">
-          <button class="header-action-btn" @click.stop="handleNewChat" title="New Chat">
+          <button class="header-action-btn" @click.stop="handleNewChat" title="New Chat" aria-label="New chat">
             <ion-icon :icon="addOutline" />
           </button>
-          <button class="header-action-btn" @click.stop="toggleHistoryDropdown" title="Chat History" :class="{ active: showHistoryDropdown }">
+          <button class="header-action-btn" @click.stop="toggleHistoryDropdown" title="Chat History" aria-label="Chat history" :class="{ active: showHistoryDropdown }">
             <ion-icon :icon="timeOutline" />
           </button>
-          <button class="header-action-btn" @click.stop="toggleCollapse" title="Collapse">
+          <button class="header-action-btn" @click.stop="toggleCollapse" title="Collapse" aria-label="Collapse chat panel">
             <ion-icon :icon="chevronForwardOutline" />
           </button>
         </div>
@@ -85,7 +98,8 @@
           <div v-if="messages.length === 0" class="welcome-message">
             <ion-icon :icon="sparklesOutline" class="welcome-icon" />
             <p>{{ isGlobalMode ? 'Ask questions across all projects' : 'Ask questions about your documents' }}</p>
-            <div class="quick-actions">
+            <p v-if="!isConfigured()" class="configure-ai-hint">Configure an AI provider in Settings</p>
+            <div v-else class="quick-actions">
               <button 
                 v-for="action in currentQuickActions" 
                 :key="action.text" 
@@ -776,9 +790,10 @@ const globalQuickActions = [
   { text: 'Create a new project', label: 'New project', icon: addOutline },
 ];
 
-const currentQuickActions = computed(() => 
-  isGlobalMode.value ? globalQuickActions : projectQuickActions
-);
+const currentQuickActions = computed(() => {
+  if (!isConfigured()) return [];
+  return isGlobalMode.value ? globalQuickActions : projectQuickActions;
+});
 
 // Handler for selection card toggle events (from rendered HTML)
 function handleToggleSelection(event: CustomEvent<string>) {
@@ -794,6 +809,10 @@ function handleToggleSelection(event: CustomEvent<string>) {
 
 // Close attachment overlay on Escape key
 function handleEscapeKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showScopeDropdown.value) {
+    showScopeDropdown.value = false;
+    return;
+  }
   if (event.key === 'Escape' && activeAttachment.value) {
     activeAttachment.value = null;
   }
@@ -1330,7 +1349,12 @@ async function executeAutoExecutePlan(plan: ExecutionPlan) {
     // Tool outputs are already visible in the collapsible tool log UI
     if (result.response?.trim()) {
       pendingFinalAnswer.value = result.response;
-      // Capture tool executions for persistence with the message
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    } else if (result.formattedToolOutputs?.length) {
+      pendingFinalAnswer.value = result.formattedToolOutputs.join('\n\n');
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    } else if (result.toolResults?.some((r) => r.success)) {
+      pendingFinalAnswer.value = 'Done.';
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
 
@@ -1966,7 +1990,12 @@ async function handleExecutePlan() {
     // Tool outputs are already visible in the collapsible tool log UI
     if (result.response?.trim()) {
       pendingFinalAnswer.value = result.response;
-      // Capture tool executions for persistence with the message
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    } else if (result.formattedToolOutputs?.length) {
+      pendingFinalAnswer.value = result.formattedToolOutputs.join('\n\n');
+      pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
+    } else if (result.toolResults?.some((r) => r.success)) {
+      pendingFinalAnswer.value = 'Done.';
       pendingToolExecutions.value = toolLogs.value.map(toolLogToRecord);
     }
 
@@ -2757,6 +2786,7 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput,
   gap: 6px;
   padding: 5px 10px;
   background: var(--hn-bg-elevated);
+  border: none;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -2764,6 +2794,9 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput,
   min-width: 120px;
   position: relative;
   z-index: 10;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
 .scope-selector:hover {
@@ -2811,11 +2844,15 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput,
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 8px 12px;
+  border: none;
+  background: transparent;
   cursor: pointer;
   font-size: 0.85rem;
   color: var(--hn-text-primary);
   transition: background 0.15s ease;
+  text-align: left;
 }
 
 .scope-item:hover {
@@ -2995,6 +3032,13 @@ defineExpose({ selectProject, selectGlobalMode, insertSelection, focusChatInput,
 .welcome-message p {
   margin: 0 0 16px;
   font-size: 0.9rem;
+}
+
+.configure-ai-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--hn-text-muted);
+  text-align: center;
 }
 
 /* Quick Actions - using native buttons for better alignment */

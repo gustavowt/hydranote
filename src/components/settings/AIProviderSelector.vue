@@ -71,15 +71,17 @@
       <h3 v-if="!compact" class="config-title">OpenAI Configuration</h3>
       <div class="config-fields">
         <div class="field-group">
-          <label>API Key</label>
+          <label for="openai-api-key">API Key</label>
           <div class="input-wrapper">
             <input
+              id="openai-api-key"
+              name="openai-api-key"
               :value="modelValue.openai.apiKey"
               @input="updateNestedField('openai', 'apiKey', ($event.target as HTMLInputElement).value)"
               :type="showApiKey ? 'text' : 'password'"
               placeholder="sk-..."
             />
-            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
               <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
             </button>
           </div>
@@ -89,8 +91,10 @@
         </div>
 
         <div class="field-group">
-          <label>Model</label>
+          <label for="openai-model">Model</label>
           <select
+            id="openai-model"
+            name="openai-model"
             :value="modelValue.openai.model"
             @change="updateNestedField('openai', 'model', ($event.target as HTMLSelectElement).value)"
           >
@@ -119,7 +123,7 @@
               <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
               <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
             </optgroup>
-            <optgroup v-if="!compact" label="Previous">
+            <optgroup label="Previous">
               <option value="gpt-4o">GPT-4o</option>
               <option value="gpt-4o-mini">GPT-4o Mini</option>
             </optgroup>
@@ -151,7 +155,7 @@
               :type="showApiKey ? 'text' : 'password'"
               placeholder="sk-ant-..."
             />
-            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
               <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
             </button>
           </div>
@@ -200,7 +204,7 @@
               :type="showApiKey ? 'text' : 'password'"
               placeholder="AIza..."
             />
-            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+            <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
               <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
             </button>
           </div>
@@ -638,7 +642,7 @@
       
       <div v-if="connectionStatus" :class="['connection-status', connectionStatus.success ? 'success' : 'error']">
         <ion-icon :icon="connectionStatus.success ? checkmarkCircleOutline : closeCircleOutline" />
-        <span>{{ connectionStatus.message }}</span>
+        <span>{{ connectionStatus.message || (connectionStatus.success ? 'Connection successful' : 'Connection failed') }}</span>
       </div>
     </div>
 
@@ -787,7 +791,7 @@ const mainProviders: ProviderConfig[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    description: 'GPT-5.5, GPT-5.4, o4-mini',
+    description: 'GPT-5 Mini, GPT-5.5, o4-mini',
     iconComponent: OpenAiIcon,
   },
   {

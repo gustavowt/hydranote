@@ -8,6 +8,11 @@
     </button>
 
     <div v-if="!collapsible || expanded" class="indexer-content">
+      <div v-if="!indexerConfigured" class="indexer-warning-banner">
+        <ion-icon :icon="warningOutline" />
+        <span>Search embeddings are not configured. Semantic search will use a fallback until you add an API key or model.</span>
+      </div>
+
       <p v-if="compact" class="indexer-description">
         Choose a separate provider for document embeddings. By default, we'll use the same provider as your AI chat.
       </p>
@@ -81,15 +86,17 @@
       <div v-if="modelValue.provider === 'openai'" class="config-panel" :class="{ compact }">
         <div class="config-fields">
           <div class="field-group">
-            <label>API Key</label>
+            <label for="indexer-openai-api-key">API Key</label>
             <div class="input-wrapper">
               <input
+                id="indexer-openai-api-key"
+                name="indexer-openai-api-key"
                 :value="modelValue.openai.apiKey"
                 @input="updateField('openai', 'apiKey', ($event.target as HTMLInputElement).value)"
                 :type="showApiKey ? 'text' : 'password'"
                 :placeholder="compact ? 'sk-... (can be same as AI provider)' : 'sk-...'"
               />
-              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
                 <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
               </button>
             </div>
@@ -111,8 +118,10 @@
           </div>
 
           <div v-if="!compact" class="field-group">
-            <label>Embedding Model</label>
+            <label for="indexer-openai-model">Embedding Model</label>
             <select
+              id="indexer-openai-model"
+              name="indexer-openai-model"
               :value="modelValue.openai.model"
               @change="updateField('openai', 'model', ($event.target as HTMLSelectElement).value)"
             >
@@ -127,15 +136,17 @@
       <div v-if="modelValue.provider === 'gemini'" class="config-panel" :class="{ compact }">
         <div class="config-fields">
           <div class="field-group">
-            <label>API Key</label>
+            <label for="indexer-gemini-api-key">API Key</label>
             <div class="input-wrapper">
               <input
+                id="indexer-gemini-api-key"
+                name="indexer-gemini-api-key"
                 :value="modelValue.gemini.apiKey"
                 @input="updateField('gemini', 'apiKey', ($event.target as HTMLInputElement).value)"
                 :type="showApiKey ? 'text' : 'password'"
                 :placeholder="compact ? 'AIza... (can be same as AI provider)' : 'AIza...'"
               />
-              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
                 <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
               </button>
             </div>
@@ -229,7 +240,7 @@
                 :type="showApiKey ? 'text' : 'password'"
                 placeholder="ollama_..."
               />
-              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button" :aria-label="showApiKey ? 'Hide API key' : 'Show API key'">
                 <ion-icon :icon="showApiKey ? eyeOffOutline : eyeOutline" />
               </button>
             </div>
@@ -367,7 +378,8 @@ import { OpenAiIcon, GeminiIcon, OllamaIcon, HuggingFaceIcon } from '@/icons';
 import { 
   isHuggingFaceLocalAvailable, 
   getHuggingFaceLocalStatus, 
-  onHuggingFaceLocalStatusChange 
+  onHuggingFaceLocalStatusChange,
+  isIndexerConfigured,
 } from '@/services';
 
 // Props
@@ -426,6 +438,7 @@ const emit = defineEmits<{
 const showApiKey = ref(false);
 const expanded = ref(false);
 const showAdvancedIndexer = ref(false);
+const indexerConfigured = computed(() => isIndexerConfigured());
 
 // Internal state for when props are not provided
 const internalHfLocalAvailable = ref(false);
@@ -636,6 +649,27 @@ function copyFromAIProvider(provider: 'openai' | 'gemini') {
   color: var(--hn-text-secondary);
   margin: 0 0 16px 0;
   line-height: 1.5;
+}
+
+.indexer-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--hn-border-default);
+  background: rgba(255, 193, 7, 0.08);
+  color: var(--hn-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.indexer-warning-banner ion-icon {
+  flex-shrink: 0;
+  color: #ffc107;
+  font-size: 1.1rem;
+  margin-top: 2px;
 }
 
 /* Provider Cards */
