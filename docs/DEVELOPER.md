@@ -343,6 +343,8 @@ Main layout orchestrating three-panel workspace. Routes files to appropriate edi
 ### MarkdownEditor (`MarkdownEditor.vue`)
 Full markdown editor with edit, split, **Live** (hybrid), and preview modes, Mermaid diagram support, inline saving, version history access.
 
+**Auto-save:** For existing files, idle auto-save runs after **10 seconds** without typing when content has changed. Auto-save persists via `updateFile(..., { createVersion: false })` (no version-history entry). Manual Save still creates versions. Inline header status shows “Saving…” / “Saved” / “Save failed”. New unsaved notes are excluded; viewing an old version blocks auto-save until restore.
+
 **Default mode:** Existing `.md` files open in **Live** (`viewMode === 'hybrid'`); brand-new notes start in `edit` so the user can type raw markdown.
 
 **Live mode:** `MarkdownLiveEditor.vue` mounts a Tiptap editor with the same extensions as `RichTextEditor.vue` (StarterKit, Link, Image, Table*, TaskList/Item, CodeBlockLowlight — extended with a Vue node view (`CodeBlockNodeView.vue`) that overlays a copy-to-clipboard button on each code block without affecting HTML serialization) plus a custom **`MermaidBlock`** node (`MermaidBlockNodeView.vue`) that renders the diagram inline and toggles to a textarea on click for source editing (⌘/Ctrl+Enter to apply, Esc to cancel). YAML frontmatter (`---\n…\n---`) is split off via `splitFrontmatter` (in `services/markdownConverter.ts`) before sending the body to Tiptap and re-prepended on every emit, so it round-trips losslessly.
@@ -385,6 +387,30 @@ Composable that attaches to the **plain textarea** in edit and split modes (not 
 - **Formatting shortcuts**: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link), Cmd/Ctrl+Shift+K (inline code). Toggles wrap/unwrap on selected text or inserts placeholder at cursor.
 - **Shortcuts catalog (Cmd/Ctrl+/)**: Opens a modal listing all available keyboard shortcuts, organized by category. Also accessible via a keyboard icon in the editor header next to the filename. The catalog data (`SHORTCUTS_CATALOG`) and category labels (`SHORTCUT_CATEGORIES`) are exported from the composable as a single source of truth.
 
+**Slash commands (`/`):**
+Type `/` at the start of a line or after whitespace to open an insert-block menu in **all editor modes** (edit, split, and Live). Filter by typing (e.g. `/h2`, `/todo`, `/mermaid`). Arrow keys navigate; Enter inserts; Esc dismisses. Command registry lives in `src/composables/markdownSlashCommands.ts`; Live mode uses `SlashCommandExtension` (Tiptap); edit/split use `useEditorSlashCommands`.
+
+**Wikilink autocomplete (`[[`):**
+Type `[[` to open a file picker (project-scoped when a project is selected, otherwise global). Arrow keys navigate; Enter inserts `[[path/to/file]]`; Esc dismisses. Reuses `getProjectFilesForAutocomplete` / `getAllFilesForAutocomplete` from `projectService.ts`. Live mode: `WikilinkAutocompleteExtension`; edit/split: `useEditorWikilinkAutocomplete`.
+
+**Document outline:**
+When the note has headings, a collapsible outline rail appears on the left (toggle via the list icon in the header). Click a heading to jump: edit/split scroll the textarea to the markdown offset; Live selects the matching Tiptap heading; preview/split-preview scroll via slugified `id` attributes injected into rendered headings. Outline updates are debounced (~200ms).
+
+**Obsidian callouts:**
+Author with `> [!note]`, `> [!tip]`, or `> [!warning]` markdown, or insert via `/note`, `/tip`, `/warning` slash commands. Preview/split use `rewriteCalloutHtml()` after `marked` parse; Live uses a TipTap `Callout` node with matching styles. Round-trip via turndown rule `calloutAside` in `markdownConverter.ts`.
+
+**Paste image:**
+Paste PNG/JPEG/WebP from the clipboard in edit, split, or Live mode to save the image as a project file (`images/pasted-{timestamp}.{ext}` by default) and insert `![pasted image](path)` at the cursor. Shared helper: `src/services/editorImagePaste.ts` (also used by chat image insertion). Requires an open project; otherwise a toast is shown and the note is unchanged.
+
+**Table editing:**
+- **Edit/split:** After a table header row (`| col | col |`), pressing Enter scaffolds the separator and first body row (`tableScaffold.ts` via `useMarkdownShortcuts`).
+- **Live:** When the cursor is inside a table, a floating bubble menu offers add/remove row/column and delete table (`MarkdownTableBubbleMenu.vue`).
+
+**Unsaved-changes guard:**
+When switching files, starting a new note, or changing project via search while the editor is dirty, `WorkspacePage` prompts **Save / Discard / Cancel**. Idle auto-save (10s) still runs for existing files; this guard prevents silent data loss on navigation. `MarkdownEditor` exposes `saveCurrent`, `discardChanges`, and `hasChanges` for the parent.
+
+**Tests:** `tests/unit/useMarkdownShortcuts.spec.ts` covers the smart-editing smoke matrix (auto-pair, list continuation, formatting shortcuts).
+
 ### FormatStudio (`FormatStudio.vue`)
 Iterative AI formatting modal. Users can format a note, preview the result as rendered markdown, request refinements via follow-up prompts, and navigate between versions before applying.
 
@@ -420,7 +446,7 @@ Hierarchical project/file navigator with drag-and-drop between projects. Droppin
 Read-only PDF viewer loading from file system path (Electron only).
 
 ### RichTextEditor (`RichTextEditor.vue`)
-Tiptap WYSIWYG editor for DOCX files.
+Tiptap WYSIWYG editor for DOCX files. Uses the same idle auto-save flow as `MarkdownEditor` (10s after last edit, no version on auto-save, inline status in the header).
 
 ### SearchAutocomplete (`SearchAutocomplete.vue`)
 Global fuzzy search across all projects (files and content).
@@ -1198,6 +1224,7 @@ src/
 | `projects` | Project metadata |
 | `files` | File records with content, paths, hashes |
 | `chunks` | Document chunks for semantic search |
+| `embeddings` | Vector embeddings for semantic search |
 | `chat_sessions` | Chat session metadata |
 | `chat_messages` | Chat messages (includes `attachments` JSON column for tool attachments) |
 | `file_versions` | Version history (diff-based) |
@@ -1223,6 +1250,44 @@ If the second `openFreshConnection` also fails the error propagates unchanged to
 | `clearOrphanWal()` | Exported best-effort OPFS sidecar deletion (returns `true` iff at least one entry was removed) |
 | `teardownFailedConnection(workerUrl)` | Internal cleanup: close connection, terminate worker, revoke blob URL |
 | `openFreshConnection()` | Internal: build worker + `AsyncDuckDB`, instantiate, open, connect. Reused for both the initial attempt and the post-recovery retry |
+
+### FK-free schema and orphan heal
+
+The schema is **intentionally FK-free** — parent/child relationships (`project_id`, `file_id`, `chunk_id`, `session_id`, etc.) are enforced in application code via ordered deletes and updates, not SQL `FOREIGN KEY` constraints.
+
+**Legacy databases:** Before commit `79b91d3`, tables were created with `FOREIGN KEY` clauses. Because DuckDB uses `CREATE TABLE IF NOT EXISTS` and does not support `ALTER TABLE DROP CONSTRAINT`, those constraints persist in existing OPFS databases even though new schema DDL no longer declares them. This caused disruptive constraint errors during file-tree moves/deletes and chat writes.
+
+On startup, after `createSchema()`, `runSchemaIntegrityMigrations()` runs:
+
+1. **FK strip** (`stripForeignKeyConstraints`) — queries `duckdb_constraints()` for `FOREIGN KEY` rows. If any exist, rebuilds affected tables (`embeddings` → `chunks` → `file_versions` → `chat_messages` → `web_search_chunks` → `files`) by copying data into FK-free temp tables, dropping the old table, and renaming. Indexes are recreated.
+2. **Orphan heal** (`healOrphanRows`) — deletes project-orphan files first, then child rows whose parent no longer exists, and nulls `chat_sessions.project_id` when the project was deleted. Runs once per browser profile (localStorage key `hydranote.migration.orphanHeal.v2`).
+
+Write paths that previously surfaced raw DuckDB constraint errors now use transactional cascades with a single retry after orphan heal (`withConstraintRetry`):
+
+| Operation | Behavior |
+|---|---|
+| `deleteProject` / `deleteFile` | Child-first deletes wrapped in `BEGIN TRANSACTION` |
+| `updateFileProject` | Updates `files`, `chunks`, `embeddings` atomically |
+| `createChatMessage` | Auto-recreates missing session row before insert |
+| `createFileVersion` | Soft-skips when parent file row is missing |
+
+UI alerts in file-tree sidebars use `formatDatabaseErrorMessage()` to show a friendly retry hint when constraint errors still occur after heal.
+
+| File / symbol | Role |
+|---|---|
+| `isConstraintError(err)` | Detects FK/constraint violation messages |
+| `hasForeignKeyConstraints(conn)` | Cheap check via `duckdb_constraints()` |
+| `stripForeignKeyConstraints(conn)` | One-time table rebuild migration |
+| `healOrphanRows(conn)` | Deletes orphaned child rows |
+| `formatDatabaseErrorMessage(err, action)` | User-facing alert text for file-tree errors |
+
+**Manual smoke checklist (file tree + chat):**
+
+1. App start — no blocking DB error; FK strip runs silently on legacy DBs
+2. File tree: create note, rename, move within project, move across projects, delete file, delete project
+3. Chat: new session, send message, switch project, delete session, send again
+4. DevTools: no `FOREIGN KEY` / `Constraint Error` after migration
+5. Data preserved: file content and chat history intact
 
 ---
 
@@ -1456,12 +1521,30 @@ A date-based view of the knowledge base, toggled via the clock icon in the works
 
 **Data sources:**
 - Calendar events from DuckDB (`getCalendarEventsByDateRange`)
-- Note date references: runs `detectDates()` on all notes in the current project (or all projects)
+- Note date references from DuckDB `note_dates` index (populated on md/txt save via `dateIndexService`)
+
+**Indexing (`note_dates` table):**
+- On `createFile` / `updateFile` for `.md` / `.txt`, `reindexFileDates()` runs `detectDates()` and replaces rows for that file
+- On file delete: rows removed; on rename/move: `file_name` / `project_id` updated
+- First Timeline open after upgrade: lazy backfill scans existing md/txt if the index is empty
+- `onNoteDatesChanged` events trigger Timeline live refresh (debounced) while open
+
+| Column | Description |
+|--------|-------------|
+| `file_id` / `project_id` / `file_name` | Source note |
+| `date_str` | YYYY-MM-DD for Timeline grouping |
+| `date_text` | Matched phrase |
+| `type` | `regular` or `deadline` |
+| `context_snippet` | Surrounding text for the card |
+| `start_index` | Character offset in file content |
 
 **UI:**
 - Vertical date axis with day-by-day layout
 - Calendar event cards (blue left border) with time, title, location
 - Note reference cards (purple left border, amber for deadlines) with filename and context snippet
+- Same-file same-day mentions collapse to one card with an `N mentions` badge
+- **Deadlines only** toggle filters note cards; calendar events remain visible
+- Teachable empty state when no dates in range (example phrases: `due next Friday`, etc.)
 - Clicking a note card opens that file in the editor
 - Date picker / range navigation (back/forward 7 days)
 - "Show empty days" toggle
