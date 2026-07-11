@@ -10,6 +10,9 @@ import type { Project, ProjectFile, Chunk, Embedding, ChunkingConfig, SearchResu
 // (DuckDB WASM has limited memory and crashes on large base64 strings)
 const imageBinaryCache = new Map<string, string>(); // fileId → base64
 
+/** Max image size stored in DuckDB when filesystem sync is unavailable */
+const MAX_IMAGE_DB_BYTES = 5 * 1024 * 1024;
+
 /**
  * Get cached image binary data by file ID
  */
@@ -55,9 +58,23 @@ import {
   deleteFile as dbDeleteFile,
   updateFileProject as dbUpdateFileProject,
   flushDatabase,
+  deleteFileSearchData,
+  updateFileContentHash,
 } from './database';
 import { processDocument, isFileTypeSupported } from './documentProcessor';
 import { generateEmbeddingsForChunks, generateEmbedding } from './embeddingService';
+import {
+  reindexFileDates,
+  clearFileDates,
+  syncNoteDatesFileName,
+  syncNoteDatesProject,
+} from './dateIndexService';
+import {
+  reindexFileLinks,
+  clearFileLinks,
+  syncNoteLinksFileName,
+  syncNoteLinksProject,
+} from './linkIndexService';
 import {
   syncFileToFileSystem,
   syncFileDelete,
@@ -91,6 +108,7 @@ export async function initialize(): Promise<void> {
   try {
     await initializationPromise;
     initialized = true;
+    await runStartupMigrations();
   } catch (error) {
     // Reset on failure so it can be retried
     initializationPromise = null;
@@ -104,6 +122,26 @@ export async function initialize(): Promise<void> {
 async function ensureInitialized(): Promise<void> {
   if (!initialized) {
     await initialize();
+  }
+}
+
+const STARTUP_MIGRATION_KEY = 'hydranote.migration.reindexMissingChunks.v1';
+
+async function runStartupMigrations(): Promise<void> {
+  if (typeof localStorage === 'undefined') return;
+  if (localStorage.getItem(STARTUP_MIGRATION_KEY)) return;
+
+  try {
+    const { reindexFilesMissingChunks } = await import('./embeddingService');
+    const result = await reindexFilesMissingChunks();
+    if (result.reindexed > 0) {
+      console.info(
+        `[HydraNote] Indexed ${result.reindexed} previously unindexed file(s) for search.`,
+      );
+    }
+    localStorage.setItem(STARTUP_MIGRATION_KEY, 'done');
+  } catch (err) {
+    console.warn('[HydraNote] Startup reindex migration failed:', err);
   }
 }
 
@@ -510,7 +548,51 @@ export async function searchProject(
  */
 export async function getFile(fileId: string): Promise<ProjectFile | null> {
   await ensureInitialized();
-  return dbGetFile(fileId);
+  const file = await dbGetFile(fileId);
+  if (!file) return null;
+
+  const imageTypes: SupportedFileType[] = ['png', 'jpg', 'jpeg', 'webp'];
+  if (imageTypes.includes(file.type) && !file.binaryData) {
+    const cached = imageBinaryCache.get(fileId);
+    if (cached) {
+      file.binaryData = cached;
+    } else {
+      const project = await dbGetProject(file.projectId);
+      if (project) {
+        try {
+          const { readBinaryFile } = await import('./fileSystemService');
+          const result = await readBinaryFile(project.name, file.name);
+          if (result.success && result.data) {
+            const bytes = new Uint8Array(result.data);
+            const base64 = uint8ArrayToBase64(bytes);
+            file.binaryData = base64;
+            imageBinaryCache.set(fileId, base64);
+            if (bytes.byteLength <= MAX_IMAGE_DB_BYTES) {
+              await updateFileBinaryData(fileId, base64);
+              await flushDatabase();
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to hydrate image binary:', fileId, err);
+        }
+      }
+      if (!file.binaryData && file.systemFilePath) {
+        const diskFile = await loadBinaryFileFromSystem(file);
+        if (diskFile) {
+          const bytes = new Uint8Array(await diskFile.arrayBuffer());
+          const base64 = uint8ArrayToBase64(bytes);
+          file.binaryData = base64;
+          imageBinaryCache.set(fileId, base64);
+          if (bytes.byteLength <= MAX_IMAGE_DB_BYTES) {
+            await updateFileBinaryData(fileId, base64);
+            await flushDatabase();
+          }
+        }
+      }
+    }
+  }
+
+  return file;
 }
 
 /**
@@ -522,8 +604,7 @@ export async function getFile(fileId: string): Promise<ProjectFile | null> {
  * - Database insertion
  * - File system sync (for markdown files)
  * - Automatic flushing
- * 
- * Does NOT handle indexing (chunks/embeddings) - use indexFileForSearch() after creation if needed.
+ * - Search indexing for md/txt files (chunks/embeddings)
  */
 export async function createFile(
   projectId: string,
@@ -554,11 +635,24 @@ export async function createFile(
     binaryDataBase64 = uint8ArrayToBase64(binaryData);
   }
 
-  // For images: store binary in memory cache only (not in DuckDB — causes WASM OOM)
-  // DuckDB record stores metadata only; filesystem gets the actual file
-  const dbBinaryData = isImage ? undefined : binaryDataBase64;
-  if (isImage && binaryDataBase64) {
-    imageBinaryCache.set(fileId, binaryDataBase64);
+  // Images: prefer filesystem; fall back to DB when sync is off or write fails (mirrors PDF drop-ingest).
+  let dbBinaryData: string | undefined;
+  if (isImage) {
+    dbBinaryData = undefined;
+    if (binaryDataBase64 && binaryData) {
+      imageBinaryCache.set(fileId, binaryDataBase64);
+      const fsResult = await writeBinaryFileToFS(project.name, filePath, binaryData);
+      if (!fsResult.success) {
+        if (binaryData.byteLength > MAX_IMAGE_DB_BYTES) {
+          throw new Error(
+            `Image is too large (${Math.round(binaryData.byteLength / (1024 * 1024))}MB) to store without file system sync. Enable sync or use a smaller image.`,
+          );
+        }
+        dbBinaryData = binaryDataBase64;
+      }
+    }
+  } else {
+    dbBinaryData = binaryDataBase64;
   }
 
   // Create file record
@@ -577,7 +671,7 @@ export async function createFile(
     updatedAt: now,
   };
 
-  // DB record: skip binary data for images to avoid WASM memory crash
+  // DB record: images use DB only when FS sync unavailable; other binaries always stored
   const dbFile: ProjectFile = { ...projectFile, binaryData: dbBinaryData };
   await dbCreateFile(dbFile);
   await flushDatabase();
@@ -585,11 +679,30 @@ export async function createFile(
   // Create initial version for version history
   await createInitialVersion(fileId, content);
 
-  // Sync to file system
-  if (isImage && binaryData) {
-    await writeBinaryFileToFS(project.name, filePath, binaryData);
-  } else if (fileType === 'md' || fileType === 'txt') {
+  // Sync text files to file system (images already written above when sync enabled)
+  if (!isImage && (fileType === 'md' || fileType === 'txt')) {
     await syncFileToFileSystem(project.name, filePath, content);
+  }
+
+  if ((fileType === 'md' || fileType === 'txt') && content.trim()) {
+    try {
+      await indexFileForSearch(projectId, fileId, content, fileType);
+    } catch (err) {
+      console.warn('Failed to index new file:', fileId, err);
+    }
+  }
+
+  if (fileType === 'md' || fileType === 'txt') {
+    try {
+      await reindexFileDates(fileId, projectId, filePath, content, fileType);
+    } catch (err) {
+      console.warn('Failed to index note dates for new file:', fileId, err);
+    }
+    try {
+      await reindexFileLinks(fileId, projectId, filePath, content, fileType);
+    } catch (err) {
+      console.warn('Failed to index note links for new file:', fileId, err);
+    }
   }
 
   // Return the full projectFile (with binaryData for immediate use in the session)
@@ -623,36 +736,28 @@ export async function indexFileForSearch(
 
   const { chunkText, chunkMarkdownText } = await import('./documentProcessor');
   const { generateEmbeddingsForChunks } = await import('./embeddingService');
-  const conn = getConnection();
+  const { computeContentHash } = await import('./embeddingService');
 
   // Chunk the content based on file type
   const chunks = fileType === 'md'
     ? chunkMarkdownText(content, fileId, projectId)
     : chunkText(content, fileId, projectId);
-  
+
+  await deleteFileSearchData(fileId);
+
   // Store chunks
-  for (const chunk of chunks) {
-    const escapedText = chunk.text.replace(/'/g, "''");
-    await conn.query(`
-      INSERT INTO chunks (id, file_id, project_id, chunk_index, text, start_offset, end_offset, created_at)
-      VALUES ('${chunk.id}', '${chunk.fileId}', '${chunk.projectId}', ${chunk.index}, '${escapedText}', ${chunk.startOffset}, ${chunk.endOffset}, '${chunk.createdAt.toISOString()}')
-    `);
-  }
-  
+  await dbCreateChunks(chunks);
+
   // Generate and store embeddings
   try {
     const embeddings = await generateEmbeddingsForChunks(chunks);
-    for (const embedding of embeddings) {
-      const vectorStr = `[${embedding.vector.join(', ')}]`;
-      await conn.query(`
-        INSERT INTO embeddings (id, chunk_id, file_id, project_id, vector, created_at)
-        VALUES ('${embedding.id}', '${embedding.chunkId}', '${embedding.fileId}', '${embedding.projectId}', ${vectorStr}::DOUBLE[], '${embedding.createdAt.toISOString()}')
-      `);
-    }
+    await dbCreateEmbeddings(embeddings);
   } catch (error) {
     console.warn('Failed to generate embeddings for file:', fileId, error);
   }
-  
+
+  await updateFileContentHash(fileId, computeContentHash(content));
+
   await flushDatabase();
 }
 
@@ -674,9 +779,7 @@ export async function reindexFile(
   pdfFile?: File,
 ): Promise<void> {
   await ensureInitialized();
-  
-  const conn = getConnection();
-  
+
   // Get file to retrieve projectId
   const file = await dbGetFile(fileId);
   if (!file) {
@@ -695,22 +798,19 @@ export async function reindexFile(
     return;
   }
   
-  // Delete old embeddings first (foreign key on chunks)
-  await conn.query(`DELETE FROM embeddings WHERE file_id = '${fileId}'`);
-  
-  // Delete old chunks
-  await conn.query(`DELETE FROM chunks WHERE file_id = '${fileId}'`);
-  
-  // Re-index with new content
+  // indexFileForSearch clears prior chunks/embeddings before re-indexing
   await indexFileForSearch(file.projectId, fileId, content, fileType);
 }
 
 /**
- * Read a PDF binary back from disk (via Electron IPC) and rebuild a `File`
+ * Read a binary file back from disk (via Electron IPC) and rebuild a `File`
  * object the ingestion pipeline can consume. Returns `null` when the file has
  * no `systemFilePath` (e.g. a pure in-DB PDF) or the read fails.
  */
-async function loadPdfFileFromSystem(file: ProjectFile): Promise<File | null> {
+async function loadBinaryFileFromSystem(
+  file: ProjectFile,
+  mimeType = 'application/octet-stream',
+): Promise<File | null> {
   if (!file.systemFilePath) return null;
   try {
     const electronAPI = (window as unknown as {
@@ -721,10 +821,15 @@ async function loadPdfFileFromSystem(file: ProjectFile): Promise<File | null> {
     if (!electronAPI?.fs?.readBinaryFile) return null;
     const result = await electronAPI.fs.readBinaryFile(file.systemFilePath);
     if (!result.success || !result.data) return null;
-    return new File([new Uint8Array(result.data)], file.name, { type: 'application/pdf' });
+    const baseName = file.name.split('/').pop() ?? file.name;
+    return new File([new Uint8Array(result.data)], baseName, { type: mimeType });
   } catch {
     return null;
   }
+}
+
+async function loadPdfFileFromSystem(file: ProjectFile): Promise<File | null> {
+  return loadBinaryFileFromSystem(file, 'application/pdf');
 }
 
 /**
@@ -740,12 +845,21 @@ export async function getFileWithChunks(fileId: string): Promise<{ file: Project
   return { file, chunks };
 }
 
+export interface UpdateFileOptions {
+  /** When false, skip version-history entry (e.g. idle auto-save). Default true. */
+  createVersion?: boolean;
+}
+
 /**
  * Update file content and sync to file system
- * Creates a version of the current content before updating
+ * Creates a version of the current content before updating (unless createVersion is false)
  * Re-indexes the file for accurate search results
  */
-export async function updateFile(fileId: string, content: string): Promise<ProjectFile | null> {
+export async function updateFile(
+  fileId: string,
+  content: string,
+  options?: UpdateFileOptions,
+): Promise<ProjectFile | null> {
   await ensureInitialized();
   
   // Get file info for sync
@@ -757,8 +871,10 @@ export async function updateFile(fileId: string, content: string): Promise<Proje
   // Get project name for file system sync
   const project = await dbGetProject(file.projectId);
   
-  // Create version of the new content (version history tracks the content at each save)
-  await createUpdateVersion(fileId, content);
+  const createVersion = options?.createVersion !== false;
+  if (createVersion) {
+    await createUpdateVersion(fileId, file.content ?? '');
+  }
   
   // Update content in database
   await updateFileContent(fileId, content);
@@ -777,6 +893,16 @@ export async function updateFile(fileId: string, content: string): Promise<Proje
     } catch (error) {
       // Don't fail the update if re-indexing fails
       console.warn('Failed to re-index file after update:', fileId, error);
+    }
+    try {
+      await reindexFileDates(fileId, file.projectId, file.name, content, file.type);
+    } catch (error) {
+      console.warn('Failed to re-index note dates after update:', fileId, error);
+    }
+    try {
+      await reindexFileLinks(fileId, file.projectId, file.name, content, file.type);
+    } catch (error) {
+      console.warn('Failed to re-index note links after update:', fileId, error);
     }
   }
   
@@ -815,7 +941,18 @@ export async function renameFile(fileId: string, newName: string): Promise<Proje
   
   // Update name in database
   await dbUpdateFileName(fileId, newFullPath);
-  
+
+  try {
+    await syncNoteDatesFileName(fileId, newFullPath);
+  } catch (error) {
+    console.warn('Failed to sync note date file name after rename:', fileId, error);
+  }
+  try {
+    await syncNoteLinksFileName(fileId, newFullPath);
+  } catch (error) {
+    console.warn('Failed to sync note link file name after rename:', fileId, error);
+  }
+
   // Sync to file system: delete old file, write new file
   if (project && file.type === 'md' && file.content) {
     await syncFileDelete(project.name, oldPath);
@@ -922,7 +1059,18 @@ export async function deleteFile(fileId: string): Promise<void> {
   }
   
   await dbDeleteFile(fileId);
-  
+
+  try {
+    await clearFileDates(fileId);
+  } catch (error) {
+    console.warn('Failed to clear note dates for deleted file:', fileId, error);
+  }
+  try {
+    await clearFileLinks(fileId);
+  } catch (error) {
+    console.warn('Failed to clear note links for deleted file:', fileId, error);
+  }
+
   // Sync to file system (deletes file)
   if (projectName && file) {
     await syncFileDelete(projectName, file.name);
@@ -961,7 +1109,18 @@ export async function moveFile(
     : fileName;
   
   await dbUpdateFileProject(fileId, targetProjectId, newName);
-  
+
+  try {
+    await syncNoteDatesProject(fileId, targetProjectId, newName);
+  } catch (error) {
+    console.warn('Failed to sync note dates after move:', fileId, error);
+  }
+  try {
+    await syncNoteLinksProject(fileId, targetProjectId, newName);
+  } catch (error) {
+    console.warn('Failed to sync note links after move:', fileId, error);
+  }
+
   // Sync to file system: delete from old location, write to new location
   if (sourceProjectName && file.content) {
     await syncFileDelete(sourceProjectName, file.name);
@@ -987,43 +1146,10 @@ export async function createEmptyMarkdownFile(
   fileName: string,
   directory?: string
 ): Promise<ProjectFile> {
-  await ensureInitialized();
-  
-  // Validate project exists
-  const project = await dbGetProject(projectId);
-  if (!project) {
-    throw new Error(`Project not found: ${projectId}`);
-  }
-  
-  // Ensure filename has .md extension
   const name = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
-  
-  // Build full path
   const fullPath = directory ? `${directory}/${name}` : name;
-  
-  // Create empty markdown content
   const content = `# ${fileName.replace(/\.md$/, '')}\n\n`;
-  
-  // Create file record
-  const projectFile: ProjectFile = {
-    id: crypto.randomUUID(),
-    projectId,
-    name: fullPath,
-    type: 'md',
-    size: content.length,
-    status: 'indexed',
-    content,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  
-  await dbCreateFile(projectFile);
-  await flushDatabase();
-  
-  // Sync to file system
-  await syncFileToFileSystem(project.name, fullPath, content);
-  
-  return projectFile;
+  return createFile(projectId, fullPath, content, 'md');
 }
 
 // ============================================
@@ -1066,25 +1192,23 @@ export async function getProjectStats(projectId: string): Promise<{
 /**
  * Build a hierarchical file tree from flat file list
  */
-function buildFileTree(files: ProjectFile[]): FileTreeNode[] {
-  const root: Map<string, FileTreeNode> = new Map();
-  
-  // Sort files by path for consistent ordering
+export function buildFileTree(files: ProjectFile[]): FileTreeNode[] {
+  const rootChildren: FileTreeNode[] = [];
   const sortedFiles = [...files].sort((a, b) => a.name.localeCompare(b.name));
-  
+
   for (const file of sortedFiles) {
     const pathParts = file.name.split('/');
     const fileName = pathParts.pop()!;
-    
-    // Build directory structure
-    let currentLevel = root;
+
+    let parentChildren = rootChildren;
     let currentPath = '';
-    
+
     for (const part of pathParts) {
       currentPath = currentPath ? `${currentPath}/${part}` : part;
-      
-      if (!currentLevel.has(part)) {
-        const dirNode: FileTreeNode = {
+
+      let dir = parentChildren.find((child) => child.name === part && child.type === 'directory');
+      if (!dir) {
+        dir = {
           id: `dir:${currentPath}`,
           name: part,
           path: currentPath,
@@ -1092,27 +1216,16 @@ function buildFileTree(files: ProjectFile[]): FileTreeNode[] {
           children: [],
           expanded: false,
         };
-        currentLevel.set(part, dirNode);
+        parentChildren.push(dir);
       }
-      
-      const dirNode = currentLevel.get(part)!;
-      if (!dirNode.children) {
-        dirNode.children = [];
+
+      if (!dir.children) {
+        dir.children = [];
       }
-      
-      // Convert children array to a map for easier lookup
-      const childMap = new Map<string, FileTreeNode>();
-      for (const child of dirNode.children) {
-        childMap.set(child.name, child);
-      }
-      currentLevel = childMap;
-      
-      // Update the parent's children with the map values
-      dirNode.children = Array.from(childMap.values());
+      parentChildren = dir.children;
     }
-    
-    // Add the file node
-    const fileNode: FileTreeNode = {
+
+    parentChildren.push({
       id: file.id,
       name: fileName,
       path: file.name,
@@ -1120,42 +1233,24 @@ function buildFileTree(files: ProjectFile[]): FileTreeNode[] {
       fileType: file.type,
       size: file.size,
       status: file.status,
-    };
-    
-    if (pathParts.length === 0) {
-      // File at root level
-      root.set(fileName, fileNode);
-    } else {
-      // File inside a directory - find the parent
-      let parent = root.get(pathParts[0])!;
-      for (let i = 1; i < pathParts.length; i++) {
-        const child = parent.children?.find(c => c.name === pathParts[i]);
-        if (child) {
-          parent = child;
-        }
-      }
-      if (parent.children) {
-        parent.children.push(fileNode);
-      }
-    }
+    });
   }
-  
-  // Convert root map to array and sort (directories first, then files)
+
   const sortNodes = (nodes: FileTreeNode[]): FileTreeNode[] => {
     return nodes.sort((a, b) => {
       if (a.type !== b.type) {
         return a.type === 'directory' ? -1 : 1;
       }
       return a.name.localeCompare(b.name);
-    }).map(node => {
+    }).map((node) => {
       if (node.children) {
         node.children = sortNodes(node.children);
       }
       return node;
     });
   };
-  
-  return sortNodes(Array.from(root.values()));
+
+  return sortNodes(rootChildren);
 }
 
 /**

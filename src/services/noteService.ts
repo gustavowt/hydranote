@@ -519,8 +519,6 @@ export async function addNote(params: AddNoteParams): Promise<AddNoteResult> {
     // Store original (pre-formatting) content in version history for rollback
     await createFormatVersion(file.id, rawNoteText);
 
-    await indexNote(file);
-
     // Update project status to indexed
     await updateProjectStatus(projectId, "indexed");
     await flushDatabase();
@@ -616,8 +614,6 @@ export async function addNoteWithTitle(
 
     // Store original (pre-formatting) content in version history for rollback
     await createFormatVersion(file.id, rawNoteText);
-
-    await indexNote(file);
 
     // Update project status to indexed
     await updateProjectStatus(projectId, "indexed");
@@ -1145,9 +1141,8 @@ export async function globalAddNote(
       onProgress,
     );
 
-    // Step 5: Index the note
+    // Step 5: Index the note (handled by createFile during persistNote)
     steps = updateStep(steps, "index", { status: "running" }, onProgress);
-    await indexNote(file);
 
     // Update project status to indexed
     await updateProjectStatus(projectId, "indexed");

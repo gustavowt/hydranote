@@ -803,6 +803,35 @@ async function createSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_note_dates_file ON note_dates(file_id)
   `);
 
+  // Note link index (parsed from md/txt content for File Map)
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS note_links (
+      id VARCHAR PRIMARY KEY,
+      source_file_id VARCHAR NOT NULL,
+      source_project_id VARCHAR NOT NULL,
+      source_file_name VARCHAR NOT NULL,
+      target_raw VARCHAR NOT NULL,
+      target_file_id VARCHAR,
+      target_project_id VARCHAR,
+      target_file_name VARCHAR,
+      link_type VARCHAR NOT NULL,
+      context_snippet VARCHAR,
+      start_index INTEGER NOT NULL
+    )
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_links_source ON note_links(source_file_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_links_target ON note_links(target_file_id)
+  `);
+
+  await connection.query(`
+    CREATE INDEX IF NOT EXISTS idx_note_links_source_project ON note_links(source_project_id)
+  `);
+
   // Migration: Add binary_data and html_content columns to files table
   // These columns store original file data for PDF/DOCX viewing
   try {
@@ -2186,5 +2215,156 @@ export async function getNoteDatesByRange(
     ORDER BY date_str ASC, file_name ASC, start_index ASC
   `);
   return result.toArray().map(mapNoteDateRow);
+}
+
+// ============================================
+// Note Link Index Operations (File Map)
+// ============================================
+
+export type NoteLinkType = 'wikilink' | 'markdown' | 'at_file';
+
+export interface DBNoteLink {
+  id: string;
+  sourceFileId: string;
+  sourceProjectId: string;
+  sourceFileName: string;
+  targetRaw: string;
+  targetFileId: string | null;
+  targetProjectId: string | null;
+  targetFileName: string | null;
+  linkType: NoteLinkType;
+  contextSnippet?: string;
+  startIndex: number;
+}
+
+function mapNoteLinkRow(row: Record<string, unknown>): DBNoteLink {
+  return {
+    id: row.id as string,
+    sourceFileId: row.source_file_id as string,
+    sourceProjectId: row.source_project_id as string,
+    sourceFileName: row.source_file_name as string,
+    targetRaw: row.target_raw as string,
+    targetFileId: (row.target_file_id as string) || null,
+    targetProjectId: (row.target_project_id as string) || null,
+    targetFileName: (row.target_file_name as string) || null,
+    linkType: row.link_type as NoteLinkType,
+    contextSnippet: row.context_snippet as string | undefined,
+    startIndex: row.start_index as number,
+  };
+}
+
+export async function countNoteLinks(): Promise<number> {
+  const conn = getConnection();
+  const result = await conn.query(`SELECT COUNT(*) AS cnt FROM note_links`);
+  const rows = result.toArray();
+  return Number(rows[0]?.cnt ?? 0);
+}
+
+export async function replaceNoteLinksForFile(
+  sourceFileId: string,
+  rows: DBNoteLink[],
+): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`DELETE FROM note_links WHERE source_file_id = ${escapeSQL(sourceFileId)}`);
+
+  for (const row of rows) {
+    await conn.query(`
+      INSERT INTO note_links (
+        id, source_file_id, source_project_id, source_file_name,
+        target_raw, target_file_id, target_project_id, target_file_name,
+        link_type, context_snippet, start_index
+      ) VALUES (
+        ${escapeSQL(row.id)},
+        ${escapeSQL(row.sourceFileId)},
+        ${escapeSQL(row.sourceProjectId)},
+        ${escapeSQL(row.sourceFileName)},
+        ${escapeSQL(row.targetRaw)},
+        ${escapeSQL(row.targetFileId)},
+        ${escapeSQL(row.targetProjectId)},
+        ${escapeSQL(row.targetFileName)},
+        ${escapeSQL(row.linkType)},
+        ${escapeSQL(row.contextSnippet)},
+        ${row.startIndex}
+      )
+    `);
+  }
+
+  await flushDatabase();
+}
+
+export async function deleteNoteLinksForFile(fileId: string): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    DELETE FROM note_links
+    WHERE source_file_id = ${escapeSQL(fileId)}
+       OR target_file_id = ${escapeSQL(fileId)}
+  `);
+  await flushDatabase();
+}
+
+export async function updateNoteLinksSourceFileName(
+  fileId: string,
+  fileName: string,
+): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    UPDATE note_links SET source_file_name = ${escapeSQL(fileName)}
+    WHERE source_file_id = ${escapeSQL(fileId)}
+  `);
+  await conn.query(`
+    UPDATE note_links SET target_file_name = ${escapeSQL(fileName)}
+    WHERE target_file_id = ${escapeSQL(fileId)}
+  `);
+  await flushDatabase();
+}
+
+export async function updateNoteLinksSourceProject(
+  fileId: string,
+  projectId: string,
+  fileName: string,
+): Promise<void> {
+  const conn = getConnection();
+  await conn.query(`
+    UPDATE note_links SET
+      source_project_id = ${escapeSQL(projectId)},
+      source_file_name = ${escapeSQL(fileName)}
+    WHERE source_file_id = ${escapeSQL(fileId)}
+  `);
+  await conn.query(`
+    UPDATE note_links SET
+      target_project_id = ${escapeSQL(projectId)},
+      target_file_name = ${escapeSQL(fileName)}
+    WHERE target_file_id = ${escapeSQL(fileId)}
+  `);
+  await flushDatabase();
+}
+
+export async function getNoteLinks(projectId?: string): Promise<DBNoteLink[]> {
+  const conn = getConnection();
+  const projectFilter = projectId
+    ? `WHERE source_project_id = ${escapeSQL(projectId)}
+        OR target_project_id = ${escapeSQL(projectId)}`
+    : '';
+  const result = await conn.query(`
+    SELECT * FROM note_links
+    ${projectFilter}
+    ORDER BY source_file_name ASC, start_index ASC
+  `);
+  return result.toArray().map(mapNoteLinkRow);
+}
+
+export async function getResolvedNoteLinks(projectId?: string): Promise<DBNoteLink[]> {
+  const conn = getConnection();
+  const projectFilter = projectId
+    ? `AND (source_project_id = ${escapeSQL(projectId)}
+         OR target_project_id = ${escapeSQL(projectId)})`
+    : '';
+  const result = await conn.query(`
+    SELECT * FROM note_links
+    WHERE target_file_id IS NOT NULL
+      ${projectFilter}
+    ORDER BY source_file_name ASC, start_index ASC
+  `);
+  return result.toArray().map(mapNoteLinkRow);
 }
 
