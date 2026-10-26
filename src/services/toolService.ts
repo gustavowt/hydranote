@@ -713,6 +713,9 @@ export async function executeWriteTool(
       };
     }
 
+    // Check if content was explicitly provided
+    const contentProvided = typeof params.content === "string" && params.content.length > 0;
+
     // Generate content if not provided
     let content = params.content;
     if (!content) {
@@ -731,8 +734,8 @@ export async function executeWriteTool(
     if (format === "md") {
       // Run format, title generation (if needed), and directory fetch in PARALLEL
       const [formattedContent, generatedTitle, existingDirectories] = await Promise.all([
-        // Always format content for MD files
-        formatNote(content),
+        // Format content only for generated content; keep explicitly provided content byte-identical
+        contentProvided ? Promise.resolve(content) : formatNote(content),
         // Generate title if not provided
         titleProvided ? Promise.resolve(params.title!) : generateNoteTitle(content),
         // Pre-fetch directories for decision (only if directory not provided)
@@ -759,10 +762,12 @@ export async function executeWriteTool(
       const fileName = await generateUniqueFileName(projectId, slug, targetDirectory);
       const fullPath = targetDirectory ? `${targetDirectory}/${fileName}` : fileName;
 
-      // Add title as H1 if content doesn't start with a heading
-      const finalContent = formattedContent.trim().startsWith("#")
-        ? formattedContent
-        : `# ${finalTitle}\n\n${formattedContent}`;
+      // Preserve explicit content byte-identically; only prepend title heading for generated content
+      const finalContent = contentProvided
+        ? content
+        : formattedContent.trim().startsWith("#")
+          ? formattedContent
+          : `# ${finalTitle}\n\n${formattedContent}`;
 
       // Use centralized createFile (handles DB + file system sync + indexing)
       const file = await projectCreateFile(
