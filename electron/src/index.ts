@@ -21,6 +21,7 @@ import { getModelManager, HFModelRef } from './modelManager';
 import { getInferenceRuntime, isRuntimeAvailable } from './inferenceRuntime';
 import { getEmbeddingRuntime, isEmbeddingRuntimeAvailable } from './embeddingRuntime';
 import { getWhisperRuntime } from './whisperRuntime';
+import { rewriteLoopbackUrl } from './loopbackUrl';
 
 // Linux AppImage workaround: the Chromium sandbox can prevent child processes
 // (e.g. node-llama-cpp binary tests via utilityProcess.fork) from running
@@ -666,12 +667,14 @@ ipcMain.handle('web:fetch', async (_event, options: WebFetchOptions): Promise<We
   }
 
   try {
+    const targetUrl = rewriteLoopbackUrl(url);
+
     // Create AbortController for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     // Perform the fetch
-    const response = await fetch(url, {
+    const response = await fetch(targetUrl, {
       method,
       headers: {
         'User-Agent': 'HydraNote/1.0',
@@ -797,7 +800,9 @@ ipcMain.handle('web:fetchStream', async (event, options: WebFetchStreamOptions):
   };
 
   try {
-    const response = await fetch(url, {
+    const targetUrl = rewriteLoopbackUrl(url);
+
+    const response = await fetch(targetUrl, {
       method,
       headers: {
         'User-Agent': 'HydraNote/1.0',
