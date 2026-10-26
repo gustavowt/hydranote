@@ -4,6 +4,7 @@
  */
 
 import * as duckdb from '@duckdb/duckdb-wasm';
+import { createDatabaseWorkerSource } from './databaseWorker';
 import type { Project, ProjectFile, Chunk, Embedding } from '../types';
 
 /**
@@ -534,7 +535,7 @@ async function openFreshConnection(): Promise<string> {
   const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
 
   const workerUrl = URL.createObjectURL(
-    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+    new Blob([createDatabaseWorkerSource(bundle.mainWorker!)], { type: 'text/javascript' })
   );
   const worker = new Worker(workerUrl);
   const logger = new duckdb.ConsoleLogger();
