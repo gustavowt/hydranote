@@ -158,6 +158,7 @@ import {
 } from '@/services/fileIngestionService';
 import FileTreeNode, { type OsFilesDropPayload } from './FileTreeNode.vue';
 import FileTreeContextMenu from './FileTreeContextMenu.vue';
+import { normalizeRenameInput } from '@/utils/normalizeRename';
 
 interface Props {
   projects: Project[];
@@ -531,9 +532,10 @@ async function promptRenameFile(projectId: string, fileId: string, fileName: str
       {
         text: 'Rename',
         handler: async (data) => {
-          if (data.newName?.trim() && data.newName.trim() !== nameWithoutExt) {
+          if (!data.newName?.trim()) return;
+          const newFullName = normalizeRenameInput(data.newName, ext);
+          if (newFullName && newFullName !== fileName) {
             try {
-              const newFullName = data.newName.trim() + ext;
               await renameFile(fileId, newFullName);
               // Refresh the file tree for this project
               delete projectFileTrees.value[projectId];
