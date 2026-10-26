@@ -123,6 +123,7 @@
 
     <!-- Context Menu -->
     <FileTreeContextMenu
+      :key="contextMenu.targetId + '_' + contextMenu.targetType"
       :is-open="contextMenu.isOpen"
       :event="contextMenu.event"
       :target-type="contextMenu.targetType"
@@ -158,6 +159,7 @@ import {
 } from '@/services/fileIngestionService';
 import FileTreeNode, { type OsFilesDropPayload } from './FileTreeNode.vue';
 import FileTreeContextMenu from './FileTreeContextMenu.vue';
+import { resolveTargetProjectContext } from '@/utils/projectContext';
 
 interface Props {
   projects: Project[];
@@ -377,21 +379,31 @@ function toggleCollapse() {
 // ============================================
 
 function handleProjectContextMenu(event: MouseEvent, project: Project) {
-  contextMenu.isOpen = true;
-  contextMenu.event = event;
-  contextMenu.targetType = 'project';
-  contextMenu.targetId = project.id;
-  contextMenu.targetName = project.name;
-  contextMenu.projectId = project.id;
+  if (contextMenu.isOpen) {
+    contextMenu.isOpen = false;
+  }
+  nextTick(() => {
+    contextMenu.isOpen = true;
+    contextMenu.event = event;
+    contextMenu.targetType = 'project';
+    contextMenu.targetId = project.id;
+    contextMenu.targetName = project.name;
+    contextMenu.projectId = project.id;
+  });
 }
 
 function handleNodeContextMenu(projectId: string, payload: ContextMenuEvent) {
-  contextMenu.isOpen = true;
-  contextMenu.event = payload.event;
-  contextMenu.targetType = payload.node.type === 'directory' ? 'directory' : 'file';
-  contextMenu.targetId = payload.node.id;
-  contextMenu.targetName = payload.node.name;
-  contextMenu.projectId = projectId;
+  if (contextMenu.isOpen) {
+    contextMenu.isOpen = false;
+  }
+  nextTick(() => {
+    contextMenu.isOpen = true;
+    contextMenu.event = payload.event;
+    contextMenu.targetType = payload.node.type === 'directory' ? 'directory' : 'file';
+    contextMenu.targetId = payload.node.id;
+    contextMenu.targetName = payload.node.name;
+    contextMenu.projectId = projectId;
+  });
 }
 
 function closeContextMenu() {
@@ -399,39 +411,71 @@ function closeContextMenu() {
   contextMenu.event = null;
 }
 
-async function handleContextMenuAction(action: ContextMenuAction, targetId: string, targetName: string, projectId?: string) {
+async function handleContextMenuAction(
+  action: ContextMenuAction,
+  targetId: string,
+  targetName: string,
+  projectId?: string,
+  targetType?: ContextMenuTargetType
+) {
+  const resolved = resolveTargetProjectContext({
+    targetId,
+    targetType: targetType || (action.includes('project') ? 'project' : undefined),
+    fallbackProjectId: projectId,
+    projects: props.projects,
+    projectFileTrees: projectFileTrees.value,
+  });
+
+  const effectiveProjectId = resolved.projectId;
+  const effectiveTargetName = resolved.projectName || targetName;
+
   switch (action) {
     case 'new-file':
-      await promptCreateFile(projectId || '', targetId, targetName);
+      await promptCreateFile(effectiveProjectId, targetId, effectiveTargetName, targetType || (resolved.isProject ? 'project' : undefined));
       break;
     case 'rename-project':
-      await promptRenameProject(targetId, targetName);
+      await promptRenameProject(targetId, effectiveTargetName);
       break;
     case 'rename-file':
-      await promptRenameFile(projectId || '', targetId, targetName);
+      await promptRenameFile(effectiveProjectId, targetId, targetName);
       break;
     case 'rename-directory':
-      await promptRenameDirectory(projectId || '', targetId, targetName);
+      await promptRenameDirectory(effectiveProjectId, targetId, targetName);
       break;
     case 'delete-project':
-      await confirmDeleteProject(targetId, targetName);
+      await confirmDeleteProject(targetId, effectiveTargetName);
       break;
     case 'delete-file':
-      await confirmDeleteFile(projectId || '', targetId, targetName);
+      await confirmDeleteFile(effectiveProjectId, targetId, targetName);
       break;
     case 'delete-directory':
-      await confirmDeleteDirectory(projectId || '', targetId, targetName);
+      await confirmDeleteDirectory(effectiveProjectId, targetId, targetName);
       break;
   }
 }
 
-async function promptCreateFile(projectId: string, targetId: string, targetName: string) {
-  const isProject = contextMenu.targetType === 'project';
+async function promptCreateFile(
+  projectId: string,
+  targetId: string,
+  targetName: string,
+  targetType?: ContextMenuTargetType
+) {
+  const resolved = resolveTargetProjectContext({
+    targetId,
+    targetType: targetType || contextMenu.targetType,
+    fallbackProjectId: projectId,
+    projects: props.projects,
+    projectFileTrees: projectFileTrees.value,
+  });
+
+  const isProject = resolved.isProject;
+  const effectiveProjectId = resolved.projectId;
+  const displayLocation = isProject ? (resolved.projectName || targetName) : targetName;
   const directoryPath = isProject ? undefined : targetId.replace('dir:', '');
   
   const alert = await alertController.create({
     header: 'New File',
-    message: `Create a new markdown file${isProject ? ` in ${targetName}` : ` in ${targetName}`}`,
+    message: `Create a new markdown file in ${displayLocation}`,
     inputs: [
       {
         name: 'fileName',
@@ -445,7 +489,7 @@ async function promptCreateFile(projectId: string, targetId: string, targetName:
         text: 'Create',
         handler: async (data) => {
           if (data.fileName?.trim()) {
-            await createFile(projectId, data.fileName.trim(), directoryPath);
+            await createFile(effectiveProjectId, data.fileName.trim(), directoryPath);
           }
         },
       },

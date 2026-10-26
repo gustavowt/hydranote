@@ -93,11 +93,12 @@ const emit = defineEmits<{
     targetId: string,
     targetName: string,
     projectId?: string,
+    targetType?: ContextMenuTargetType,
   ): void;
 }>();
 
 function handleAction(action: ContextMenuAction) {
-  emit("action", action, props.targetId, props.targetName, props.projectId);
+  emit("action", action, props.targetId, props.targetName, props.projectId, props.targetType);
   emit("close");
 }
 </script>
