@@ -244,7 +244,9 @@ export async function generateNoteTitle(noteContent: string): Promise<string> {
  * Convert a title to a URL-safe slug for filename
  */
 export function titleToSlug(title: string): string {
-  return title
+  // Strip trailing .md extension if present so the dot is not swallowed into 'md'
+  const cleanTitle = title.replace(/\.md$/i, "");
+  return cleanTitle
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "") // Remove special characters
     .replace(/\s+/g, "-") // Replace spaces with hyphens
@@ -261,10 +263,11 @@ export async function generateUniqueFileName(
   baseSlug: string,
   directory: string,
 ): Promise<string> {
+  const cleanSlug = baseSlug.replace(/\.md$/i, "");
   const files = await get_project_files(projectId);
   const existingNames = new Set(files.map((f) => f.name.toLowerCase()));
 
-  let fileName = `${baseSlug}.md`;
+  let fileName = `${cleanSlug}.md`;
   let counter = 1;
 
   // Check if file exists in the target directory
@@ -272,12 +275,12 @@ export async function generateUniqueFileName(
     existingNames.has(fileName.toLowerCase()) ||
     existingNames.has(`${directory}/${fileName}`.toLowerCase())
   ) {
-    fileName = `${baseSlug}-${counter}.md`;
+    fileName = `${cleanSlug}-${counter}.md`;
     counter++;
 
     // Safety limit
     if (counter > 100) {
-      fileName = `${baseSlug}-${Date.now()}.md`;
+      fileName = `${cleanSlug}-${Date.now()}.md`;
       break;
     }
   }
