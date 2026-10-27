@@ -118,7 +118,7 @@
               <div 
                 v-if="message.role === 'assistant'" 
                 class="message-content markdown-content" 
-                v-html="renderMarkdown(message.content)"
+                v-html="renderMarkdown(renderAssistantMessageContent(message))"
               ></div>
               <div v-else class="message-content user-message-content" v-html="renderUserMessage(message.content)"></div>
               <div class="message-time">{{ formatTime(message.timestamp) }}</div>
@@ -581,6 +581,7 @@ import {
   startNewSession,
 } from '@/services';
 import FileReferenceAutocomplete from './FileReferenceAutocomplete.vue';
+import { formatPlanMessageContent } from '@/utils/planMessageUtils';
 import { folderOutline, addOutline, addCircleOutline, timeOutline, chevronDownOutline } from 'ionicons/icons';
 import {
   dictationState,
@@ -2304,6 +2305,21 @@ function toolLogToRecord(log: ToolLogEntry): ToolExecutionRecord {
 
 function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string;
+}
+
+function renderAssistantMessageContent(message: ChatMessage): string {
+  const isLastAssistant = isLastAssistantMessage(message);
+  const hasActive = Boolean(pendingPlan.value && isLastAssistant);
+  return formatPlanMessageContent(message.content, hasActive);
+}
+
+function isLastAssistantMessage(message: ChatMessage): boolean {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') {
+      return messages.value[i].id === message.id;
+    }
+  }
+  return false;
 }
 
 // ============================================
